@@ -5,41 +5,45 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # --- Install system dependencies ---
-# Install Google Chrome and dependencies with better error handling
+# Install basic system packages
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     ca-certificates \
     curl \
     apt-transport-https \
-    software-properties-common \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg \
-    && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
-    # Install Chrome dependencies - try multiple package names for compatibility
-    && apt-get install -y \
-        libnss3 \
-        libxss1 \
-        libgtk-3-0 \
-        libx11-xcb1 \
-        libxcomposite1 \
-        libxcursor1 \
-        libxdamage1 \
-        libxi6 \
-        libxtst6 \
-        libasound2 \
-        libatk-bridge2.0-0 \
-        libdrm2 \
-        libxrandr2 \
-        fonts-liberation \
-        xdg-utils \
-    # Try to install libgdk-pixbuf with fallback options
-    && (apt-get install -y libgdk-pixbuf-xlib-2.0-0 2>/dev/null || \
-        apt-get install -y libgdk-pixbuf2.0-0 2>/dev/null || \
-        echo "Warning: Could not install libgdk-pixbuf package") \
-    # Clean up apt lists to save space
-    && rm -rf /var/lib/apt/lists/*
+    software-properties-common
+
+# Add Google Chrome repository
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg \
+    && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list
+
+# Install Chrome and core dependencies
+RUN apt-get update && apt-get install -y \
+    google-chrome-stable \
+    libnss3 \
+    libxss1 \
+    libgtk-3-0 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxi6 \
+    libxtst6 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxrandr2 \
+    fonts-liberation \
+    xdg-utils
+
+# Try to install libgdk-pixbuf with fallback options
+RUN apt-get install -y libgdk-pixbuf-xlib-2.0-0 || \
+    apt-get install -y libgdk-pixbuf2.0-0 || \
+    echo "Warning: Could not install libgdk-pixbuf package - continuing without it"
+
+# Clean up apt cache
+RUN rm -rf /var/lib/apt/lists/*
 
 # --- Install Python dependencies ---
 # Copy the requirements file first to leverage Docker's layer caching
