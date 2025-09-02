@@ -1,0 +1,71 @@
+version: '3.8'
+
+# This version uses a pre-built Docker image instead of building locally
+# Use this if you want to deploy only with docker-compose.yml + .env files
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: luminisbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: luminisbot
+      POSTGRES_USER: luminisbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Note: init.sql won't be available with this method
+      # Database tables will be created by the bot's setup_database() function
+    ports:
+      - "5432:5432"
+    networks:
+      - luminisbot-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luminisbot -d luminisbot"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Discord Bot (using pre-built image)
+  luminisbot:
+    # Replace this with your actual Docker Hub username or GitHub Container Registry
+    image: ghcr.io/philipaubert/luminisbot:latest
+    container_name: luminisbot-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Discord Configuration
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      
+      # Warcraft Logs API
+      WCL_CLIENT_ID: ${WCL_CLIENT_ID}
+      WCL_CLIENT_SECRET: ${WCL_CLIENT_SECRET}
+      
+      # Database Configuration
+      DATABASE_URL: postgresql://luminisbot:${POSTGRES_PASSWORD}@postgres:5432/luminisbot
+      
+      # Warcraft Recorder
+      RECORDER_EMAIL: ${RECORDER_EMAIL}
+      RECORDER_PASSWORD: ${RECORDER_PASSWORD}
+    ports:
+      - "10000:10000"  # Flask keep-alive server
+    networks:
+      - luminisbot-network
+    volumes:
+      - ./logs:/app/logs  # Optional: for log files
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  luminisbot-network:
+    driver: bridge

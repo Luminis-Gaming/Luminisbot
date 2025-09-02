@@ -1,0 +1,9 @@
+discord.py
+python-dotenv
+selenium
+webdriver-manager
+Flask
+aiohttp
+psycopg2-binary
+beautifulsoup4
+Brotli

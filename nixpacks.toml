@@ -1,0 +1,20 @@
+# nixpacks.toml
+
+[phases.setup]
+# Use 'cmds' to run a sequence of shell commands
+cmds = [
+    # 1. Update package lists and install necessary tools
+    "apt-get update && apt-get install -y wget gnupg ca-certificates",
+    
+    # 2. Download Google's key and add it to the system
+    "wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg",
+    
+    # 3. Add the official Google Chrome repository
+    "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+    
+    # 4. Update package list again to include Google's packages
+    "apt-get update",
+    
+    # 5. Install Chrome and a minimal set of its dependencies
+    "apt-get install -y google-chrome-stable libnss3 libxss1 libgdk-pixbuf2.0-0 libgtk-3-0 libx11-xcb1"
+]
