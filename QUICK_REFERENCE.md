@@ -33,7 +33,7 @@
 ## 📊 Monitoring
 
 - **Health Check**: http://your-nas-ip:10000
-- **Database**: Port 5432 (if external access needed)
+- **Database**: Port 25432 (if external access needed)
 - **Logs**: `docker-compose logs luminisbot`
 
 ## 🔑 Required Environment Variables

@@ -63,7 +63,7 @@ That's it! The database will be automatically:
 ### Connect to Database from Outside Container
 ```bash
 # Using psql (if installed on your NAS)
-psql -h localhost -p 5432 -U luminisbot -d luminisbot
+psql -h localhost -p 25432 -U luminisbot -d luminisbot
 
 # Using Docker
 docker-compose exec postgres psql -U luminisbot -d luminisbot
@@ -71,7 +71,7 @@ docker-compose exec postgres psql -U luminisbot -d luminisbot
 
 ### Database Connection Details
 - **Host**: `localhost` (from outside) or `postgres` (from inside containers)
-- **Port**: `5432`
+- **Port**: `25432`
 - **Database**: `luminisbot`
 - **Username**: `luminisbot`
 - **Password**: Whatever you set in `POSTGRES_PASSWORD`

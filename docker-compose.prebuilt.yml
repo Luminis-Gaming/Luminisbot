@@ -18,7 +18,7 @@ services:
       # Note: init.sql won't be available with this method
       # Database tables will be created by the bot's setup_database() function
     ports:
-      - "5432:5432"
+      - "25432:5432"
     networks:
       - luminisbot-network
     healthcheck:
