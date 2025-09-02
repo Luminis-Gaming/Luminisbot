@@ -53,14 +53,14 @@ You have **3 main options** for deploying LuminisBot on your NAS, depending on y
 ### Deploy on NAS:
 ```bash
 # One-liner deployment
-curl -fsSL https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main/nas-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Luminis-Gaming/Luminisbot/main/nas-deploy.sh | bash
 ```
 
 Or manually:
 ```bash
 # Download only the files you need
-wget https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main/docker-compose.prebuilt.yml -O docker-compose.yml
-wget https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main/.env.template -O .env.template
+wget https://raw.githubusercontent.com/Luminis-Gaming/Luminisbot/main/docker-compose.prebuilt.yml -O docker-compose.yml
+wget https://raw.githubusercontent.com/Luminis-Gaming/Luminisbot/main/.env.template -O .env.template
 
 # Configure
 cp .env.template .env
@@ -89,7 +89,7 @@ docker-compose up -d
 ### Super Simple:
 ```bash
 # Downloads everything and sets up automatically
-bash <(curl -fsSL https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main/nas-deploy.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Luminis-Gaming/Luminisbot/main/nas-deploy.sh)
 ```
 
 This script will:
@@ -128,7 +128,7 @@ For your NAS deployment, I recommend **Option 2 (Pre-built Image)** because:
 2. **The GitHub Action will automatically build the image**
 3. **On your NAS, run**:
    ```bash
-   bash <(curl -fsSL https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main/nas-deploy.sh)
+   bash <(curl -fsSL https://raw.githubusercontent.com/Luminis-Gaming/Luminisbot/main/nas-deploy.sh)
    ```
 
 That's it! Your bot will be running with automatic updates whenever you push new code. 🚀

@@ -11,7 +11,7 @@ echo "This script will download and deploy LuminisBot using a pre-built Docker i
 echo ""
 
 # Variables
-REPO_URL="https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main"
+REPO_URL="https://raw.githubusercontent.com/Luminis-Gaming/Luminisbot/main"
 COMPOSE_FILE="docker-compose.prebuilt.yml"
 
 echo "🤔 Choose deployment method:"

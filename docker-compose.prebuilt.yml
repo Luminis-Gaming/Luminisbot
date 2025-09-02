@@ -29,8 +29,8 @@ services:
 
   # Discord Bot (using pre-built image)
   luminisbot:
-    # Replace this with your actual Docker Hub username or GitHub Container Registry
-    image: ghcr.io/philipaubert/luminisbot:latest
+    # Using pre-built image from Luminis-Gaming organization
+    image: ghcr.io/luminis-gaming/luminisbot:latest
     container_name: luminisbot-app
     restart: unless-stopped
     depends_on:
