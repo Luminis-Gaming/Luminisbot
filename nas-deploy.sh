@@ -14,6 +14,33 @@ echo ""
 REPO_URL="https://raw.githubusercontent.com/PhilipAubert/LuminisBot/main"
 COMPOSE_FILE="docker-compose.prebuilt.yml"
 
+echo "🤔 Choose deployment method:"
+echo "1) Pre-built image (recommended, no local building)"
+echo "2) Build locally with full features (requires good hardware)"
+echo "3) Build locally minimal version (lightweight, faster build)"
+echo ""
+read -p "Enter choice (1-3) [default: 1]: " deploy_choice
+deploy_choice=${deploy_choice:-1}
+
+case $deploy_choice in
+    1)
+        COMPOSE_FILE="docker-compose.prebuilt.yml"
+        echo "✅ Using pre-built Docker image"
+        ;;
+    2)
+        COMPOSE_FILE="docker-compose.yml"
+        echo "✅ Will build locally with full features"
+        ;;
+    3)
+        COMPOSE_FILE="docker-compose.minimal.yml"
+        echo "✅ Will build locally minimal version"
+        ;;
+    *)
+        echo "❌ Invalid choice, using pre-built image"
+        COMPOSE_FILE="docker-compose.prebuilt.yml"
+        ;;
+esac
+
 # Check prerequisites
 if ! command -v docker &> /dev/null; then
     echo "❌ Docker is not installed or not in PATH"

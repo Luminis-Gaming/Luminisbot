@@ -1,0 +1,7 @@
+discord.py
+python-dotenv
+Flask
+aiohttp
+psycopg2-binary
+beautifulsoup4
+Brotli
