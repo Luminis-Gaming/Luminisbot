@@ -39,13 +39,13 @@ You have **3 main options** for deploying LuminisBot on your NAS, depending on y
 1. **From your current computer**, build and push the image:
    ```bash
    # Build the image
-   docker build -t ghcr.io/philipaubert/luminisbot:latest .
+   docker build -t ghcr.io/luminis-gaming/luminisbot:latest .
    
    # Login to GitHub Container Registry
-   echo $GITHUB_TOKEN | docker login ghcr.io -u PhilipAubert --password-stdin
+   echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
    
    # Push the image
-   docker push ghcr.io/philipaubert/luminisbot:latest
+   docker push ghcr.io/luminis-gaming/luminisbot:latest
    ```
 
 2. **Set up GitHub Actions** (already created!) to auto-build on code changes

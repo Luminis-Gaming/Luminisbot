@@ -29,8 +29,8 @@ jobs:
         context: .
         push: true
         tags: |
-          ghcr.io/${{ github.repository_owner }}/luminisbot:latest
-          ghcr.io/${{ github.repository_owner }}/luminisbot:${{ github.sha }}
+          ghcr.io/${{ github.repository_owner | lower }}/luminisbot:latest
+          ghcr.io/${{ github.repository_owner | lower }}/luminisbot:${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -87,7 +87,7 @@ jobs:
           echo "✅ LuminisBot deployed successfully!"
           echo "📋 Deployment details:"
           echo "  • Commit: ${{ github.sha }}"
-          echo "  • Image: ghcr.io/${{ github.repository_owner }}/luminisbot:latest"
+          echo "  • Image: ghcr.io/${{ github.repository_owner | lower }}/luminisbot:latest"
           echo "  • Time: $(date)"
           
     - name: Notify deployment status
@@ -96,6 +96,7 @@ jobs:
         if [ "${{ job.status }}" == "success" ]; then
           echo "🚀 Deployment to NAS completed successfully!"
           echo "Commit ${{ github.sha }} is now live!"
+          echo "Image: ghcr.io/${{ github.repository_owner | lower }}/luminisbot:latest"
         else
           echo "❌ Deployment to NAS failed!"
           echo "Check the logs for more information."
