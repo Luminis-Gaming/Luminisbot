@@ -940,9 +940,12 @@ async def get_boss_health_from_resource_events(session, token, report_code, figh
 # --- Helper functions for cleaner code ---
 async def send_ephemeral_with_auto_delete(interaction, content=None, embed=None, view=None, delete_after=600):
     """
-    Send an ephemeral message. Note: Ephemeral messages cannot be programmatically deleted
-    by bots as they only exist on the user's client side. They automatically disappear
-    when the user refreshes Discord or navigates away.
+    Send an ephemeral message that automatically disappears.
+    
+    Note: Ephemeral messages are only visible to the user who triggered the interaction
+    and automatically disappear when the user refreshes Discord, navigates away, or
+    after Discord's built-in timeout (typically 15 minutes). They cannot be 
+    programmatically deleted by bots as they only exist on the user's client side.
     
     Args:
         interaction: Discord interaction object
@@ -991,16 +994,19 @@ async def send_ephemeral_with_auto_delete(interaction, content=None, embed=None,
             print(f"[ERROR] Fallback ephemeral message also failed: {fallback_error}")
             return None
 
-async def send_message_with_auto_delete(channel, content=None, embed=None, view=None, delete_after=600):
+async def send_message_with_auto_delete(channel, content=None, embed=None, view=None, delete_after=None):
     """
-    Send a regular (non-ephemeral) message that automatically deletes itself after a specified time.
+    Send a regular message that persists in the channel.
+    
+    Note: This function used to auto-delete messages after 10 minutes, but now
+    regular messages are persistent to avoid losing important log information.
     
     Args:
         channel: Discord channel to send to
         content: Message content (optional)
         embed: Discord embed (optional)
         view: Discord view with components (optional)
-        delete_after: Time in seconds before auto-deletion (default: 600 = 10 minutes)
+        delete_after: Deprecated parameter (kept for compatibility, but ignored)
     """
     try:
         # Prepare kwargs, only including non-None values
@@ -1014,26 +1020,11 @@ async def send_message_with_auto_delete(channel, content=None, embed=None, view=
         
         # Send the message
         message = await channel.send(**kwargs)
-        
-        # Schedule automatic deletion
-        async def delete_message():
-            await asyncio.sleep(delete_after)
-            try:
-                await message.delete()
-                print(f"[DEBUG] Auto-deleted message after {delete_after} seconds")
-            except discord.NotFound:
-                print(f"[DEBUG] Message already deleted")
-            except discord.Forbidden:
-                print(f"[DEBUG] Cannot delete message - insufficient permissions")
-            except Exception as e:
-                print(f"[DEBUG] Error deleting message: {e}")
-        
-        # Run deletion in background
-        asyncio.create_task(delete_message())
+        print(f"[DEBUG] Sent persistent message to channel {channel.name}")
         return message
         
     except Exception as e:
-        print(f"[ERROR] Failed to send message with auto-delete: {e}")
+        print(f"[ERROR] Failed to send message: {e}")
         return None
 
 def _find_ranking_list(ranking_data):

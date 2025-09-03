@@ -1,0 +1,102 @@
+name: Deploy to NAS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository_owner }}/luminisbot:latest
+          ghcr.io/${{ github.repository_owner }}/luminisbot:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy-to-nas:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Deploy to NAS via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.NAS_HOST }}
+        username: ${{ secrets.NAS_USERNAME }}
+        key: ${{ secrets.NAS_SSH_KEY }}
+        port: ${{ secrets.NAS_PORT || 22 }}
+        script: |
+          # Navigate to bot directory
+          DEPLOY_DIR="${{ secrets.NAS_DEPLOY_PATH || '/opt/luminisbot' }}"
+          cd "$DEPLOY_DIR" || {
+            echo "Creating deployment directory at $DEPLOY_DIR..."
+            mkdir -p "$DEPLOY_DIR"
+            cd "$DEPLOY_DIR"
+          }
+          
+          # Download latest docker-compose file if needed
+          if [[ ! -f "docker-compose.yml" ]] || [[ $(find docker-compose.yml -mtime +1) ]]; then
+            echo "Downloading latest docker-compose file..."
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.prebuilt.yml -o docker-compose.yml
+          fi
+          
+          # Download .env template if .env doesn't exist
+          if [[ ! -f ".env" ]]; then
+            echo "Downloading .env template..."
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/.env.template -o .env
+            echo "⚠️  Please configure .env file with your credentials!"
+          fi
+          
+          # Pull the latest image
+          echo "Pulling latest Docker image..."
+          docker-compose pull luminisbot
+          
+          # Restart the service with zero downtime
+          echo "Restarting LuminisBot..."
+          docker-compose up -d luminisbot
+          
+          # Clean up old images to save space
+          echo "Cleaning up old Docker images..."
+          docker image prune -f
+          
+          # Log the deployment
+          echo "$(date): Deployed commit ${{ github.sha }}" >> deployment.log
+          
+          echo "✅ LuminisBot deployed successfully!"
+          echo "📋 Deployment details:"
+          echo "  • Commit: ${{ github.sha }}"
+          echo "  • Image: ghcr.io/${{ github.repository_owner }}/luminisbot:latest"
+          echo "  • Time: $(date)"
+          
+    - name: Notify deployment status
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "🚀 Deployment to NAS completed successfully!"
+          echo "Commit ${{ github.sha }} is now live!"
+        else
+          echo "❌ Deployment to NAS failed!"
+          echo "Check the logs for more information."
+        fi
