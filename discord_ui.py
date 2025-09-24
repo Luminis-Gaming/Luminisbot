@@ -321,6 +321,10 @@ def _get_player_percentages(player_parses):
         
         if 'bracketPercent' in player_parses and player_parses['bracketPercent'] is not None:
             ilvl_pct = f"{player_parses['bracketPercent']:.0f}"
+        else:
+            # Debug: Log when bracketPercent is missing
+            player_name = player_parses.get('name', 'Unknown')
+            print(f"[DEBUG] Missing bracketPercent for {player_name}: {list(player_parses.keys())}")
     
     return parse_pct, ilvl_pct
 
@@ -517,8 +521,8 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         else:
             parse_str = "   --"
         
-        # Item level percentage (compact)
-        if ilvl_pct != "N/A" and ilvl_pct != parse_pct:
+        # Item level percentage (compact) - always show if available
+        if ilvl_pct != "N/A":
             ilvl_color = get_desktop_ansi_color(ilvl_value)
             ilvl_reset = "\033[0m" if ilvl_color else ""
             ilvl_str = f"{ilvl_color}{ilvl_emoji}{ilvl_pct:>2s}%{ilvl_reset}"
