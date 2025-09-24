@@ -541,13 +541,13 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         
         player_lines.append(player_line)
     
-    # Create header
+    # Create header with proper alignment to match data columns
     if metric.upper() == "HPS":
-        header = " #   Name        Parse iLvl   HPS  OH%"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        header = " #   Name         Parse  iLvl    HPS  OH%"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     else:
-        header = " #   Name        Parse iLvl   DPS"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        header = " #   Name         Parse  iLvl    DPS"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     # Combine all lines with code block formatting for monospace alignment
     all_lines = [header, separator] + player_lines
