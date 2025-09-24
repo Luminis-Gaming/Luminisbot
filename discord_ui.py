@@ -398,7 +398,12 @@ def _format_overheal_mobile(entry):
 
 def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_duration_seconds, metric, boss_health_percentage=None, encounter_name=None):
     """Create a mobile-friendly embed version of the performance data."""
+    print(f"[DEBUG] Mobile embed - table_data exists: {table_data is not None}")
+    print(f"[DEBUG] Mobile embed - table_data entries: {len(table_data.get('entries', [])) if table_data else 0}")
+    print(f"[DEBUG] Mobile embed - ranking_data exists: {ranking_data is not None}")
+    
     if not table_data or not table_data.get('entries'):
+        print(f"[ERROR] Mobile embed - No table data or entries found")
         embed = discord.Embed(
             title="No Data Found",
             description="No performance data found for this fight.",
@@ -806,10 +811,14 @@ class FightSelect(discord.ui.Select):
             
             # For DPS/HPS data, use mobile-friendly format by default with optional desktop view
             if self.metric in ["dps", "hps"]:
+                # Extract the table data from fight_details (same as format_merged_table does)
+                table_data = fight_details.get('table', {}).get('data', {}) if fight_details else {}
+                ranking_data = fight_details.get('rankings') if fight_details else None
+                
                 # Create mobile-friendly embed (works well on all devices)
                 mobile_embed = create_mobile_friendly_embed(
-                    fight_details, 
-                    fight_details.get('rankings') if fight_details else None,
+                    table_data, 
+                    ranking_data,
                     fight_details,
                     fight_duration_seconds, 
                     self.metric, 
