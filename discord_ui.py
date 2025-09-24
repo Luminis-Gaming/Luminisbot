@@ -430,8 +430,8 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     sorted_entries = sorted(table_data.get('entries', []), key=lambda x: x['total'], reverse=True)
     player_entries = _filter_player_entries(sorted_entries, parses, player_roles)
 
-    # Limit to top 15 for mobile readability
-    max_players = 15
+    # Show more players for mobile (same as desktop) but limit to prevent Discord limits
+    max_players = 25
     if len(player_entries) > max_players:
         player_entries = player_entries[:max_players]
     
@@ -449,12 +449,14 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     
     embed = discord.Embed(title=title, color=embed_color)
     
-    # Create fields for each player
+    # Create a clean list format instead of individual fields
+    player_lines = []
+    
     for i, entry in enumerate(player_entries):
         name = entry['name']
         player_parses = parses.get(name)
         
-        # Get role icon and colors
+        # Get role icon
         role = player_roles.get(name, 'unknown')
         role_icons = {
             'tank': '🛡️',
@@ -479,34 +481,75 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
             entry, fight_duration_seconds
         )
         
-        # Create field value with color indicators
-        field_lines = []
-        field_lines.append(f"**{metric.upper()}:** {amount_str}")
-        field_lines.append(f"**Total:** {amount_total_str}")
-        field_lines.append(f"**Active:** {active_percent_str}")
+        # Create compact line format: "1. 🛡️ PlayerName • 🟡97% • 2.1m • 420M • 98%"
+        line_parts = [
+            f"`{i+1:2d}.`", # Rank with fixed width
+            role_icon,
+            f"**{name[:12]}**", # Truncate long names
+        ]
         
+        # Add parse with emoji if available
+        if parse_pct != "N/A":
+            line_parts.append(f"{parse_emoji}{parse_pct}%")
+        
+        # Add main metric value
+        line_parts.append(f"**{amount_str}**")
+        
+        # Add total amount
+        line_parts.append(f"{amount_total_str}")
+        
+        # Add active percentage
+        line_parts.append(f"{active_percent_str}")
+        
+        # Add overheal for HPS
         if metric.upper() == "HPS":
             overheal_str = _format_overheal_mobile(entry)
-            field_lines.append(f"**Overheal:** {overheal_str}")
+            line_parts.append(f"OH:{overheal_str}")
         
-        if parse_pct != "N/A":
-            field_lines.append(f"**Parse:** {parse_emoji} {parse_pct}%")
-        if ilvl_pct != "N/A":
-            field_lines.append(f"**iLvl:** {ilvl_emoji} {ilvl_pct}%")
+        # Add ilvl if available and different from parse
+        if ilvl_pct != "N/A" and ilvl_pct != parse_pct:
+            line_parts.append(f"{ilvl_emoji}{ilvl_pct}%")
         
-        field_value = "\n".join(field_lines)
-        
-        # Add field with rank number and role color
-        field_name = f"{i+1}. {role_icon} {name}"
-        embed.add_field(name=field_name, value=field_value, inline=True)
-        
-        # Add separator every 3 fields for better readability
-        if (i + 1) % 3 == 0 and i < len(player_entries) - 1:
-            embed.add_field(name="\u200b", value="\u200b", inline=False)
+        # Join with bullets for clean separation
+        player_line = " • ".join(line_parts)
+        player_lines.append(player_line)
     
-    # Add footer if we limited players
+    # Split into multiple fields if too long (Discord field limit is 1024 chars)
+    max_field_length = 1000
+    current_field = []
+    field_count = 1
+    
+    for line in player_lines:
+        # Check if adding this line would exceed the limit
+        test_content = "\n".join(current_field + [line])
+        
+        if len(test_content) > max_field_length and current_field:
+            # Add current field and start a new one
+            field_name = f"Rankings" if field_count == 1 else f"Rankings (cont. {field_count})"
+            embed.add_field(name=field_name, value="\n".join(current_field), inline=False)
+            current_field = [line]
+            field_count += 1
+        else:
+            current_field.append(line)
+    
+    # Add the remaining lines
+    if current_field:
+        field_name = f"Rankings" if field_count == 1 else f"Rankings (cont. {field_count})"
+        embed.add_field(name=field_name, value="\n".join(current_field), inline=False)
+    
+    # Add footer with legend and stats
+    legend_parts = []
+    if metric.upper() == "DPS":
+        legend_parts.append("Format: Rank • Role • Name • Parse% • DPS • Total • Active%")
+    else:  # HPS
+        legend_parts.append("Format: Rank • Role • Name • Parse% • HPS • Total • Active% • Overheal")
+    
+    legend_parts.append("🟡95+ 🟣75+ 🔵50+ 🟢25+ ⚫<25")
+    
     if len(player_entries) >= max_players:
-        embed.set_footer(text=f"Showing top {max_players} players")
+        legend_parts.append(f"Showing top {max_players} players")
+    
+    embed.set_footer(text=" | ".join(legend_parts))
     
     return embed
 
