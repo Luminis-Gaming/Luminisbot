@@ -69,9 +69,6 @@ RUN useradd --create-home --shell /bin/bash luminisbot
 RUN chown -R luminisbot:luminisbot /app
 USER luminisbot
 
-# Expose the Flask keep-alive port
-EXPOSE 10000
-
 # --- Define the command to run your bot ---
 # This will be run automatically when the container starts
 CMD ["python", "my_discord_bot.py"]

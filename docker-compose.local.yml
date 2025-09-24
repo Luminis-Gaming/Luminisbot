@@ -1,7 +1,7 @@
 version: '3.8'
 
-# This version uses a pre-built Docker image instead of building locally
-# Use this if you want to deploy only with docker-compose.yml + .env files
+# Temporary docker-compose file that builds locally instead of pulling from registry
+# Use this until the GitHub Actions successfully builds and pushes to GHCR
 
 services:
   # PostgreSQL Database
@@ -15,8 +15,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Note: init.sql won't be available with this method
-      # Database tables will be created by the bot's setup_database() function
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "25432:5432"
     networks:
@@ -27,10 +26,11 @@ services:
       timeout: 10s
       retries: 3
 
-  # Discord Bot (using pre-built image)
+  # Discord Bot (building locally)
   luminisbot:
-    # Using pre-built image from Luminis-Gaming organization
-    image: ghcr.io/luminis-gaming/luminisbot:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: luminisbot-app
     restart: unless-stopped
     depends_on:

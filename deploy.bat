@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-REM deploy.bat - Windows deployment script for LuminisBot
+REM deploy.b    echo "✅ Deployment complete!"
+    echo "📊 View logs with: docker-compose logs -f luminisbot"- Windows deployment script for LuminisBot
 
 echo 🚀 LuminisBot Deployment Script
 echo ================================

@@ -50,8 +50,6 @@ services:
       # Warcraft Recorder
       RECORDER_EMAIL: ${RECORDER_EMAIL}
       RECORDER_PASSWORD: ${RECORDER_PASSWORD}
-    ports:
-      - "10000:10000"  # Flask keep-alive server
     networks:
       - luminisbot-network
     volumes:

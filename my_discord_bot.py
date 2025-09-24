@@ -7,8 +7,6 @@ from discord.ext import tasks
 import os
 from dotenv import load_dotenv
 import asyncio
-from flask import Flask
-from threading import Thread
 import aiohttp
 import time
 import re
@@ -34,16 +32,7 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # --- Configuration Constants ---
 WCL_GUILD_ID = 771376 # Example Guild ID
 
-# --- Flask Web Server for Keep-Alive ---
-app = Flask('')
-@app.route('/')
-def home():
-    print("[DEBUG] Keep-alive ping received by Flask server.")
-    return "Bot is alive!"
 
-def run_web_server():
-    # Make sure to run on a port that your hosting service expects, e.g., 8080 or 10000
-    app.run(host='0.0.0.0', port=10000)
 
 # --- Bot and Command Tree Setup ---
 intents = discord.Intents.default()
@@ -223,8 +212,6 @@ if __name__ == "__main__":
         print("[FATAL] Please check your .env file or environment configuration.")
     else:
         print("--- SCRIPT LAUNCH ---")
-        server_thread = Thread(target=run_web_server)
-        server_thread.start()
         
         # Add retry logic for Discord connection issues
         max_retries = 3

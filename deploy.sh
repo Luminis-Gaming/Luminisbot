@@ -75,7 +75,6 @@ while true; do
             echo "🚀 Starting fresh deployment..."
             docker-compose up -d --build
             echo "✅ Deployment complete!"
-            echo "🌐 Keep-alive endpoint: http://localhost:10000"
             echo "📊 View logs with: docker-compose logs -f luminisbot"
             ;;
         2)
@@ -97,7 +96,7 @@ while true; do
             docker-compose ps
             echo ""
             echo "🏥 Health status:"
-            docker-compose exec luminisbot curl -s http://localhost:10000 || echo "❌ Bot health check failed"
+            echo "✅ Bot is self-hosted - no external health check needed"
             ;;
         6)
             echo "⚠️  This will stop all services and DELETE ALL DATA!"

@@ -60,7 +60,6 @@ docker-compose down -v
 - **Volumes**: Persistent database storage
 
 ### Ports Exposed:
-- **10000**: Flask keep-alive server (for monitoring)
 - **25432**: PostgreSQL database (optional, for external access)
 
 ## 🔧 Configuration
@@ -149,12 +148,11 @@ docker-compose up -d --build
 
 ## 📋 Health Checks
 
-The setup includes health checks for both services:
+The setup includes health checks for the database service:
 
 - **PostgreSQL**: Checks database connectivity
-- **Bot**: Checks Flask keep-alive endpoint (http://localhost:10000)
 
-You can check health status with:
+You can check service status with:
 ```bash
 docker-compose ps
 ```
@@ -175,9 +173,9 @@ Once deployed, your bot will have these slash commands:
 
 ## 📈 Monitoring
 
-- **Keep-alive endpoint**: http://your-nas-ip:10000
 - **Database**: Accessible on port 25432 (if needed)
 - **Logs**: Use `docker-compose logs` to monitor activity
+- **Bot Status**: Check Discord server to verify bot is online
 
 ## 🆘 Support
 
