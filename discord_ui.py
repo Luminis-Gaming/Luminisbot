@@ -456,22 +456,25 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         name = entry['name']
         player_parses = parses.get(name)
         
-        # Get role for text-based indicator (cleaner than emojis)
+        # Get role icon (much clearer than text)
         role = player_roles.get(name, 'unknown')
-        role_chars = {
-            'tank': 'T',
-            'healer': 'H', 
-            'dps': 'D',
-            'unknown': '?'
+        role_icons = {
+            'tank': '🛡️',
+            'healer': '💚', 
+            'dps': '⚔️',
+            'unknown': '❓'
         }
-        role_char = role_chars.get(role, '?')
+        role_icon = role_icons.get(role, '❓')
         
         # Get percentages
         parse_pct, ilvl_pct = _get_player_percentages(player_parses)
         
         # Get parse quality indicators with ANSI colors for supported clients
         parse_value = int(parse_pct) if parse_pct != "N/A" and parse_pct.isdigit() else None
+        ilvl_value = int(ilvl_pct) if ilvl_pct != "N/A" and ilvl_pct.isdigit() else None
+        
         parse_emoji = _get_parse_emoji(parse_value)
+        ilvl_emoji = _get_parse_emoji(ilvl_value)
         
         # Format main metric value only (remove total and active)
         amount_per_second = entry['total'] / fight_duration_seconds
@@ -485,33 +488,42 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         # Truncate long names and format with fixed widths for alignment
         display_name = name[:13] if len(name) > 13 else name
         
-        # Try to add ANSI color coding for parse percentages (some Discord clients support this)
-        def get_ansi_color(parse_val):
+        # Use the same ANSI color coding as desktop version for consistency
+        def get_desktop_ansi_color(parse_val):
+            """Same colors as desktop _get_colored_percentage function"""
             if parse_val is None:
                 return ""
             elif parse_val >= 95:
-                return "\033[38;5;214m"  # Orange/gold
+                return "\033[33m"  # Yellow for legendary (95+) - same as desktop
             elif parse_val >= 75:
-                return "\033[38;5;129m"  # Purple
+                return "\033[35m"  # Purple for epic (75+) - same as desktop
             elif parse_val >= 50:
-                return "\033[38;5;39m"   # Blue
+                return "\033[34m"  # Blue for rare (50+) - same as desktop
             elif parse_val >= 25:
-                return "\033[38;5;46m"   # Green
+                return "\033[32m"  # Green for uncommon (25+) - same as desktop
             else:
-                return "\033[38;5;244m"  # Gray
+                return ""  # No color for gray - same as desktop
         
-        ansi_color = get_ansi_color(parse_value)
+        ansi_color = get_desktop_ansi_color(parse_value)
         ansi_reset = "\033[0m" if ansi_color else ""
         
         # Create aligned format using fixed-width formatting
         rank_str = f"{i+1:2d}"
-        role_str = f"{role_char}"
-        name_str = f"{display_name:<13}"
+        name_str = f"{display_name:<11}"  # Shortened to make room for ilvl
         
+        # Parse percentage with color
         if parse_pct != "N/A":
             parse_str = f"{ansi_color}{parse_emoji}{parse_pct:>2s}%{ansi_reset}"
         else:
             parse_str = "   --"
+        
+        # Item level percentage (compact)
+        if ilvl_pct != "N/A" and ilvl_pct != parse_pct:
+            ilvl_color = get_desktop_ansi_color(ilvl_value)
+            ilvl_reset = "\033[0m" if ilvl_color else ""
+            ilvl_str = f"{ilvl_color}{ilvl_emoji}{ilvl_pct:>2s}%{ilvl_reset}"
+        else:
+            ilvl_str = "   --"
             
         amount_padded = f"{amount_str:>6s}"
         
@@ -519,19 +531,19 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         if metric.upper() == "HPS":
             overheal_str = _format_overheal_mobile(entry)
             overheal_padded = f"{overheal_str:>4s}"
-            player_line = f"{rank_str} {role_str} {name_str} {parse_str} {amount_padded} {overheal_padded}"
+            player_line = f"{rank_str} {role_icon} {name_str} {parse_str} {ilvl_str} {amount_padded} {overheal_padded}"
         else:
-            player_line = f"{rank_str} {role_str} {name_str} {parse_str} {amount_padded}"
+            player_line = f"{rank_str} {role_icon} {name_str} {parse_str} {ilvl_str} {amount_padded}"
         
         player_lines.append(player_line)
     
     # Create header
     if metric.upper() == "HPS":
-        header = " # R Name          Parse   HPS  OH%"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        header = " #   Name        Parse iLvl   HPS  OH%"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     else:
-        header = " # R Name          Parse   DPS"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        header = " #   Name        Parse iLvl   DPS"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     # Combine all lines with code block formatting for monospace alignment
     all_lines = [header, separator] + player_lines
@@ -555,8 +567,8 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     
     # Add footer with legend
     legend_parts = []
-    legend_parts.append("T=Tank H=Healer D=DPS")
-    legend_parts.append("🟡95+ 🟣75+ 🔵50+ 🟢25+ ⚫<25")
+    legend_parts.append("🛡️=Tank 💚=Healer ⚔️=DPS")
+    legend_parts.append("Parse/iLvl: 🟡95+ 🟣75+ 🔵50+ 🟢25+ ⚫<25")
     
     if len(player_entries) >= max_players:
         legend_parts.append(f"Top {max_players} shown")
