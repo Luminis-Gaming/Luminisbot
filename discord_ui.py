@@ -278,6 +278,38 @@ def _get_colored_percentage(percentage_str, percentage_value):
     else:
         return percentage_str.rjust(3)
 
+def _get_parse_color_hex(percentage_value):
+    """Get Discord embed color hex based on parse percentage (WoW quality colors)."""
+    if percentage_value is None:
+        return None
+    
+    if percentage_value >= 95:
+        return 0xFFD700  # Gold for legendary (95+)
+    elif percentage_value >= 75:
+        return 0xA335EE  # Purple for epic (75+)  
+    elif percentage_value >= 50:
+        return 0x0070DD  # Blue for rare (50+)
+    elif percentage_value >= 25:
+        return 0x1EFF00  # Green for uncommon (25+)
+    else:
+        return 0x9D9D9D  # Gray for poor/common
+
+def _get_parse_emoji(percentage_value):
+    """Get emoji indicator for parse quality."""
+    if percentage_value is None:
+        return "⚪"
+    
+    if percentage_value >= 95:
+        return "🟡"  # Gold circle for legendary
+    elif percentage_value >= 75:
+        return "🟣"  # Purple circle for epic
+    elif percentage_value >= 50:
+        return "🔵"  # Blue circle for rare
+    elif percentage_value >= 25:
+        return "🟢"  # Green circle for uncommon
+    else:
+        return "⚫"  # Black circle for poor
+
 def _get_player_percentages(player_parses):
     """Extract parse and ilvl percentages from player parse data."""
     parse_pct = "N/A"
@@ -318,6 +350,30 @@ def _format_amounts_and_activity(entry, fight_duration_seconds):
     
     return amount_str, amount_total_str, active_percent_str
 
+def _format_amounts_and_activity_mobile(entry, fight_duration_seconds):
+    """Format DPS/HPS amounts and activity percentage for mobile (no padding)."""
+    amount_per_second = entry['total'] / fight_duration_seconds
+    amount_str = f"{amount_per_second / 1_000_000:.2f}m" if amount_per_second >= 1_000_000 else f"{amount_per_second / 1_000:.1f}k"
+
+    total_amount = entry['total']
+    if total_amount >= 1_000_000_000:
+        amount_total_str = f"{total_amount / 1_000_000_000:.1f}B"
+    elif total_amount >= 1_000_000:
+        amount_total_str = f"{total_amount / 1_000_000:.1f}M"
+    elif total_amount >= 1_000:
+        amount_total_str = f"{total_amount / 1_000:.1f}K"
+    else:
+        amount_total_str = str(total_amount)
+
+    active_time = entry.get('activeTime', entry.get('uptime', 0))
+    if fight_duration_seconds > 0:
+        active_percent = (active_time / 1000) / fight_duration_seconds * 100
+        active_percent_str = f"{active_percent:.0f}%"
+    else:
+        active_percent_str = "N/A"
+    
+    return amount_str, amount_total_str, active_percent_str
+
 def _format_overheal(entry):
     """Calculate and format overheal percentage for healing entries."""
     overheal = entry.get('overheal', 0)
@@ -328,6 +384,126 @@ def _format_overheal(entry):
         return f"{overheal_percent:.0f}%".rjust(8)
     else:
         return "N/A".rjust(8)
+
+def _format_overheal_mobile(entry):
+    """Calculate and format overheal percentage for healing entries (mobile version)."""
+    overheal = entry.get('overheal', 0)
+    total_amount = entry['total']
+    
+    if total_amount > 0:
+        overheal_percent = (overheal / (total_amount + overheal)) * 100
+        return f"{overheal_percent:.0f}%"
+    else:
+        return "N/A"
+
+def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_duration_seconds, metric, boss_health_percentage=None, encounter_name=None):
+    """Create a mobile-friendly embed version of the performance data."""
+    if not table_data or not table_data.get('entries'):
+        embed = discord.Embed(
+            title="No Data Found",
+            description="No performance data found for this fight.",
+            color=0xff6b6b
+        )
+        return embed
+    
+    # Create title
+    if boss_health_percentage is not None and boss_health_percentage < 100:
+        title = f"{metric.upper()} - {encounter_name} Wipe ({boss_health_percentage:.1f}%)"
+    else:
+        title = f"{metric.upper()} - {encounter_name}" if encounter_name else f"{metric.upper()} Performance"
+    
+    # Parse data first to get top performer's color
+    parses, player_roles = _parse_ranking_data(ranking_data, fight_details)
+    
+    if not player_roles:
+        player_details_data = fight_details.get('playerDetails')
+        player_roles = _extract_player_roles_from_playerdetails(player_details_data)
+
+    if fight_duration_seconds <= 0: 
+        fight_duration_seconds = 1
+
+    sorted_entries = sorted(table_data.get('entries', []), key=lambda x: x['total'], reverse=True)
+    player_entries = _filter_player_entries(sorted_entries, parses, player_roles)
+
+    # Limit to top 15 for mobile readability
+    max_players = 15
+    if len(player_entries) > max_players:
+        player_entries = player_entries[:max_players]
+    
+    # Set embed color based on top performer's parse quality
+    embed_color = 0x0099ff  # Default blue
+    if player_entries:
+        top_player_name = player_entries[0]['name']
+        top_player_parses = parses.get(top_player_name)
+        if top_player_parses:
+            top_parse_pct, _ = _get_player_percentages(top_player_parses)
+            top_parse_value = int(top_parse_pct) if top_parse_pct != "N/A" and top_parse_pct.isdigit() else None
+            parse_color = _get_parse_color_hex(top_parse_value)
+            if parse_color:
+                embed_color = parse_color
+    
+    embed = discord.Embed(title=title, color=embed_color)
+    
+    # Create fields for each player
+    for i, entry in enumerate(player_entries):
+        name = entry['name']
+        player_parses = parses.get(name)
+        
+        # Get role icon and colors
+        role = player_roles.get(name, 'unknown')
+        role_icons = {
+            'tank': '🛡️',
+            'healer': '💚', 
+            'dps': '⚔️',
+            'unknown': '❓'
+        }
+        role_icon = role_icons.get(role, '❓')
+        
+        # Get percentages
+        parse_pct, ilvl_pct = _get_player_percentages(player_parses)
+        
+        # Get parse quality indicators
+        parse_value = int(parse_pct) if parse_pct != "N/A" and parse_pct.isdigit() else None
+        ilvl_value = int(ilvl_pct) if ilvl_pct != "N/A" and ilvl_pct.isdigit() else None
+        
+        parse_emoji = _get_parse_emoji(parse_value)
+        ilvl_emoji = _get_parse_emoji(ilvl_value)
+        
+        # Format amounts without padding
+        amount_str, amount_total_str, active_percent_str = _format_amounts_and_activity_mobile(
+            entry, fight_duration_seconds
+        )
+        
+        # Create field value with color indicators
+        field_lines = []
+        field_lines.append(f"**{metric.upper()}:** {amount_str}")
+        field_lines.append(f"**Total:** {amount_total_str}")
+        field_lines.append(f"**Active:** {active_percent_str}")
+        
+        if metric.upper() == "HPS":
+            overheal_str = _format_overheal_mobile(entry)
+            field_lines.append(f"**Overheal:** {overheal_str}")
+        
+        if parse_pct != "N/A":
+            field_lines.append(f"**Parse:** {parse_emoji} {parse_pct}%")
+        if ilvl_pct != "N/A":
+            field_lines.append(f"**iLvl:** {ilvl_emoji} {ilvl_pct}%")
+        
+        field_value = "\n".join(field_lines)
+        
+        # Add field with rank number and role color
+        field_name = f"{i+1}. {role_icon} {name}"
+        embed.add_field(name=field_name, value=field_value, inline=True)
+        
+        # Add separator every 3 fields for better readability
+        if (i + 1) % 3 == 0 and i < len(player_entries) - 1:
+            embed.add_field(name="\u200b", value="\u200b", inline=False)
+    
+    # Add footer if we limited players
+    if len(player_entries) >= max_players:
+        embed.set_footer(text=f"Showing top {max_players} players")
+    
+    return embed
 
 def format_merged_table(fight_details, metric, fight_duration_seconds, encounter_name=None, boss_health_percentage=None):
     """Format the main performance table."""
@@ -626,31 +802,87 @@ class FightSelect(discord.ui.Select):
                 
                 formatted_table = format_deaths_table(death_events, fight_start_time, player_roles, encounter_name)
             
-            print("[UI] Data formatted. Checking message length before sending.")
+            print("[UI] Data formatted. Checking if mobile-friendly version should be offered.")
             
-            # Check if the message is too long for Discord (2000 character limit)
-            if len(formatted_table) > 2000:
-                print(f"[UI] Message too long ({len(formatted_table)} chars), truncating.")
+            # For DPS/HPS data, use mobile-friendly format by default with optional desktop view
+            if self.metric in ["dps", "hps"]:
+                # Create mobile-friendly embed (works well on all devices)
+                mobile_embed = create_mobile_friendly_embed(
+                    fight_details, 
+                    fight_details.get('rankings') if fight_details else None,
+                    fight_details,
+                    fight_duration_seconds, 
+                    self.metric, 
+                    boss_health_percentage, 
+                    encounter_name
+                )
                 
-                warning_msg = "\n\n(Table truncated - too many players to display)\n```"
-                max_content_length = 1950 - len(warning_msg)
-                
-                truncated = formatted_table[:max_content_length]
-                last_newline = truncated.rfind('\n')
-                if last_newline > 0:
-                    truncated = truncated[:last_newline]
-                
-                if not truncated.endswith('\033[0m'):
-                    truncated += '\033[0m'
-                
-                formatted_table = truncated + warning_msg
-                print(f"[UI] Truncated to {len(formatted_table)} characters.")
-                
+                # Create view with optional desktop format button
+                desktop_view = DesktopFormatView(formatted_table)
+                await send_ephemeral_with_auto_delete(
+                    interaction, 
+                    embed=mobile_embed,
+                    view=desktop_view
+                )
+            else:
+                # For deaths and other data, use traditional format with length checking
                 if len(formatted_table) > 2000:
-                    print(f"[UI] Still too long after truncation, doing emergency truncation.")
-                    formatted_table = formatted_table[:1990] + "\n```"
+                    print(f"[UI] Message too long ({len(formatted_table)} chars), truncating.")
+                    
+                    warning_msg = "\n\n(Table truncated - too many players to display)\n```"
+                    max_content_length = 1950 - len(warning_msg)
+                    
+                    truncated = formatted_table[:max_content_length]
+                    last_newline = truncated.rfind('\n')
+                    if last_newline > 0:
+                        truncated = truncated[:last_newline]
+                    
+                    if not truncated.endswith('\033[0m'):
+                        truncated += '\033[0m'
+                    
+                    formatted_table = truncated + warning_msg
+                    print(f"[UI] Truncated to {len(formatted_table)} characters.")
+                    
+                    if len(formatted_table) > 2000:
+                        print(f"[UI] Still too long after truncation, doing emergency truncation.")
+                        formatted_table = formatted_table[:1990] + "\n```"
+                
+                await send_ephemeral_with_auto_delete(interaction, content=formatted_table)
+
+class DesktopFormatView(discord.ui.View):
+    def __init__(self, desktop_table):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.desktop_table = desktop_table
+
+    @discord.ui.button(label="�️ Desktop Table View", style=discord.ButtonStyle.secondary, custom_id="desktop_format")
+    async def desktop_format_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Show traditional desktop table format."""
+        print("[UI] Desktop format requested.")
+        
+        # Check if the message is too long for Discord (2000 character limit)
+        formatted_table = self.desktop_table
+        if len(formatted_table) > 2000:
+            print(f"[UI] Message too long ({len(formatted_table)} chars), truncating.")
             
-            await send_ephemeral_with_auto_delete(interaction, content=formatted_table)
+            warning_msg = "\n\n(Table truncated - too many players to display)\n```"
+            max_content_length = 1950 - len(warning_msg)
+            
+            truncated = formatted_table[:max_content_length]
+            last_newline = truncated.rfind('\n')
+            if last_newline > 0:
+                truncated = truncated[:last_newline]
+            
+            if not truncated.endswith('\033[0m'):
+                truncated += '\033[0m'
+            
+            formatted_table = truncated + warning_msg
+            print(f"[UI] Truncated to {len(formatted_table)} characters.")
+            
+            if len(formatted_table) > 2000:
+                print(f"[UI] Still too long after truncation, doing emergency truncation.")
+                formatted_table = formatted_table[:1990] + "\n```"
+        
+        await send_ephemeral_with_auto_delete(interaction, content=formatted_table)
 
 class LogButtonsView(discord.ui.View):
     def __init__(self):
