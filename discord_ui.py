@@ -449,107 +449,119 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     
     embed = discord.Embed(title=title, color=embed_color)
     
-    # Create a clean list format instead of individual fields
+    # Create a clean, aligned table format using Discord's code block formatting
     player_lines = []
     
     for i, entry in enumerate(player_entries):
         name = entry['name']
         player_parses = parses.get(name)
         
-        # Get role icon
+        # Get role for text-based indicator (cleaner than emojis)
         role = player_roles.get(name, 'unknown')
-        role_icons = {
-            'tank': '🛡️',
-            'healer': '💚', 
-            'dps': '⚔️',
-            'unknown': '❓'
+        role_chars = {
+            'tank': 'T',
+            'healer': 'H', 
+            'dps': 'D',
+            'unknown': '?'
         }
-        role_icon = role_icons.get(role, '❓')
+        role_char = role_chars.get(role, '?')
         
         # Get percentages
         parse_pct, ilvl_pct = _get_player_percentages(player_parses)
         
-        # Get parse quality indicators
+        # Get parse quality indicators with ANSI colors for supported clients
         parse_value = int(parse_pct) if parse_pct != "N/A" and parse_pct.isdigit() else None
-        ilvl_value = int(ilvl_pct) if ilvl_pct != "N/A" and ilvl_pct.isdigit() else None
-        
         parse_emoji = _get_parse_emoji(parse_value)
-        ilvl_emoji = _get_parse_emoji(ilvl_value)
         
-        # Format amounts without padding
-        amount_str, amount_total_str, active_percent_str = _format_amounts_and_activity_mobile(
-            entry, fight_duration_seconds
-        )
+        # Format main metric value only (remove total and active)
+        amount_per_second = entry['total'] / fight_duration_seconds
+        if amount_per_second >= 1_000_000:
+            amount_str = f"{amount_per_second / 1_000_000:.1f}M"
+        elif amount_per_second >= 1_000:
+            amount_str = f"{amount_per_second / 1_000:.0f}K" 
+        else:
+            amount_str = f"{amount_per_second:.0f}"
         
-        # Create compact line format: "1. 🛡️ PlayerName • 🟡97% • 2.1m • 420M • 98%"
-        line_parts = [
-            f"`{i+1:2d}.`", # Rank with fixed width
-            role_icon,
-            f"**{name[:12]}**", # Truncate long names
-        ]
+        # Truncate long names and format with fixed widths for alignment
+        display_name = name[:13] if len(name) > 13 else name
         
-        # Add parse with emoji if available
+        # Try to add ANSI color coding for parse percentages (some Discord clients support this)
+        def get_ansi_color(parse_val):
+            if parse_val is None:
+                return ""
+            elif parse_val >= 95:
+                return "\033[38;5;214m"  # Orange/gold
+            elif parse_val >= 75:
+                return "\033[38;5;129m"  # Purple
+            elif parse_val >= 50:
+                return "\033[38;5;39m"   # Blue
+            elif parse_val >= 25:
+                return "\033[38;5;46m"   # Green
+            else:
+                return "\033[38;5;244m"  # Gray
+        
+        ansi_color = get_ansi_color(parse_value)
+        ansi_reset = "\033[0m" if ansi_color else ""
+        
+        # Create aligned format using fixed-width formatting
+        rank_str = f"{i+1:2d}"
+        role_str = f"{role_char}"
+        name_str = f"{display_name:<13}"
+        
         if parse_pct != "N/A":
-            line_parts.append(f"{parse_emoji}{parse_pct}%")
+            parse_str = f"{ansi_color}{parse_emoji}{parse_pct:>2s}%{ansi_reset}"
+        else:
+            parse_str = "   --"
+            
+        amount_padded = f"{amount_str:>6s}"
         
-        # Add main metric value
-        line_parts.append(f"**{amount_str}**")
-        
-        # Add total amount
-        line_parts.append(f"{amount_total_str}")
-        
-        # Add active percentage
-        line_parts.append(f"{active_percent_str}")
-        
-        # Add overheal for HPS
+        # Add overheal for HPS (compact)
         if metric.upper() == "HPS":
             overheal_str = _format_overheal_mobile(entry)
-            line_parts.append(f"OH:{overheal_str}")
+            overheal_padded = f"{overheal_str:>4s}"
+            player_line = f"{rank_str} {role_str} {name_str} {parse_str} {amount_padded} {overheal_padded}"
+        else:
+            player_line = f"{rank_str} {role_str} {name_str} {parse_str} {amount_padded}"
         
-        # Add ilvl if available and different from parse
-        if ilvl_pct != "N/A" and ilvl_pct != parse_pct:
-            line_parts.append(f"{ilvl_emoji}{ilvl_pct}%")
-        
-        # Join with bullets for clean separation
-        player_line = " • ".join(line_parts)
         player_lines.append(player_line)
     
-    # Split into multiple fields if too long (Discord field limit is 1024 chars)
-    max_field_length = 1000
-    current_field = []
-    field_count = 1
+    # Create header
+    if metric.upper() == "HPS":
+        header = " # R Name          Parse   HPS  OH%"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    else:
+        header = " # R Name          Parse   DPS"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    for line in player_lines:
-        # Check if adding this line would exceed the limit
-        test_content = "\n".join(current_field + [line])
+    # Combine all lines with code block formatting for monospace alignment
+    all_lines = [header, separator] + player_lines
+    
+    # Use ansi code block to potentially support colors on some Discord clients
+    content = "```ansi\n" + "\n".join(all_lines) + "\n```"
+    
+    # Check if content fits in one field (Discord limit is 1024 chars per field)
+    if len(content) <= 1020:  # Leave some margin
+        embed.add_field(name="📊 Rankings", value=content, inline=False)
+    else:
+        # Split into chunks if needed
+        lines_per_chunk = 20
+        chunks = [player_lines[i:i + lines_per_chunk] for i in range(0, len(player_lines), lines_per_chunk)]
         
-        if len(test_content) > max_field_length and current_field:
-            # Add current field and start a new one
-            field_name = f"Rankings" if field_count == 1 else f"Rankings (cont. {field_count})"
-            embed.add_field(name=field_name, value="\n".join(current_field), inline=False)
-            current_field = [line]
-            field_count += 1
-        else:
-            current_field.append(line)
+        for idx, chunk in enumerate(chunks):
+            chunk_lines = [header, separator] + chunk
+            chunk_content = "```ansi\n" + "\n".join(chunk_lines) + "\n```"
+            field_name = "📊 Rankings" if idx == 0 else f"📊 Rankings (Page {idx + 1})"
+            embed.add_field(name=field_name, value=chunk_content, inline=False)
     
-    # Add the remaining lines
-    if current_field:
-        field_name = f"Rankings" if field_count == 1 else f"Rankings (cont. {field_count})"
-        embed.add_field(name=field_name, value="\n".join(current_field), inline=False)
-    
-    # Add footer with legend and stats
+    # Add footer with legend
     legend_parts = []
-    if metric.upper() == "DPS":
-        legend_parts.append("Format: Rank • Role • Name • Parse% • DPS • Total • Active%")
-    else:  # HPS
-        legend_parts.append("Format: Rank • Role • Name • Parse% • HPS • Total • Active% • Overheal")
-    
+    legend_parts.append("T=Tank H=Healer D=DPS")
     legend_parts.append("🟡95+ 🟣75+ 🔵50+ 🟢25+ ⚫<25")
     
     if len(player_entries) >= max_players:
-        legend_parts.append(f"Showing top {max_players} players")
+        legend_parts.append(f"Top {max_players} shown")
     
-    embed.set_footer(text=" | ".join(legend_parts))
+    embed.set_footer(text=" • ".join(legend_parts))
     
     return embed
 
