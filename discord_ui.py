@@ -551,11 +551,12 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         header = " #  Name         Parse  iLvl    DPS"
         separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Split at 15 lines per field for better readability and safe margins
+    # Try to fit more in single field to avoid spacing issues
     # Each player line: rank(2) + space + emoji(2) + space + name(12) + space + parse(6) + space + ilvl(6) + space + dps(7) + overheal(5) ≈ 46 chars
     # Header + separator ≈ 85 chars, code block markers ≈ 20 chars
-    # 15 lines: 15 * 46 + 105 = 795 chars (well under 1024 limit with good safety margin)
-    max_lines_per_field = 15  # Conservative split for seamless multi-field display
+    # Calculation: (1024 - 105) / 46 ≈ 20 lines can fit safely
+    # Most raids are ~25 players, so we might need one split, but let's try 20 first
+    max_lines_per_field = 20  # Try to fit most raids in one field
     
     if len(player_lines) <= max_lines_per_field:
         # All fits in one field
@@ -587,10 +588,14 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
                 # First field gets header and separator
                 chunk_lines = [header, separator] + chunk
                 field_name = "📊 Rankings"
+                is_inline = False
             else:
-                # Continuation fields are just the player data (cleaner look)
-                chunk_lines = chunk
-                field_name = "\u200b"  # Invisible character for clean continuation
+                # Continuation fields with minimal visual separation
+                # Add a subtle continuation indicator
+                continuation_line = "━━━ (continued) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                chunk_lines = [continuation_line] + chunk
+                field_name = "\u200b"  # Zero-width space for minimal visual separation
+                is_inline = False  # Keep as full width for consistent formatting
             
             chunk_content = "```ansi\n" + "\n".join(chunk_lines) + "\n```"
             
@@ -610,7 +615,7 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
                         sub_content = "```ansi\n" + "\n".join(sub_lines) + "\n```"
                         embed.add_field(name=sub_field_name, value=sub_content, inline=False)
             else:
-                embed.add_field(name=field_name, value=chunk_content, inline=False)
+                embed.add_field(name=field_name, value=chunk_content, inline=is_inline)
     
     # Add footer with legend
     legend_parts = []
