@@ -489,9 +489,13 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         else:
             amount_str = f"{amount_per_second:.0f}"
         
-        # Keep full names for better readability - we'll split into smaller fields instead
-        # With 15 lines per field, we have plenty of room for longer names
-        max_name_length = 12  # Restore longer names for better readability
+        # Calculate optimal name length to fit 20 players in one field
+        # Target: fit 20 players + header + separator in 1024 chars
+        # Line format: "20 🛡️ Name.... 🟡99% 🟣99%   2.1M  99%" 
+        # Fixed parts per line: rank(2) + space(1) + emoji(2) + space(1) + parse(6) + space(1) + ilvl(6) + space(1) + dps(7) + overheal(5) + spaces ≈ 32 chars
+        # Available for name: (1024 - 100 header overhead) / 20 lines - 32 fixed = ~14 chars per name
+        # Let's be conservative and use 8 chars to ensure it always fits
+        max_name_length = 8  # Shorter names to guarantee single field
         display_name = name[:max_name_length] if len(name) > max_name_length else name
         
         # Use the same ANSI color coding as desktop version for consistency
@@ -533,89 +537,42 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
             
         amount_padded = f"{amount_str:>6s}"
         
-        # Add overheal for HPS (compact)
-        if metric.upper() == "HPS":
-            overheal_str = _format_overheal_mobile(entry)
-            overheal_padded = f"{overheal_str:>4s}"
-            player_line = f"{rank_str} {role_icon} {name_str} {parse_str} {ilvl_str} {amount_padded} {overheal_padded}"
-        else:
-            player_line = f"{rank_str} {role_icon} {name_str} {parse_str} {ilvl_str} {amount_padded}"
+        # Same format for both DPS and HPS (no overheal column)
+        player_line = f"{rank_str} {role_icon} {name_str} {parse_str} {ilvl_str} {amount_padded}"
         
         player_lines.append(player_line)
     
-    # Create header with proper alignment to match data columns (12 char names)
-    if metric.upper() == "HPS":
-        header = " #  Name         Parse  iLvl    HPS  OH%"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    else:
-        header = " #  Name         Parse  iLvl    DPS"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    # Create header with proper alignment to match data columns (8 char names, no overheal)
+    metric_label = metric.upper()
+    header = f" #  Name     Parse  iLvl    {metric_label}"
+    separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Try to fit more in single field to avoid spacing issues
-    # Each player line: rank(2) + space + emoji(2) + space + name(12) + space + parse(6) + space + ilvl(6) + space + dps(7) + overheal(5) ≈ 46 chars
-    # Header + separator ≈ 85 chars, code block markers ≈ 20 chars
-    # Calculation: (1024 - 105) / 46 ≈ 20 lines can fit safely
-    # Most raids are ~25 players, so we might need one split, but let's try 20 first
-    max_lines_per_field = 20  # Try to fit most raids in one field
+    # Calculate if we can fit everything in one field with 8-char names (no overheal column)
+    # Each player line: rank(2) + space + emoji(2) + space + name(8) + space + parse(6) + space + ilvl(6) + space + dps/hps(7) + spaces ≈ 34 chars
+    # Header + separator ≈ 75 chars, code block markers ≈ 20 chars  
+    # 20 lines: 20 * 34 + 95 = 775 chars (safely under 1024 with good margin)
     
-    if len(player_lines) <= max_lines_per_field:
-        # All fits in one field
-        all_lines = [header, separator] + player_lines
-        content = "```ansi\n" + "\n".join(all_lines) + "\n```"
-        
-        # Final safety check
-        if len(content) <= 1020:
-            embed.add_field(name="📊 Rankings", value=content, inline=False)
-        else:
-            # Force split even if calculated size was wrong
-            mid_point = len(player_lines) // 2
-            first_half = player_lines[:mid_point]
-            second_half = player_lines[mid_point:]
-            
-            # First field
-            first_content = "```ansi\n" + "\n".join([header, separator] + first_half) + "\n```"
-            embed.add_field(name="📊 Rankings (1)", value=first_content, inline=False)
-            
-            # Second field
-            second_content = "```ansi\n" + "\n".join([header, separator] + second_half) + "\n```"
-            embed.add_field(name="📊 Rankings (2)", value=second_content, inline=False)
-    else:
-        # Split into multiple safe-sized fields
-        chunks = [player_lines[i:i + max_lines_per_field] for i in range(0, len(player_lines), max_lines_per_field)]
-        
-        for idx, chunk in enumerate(chunks):
-            if idx == 0:
-                # First field gets header and separator
-                chunk_lines = [header, separator] + chunk
-                field_name = "📊 Rankings"
-                is_inline = False
-            else:
-                # Continuation fields with minimal visual separation
-                # Add a subtle continuation indicator
-                continuation_line = "━━━ (continued) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                chunk_lines = [continuation_line] + chunk
-                field_name = "\u200b"  # Zero-width space for minimal visual separation
-                is_inline = False  # Keep as full width for consistent formatting
-            
-            chunk_content = "```ansi\n" + "\n".join(chunk_lines) + "\n```"
-            
-            # Final length validation
-            if len(chunk_content) > 1020:
-                print(f"[WARNING] Field {idx} still too long: {len(chunk_content)} chars - forcing smaller split")
-                # Emergency split in half
-                mid = len(chunk) // 2
-                for sub_idx, sub_chunk in enumerate([chunk[:mid], chunk[mid:]]):
-                    if sub_chunk:  # Only add if not empty
-                        if idx == 0 and sub_idx == 0:
-                            sub_lines = [header, separator] + sub_chunk
-                            sub_field_name = "📊 Rankings"
-                        else:
-                            sub_lines = sub_chunk
-                            sub_field_name = "\u200b"
-                        sub_content = "```ansi\n" + "\n".join(sub_lines) + "\n```"
-                        embed.add_field(name=sub_field_name, value=sub_content, inline=False)
-            else:
-                embed.add_field(name=field_name, value=chunk_content, inline=is_inline)
+    # Limit to top 20 players to guarantee single field
+    if len(player_lines) > 20:
+        player_lines = player_lines[:20]
+        print(f"[INFO] Limited to top 20 players for single field display")
+    
+    # Create single field with all players
+    all_lines = [header, separator] + player_lines
+    content = "```ansi\n" + "\n".join(all_lines) + "\n```"
+    
+    # Update field name to indicate we're showing top 20
+    field_name = f"📊 Rankings (Top {len(player_lines)})"
+    
+    # Safety check - if somehow still too long, truncate further
+    if len(content) > 1020:
+        print(f"[WARNING] Content still too long ({len(content)} chars), reducing to 15 players")
+        reduced_lines = player_lines[:15]
+        reduced_all_lines = [header, separator] + reduced_lines
+        content = "```ansi\n" + "\n".join(reduced_all_lines) + "\n```"
+        field_name = f"📊 Rankings (Top {len(reduced_lines)})"
+    
+    embed.add_field(name=field_name, value=content, inline=False)
     
     # Add footer with legend
     legend_parts = []
