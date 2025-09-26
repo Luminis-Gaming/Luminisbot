@@ -489,8 +489,13 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         else:
             amount_str = f"{amount_per_second:.0f}"
         
-        # Truncate long names and format with fixed widths for alignment
-        display_name = name[:13] if len(name) > 13 else name
+        # Calculate optimal name length to stay within Discord's 1024 char limit
+        # Line format: "99 🛡️ Name........ 🟡99% 🟣99%   2.1M  99%" 
+        # Fixed chars per line: rank(2) + space(1) + emoji(2) + space(1) + parse(6) + ilvl(6) + dps(7) + overheal(5) ≈ 30 chars
+        # With 25 players max, header(2 lines ~80 chars), we need ~35 chars per line max to stay under 1024
+        # So name should be max 8 chars to be safe: 2+1+2+1+8+1+6+1+6+1+7+1+5 = 42 chars per line
+        max_name_length = 8
+        display_name = name[:max_name_length] if len(name) > max_name_length else name
         
         # Use the same ANSI color coding as desktop version for consistency
         def get_desktop_ansi_color(parse_val):
@@ -513,7 +518,7 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         
         # Create aligned format using fixed-width formatting
         rank_str = f"{i+1:2d}"
-        name_str = f"{display_name:<11}"  # Shortened to make room for ilvl
+        name_str = f"{display_name:<{max_name_length}}"  # Use calculated max length
         
         # Parse percentage with color
         if parse_pct != "N/A":
@@ -541,33 +546,62 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         
         player_lines.append(player_line)
     
-    # Create header with proper alignment to match data columns
+    # Create header with proper alignment to match data columns (8 char names)
     if metric.upper() == "HPS":
-        header = " #   Name         Parse  iLvl    HPS  OH%"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        header = " #  Name     Parse  iLvl    HPS  OH%"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     else:
-        header = " #   Name         Parse  iLvl    DPS"
-        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        header = " #  Name     Parse  iLvl    DPS"
+        separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Combine all lines with code block formatting for monospace alignment
-    all_lines = [header, separator] + player_lines
+    # Calculate safe field splitting to avoid Discord's 1024 char limit
+    # Each player line: rank(2) + space + emoji(2) + space + name(8) + space + parse(6) + space + ilvl(6) + space + dps(7) + overheal(5) ≈ 42 chars
+    # Header + separator ≈ 90 chars, code block markers ≈ 20 chars
+    # Safe calculation: (1024 - 110) / 42 ≈ 21 lines per field
+    max_lines_per_field = 18  # Conservative to be extra safe
     
-    # Use ansi code block to potentially support colors on some Discord clients
-    content = "```ansi\n" + "\n".join(all_lines) + "\n```"
-    
-    # Check if content fits in one field (Discord limit is 1024 chars per field)
-    if len(content) <= 1020:  # Leave some margin
-        embed.add_field(name="📊 Rankings", value=content, inline=False)
+    if len(player_lines) <= max_lines_per_field:
+        # All fits in one field
+        all_lines = [header, separator] + player_lines
+        content = "```ansi\n" + "\n".join(all_lines) + "\n```"
+        
+        # Final safety check
+        if len(content) <= 1020:
+            embed.add_field(name="📊 Rankings", value=content, inline=False)
+        else:
+            # Force split even if calculated size was wrong
+            mid_point = len(player_lines) // 2
+            first_half = player_lines[:mid_point]
+            second_half = player_lines[mid_point:]
+            
+            # First field
+            first_content = "```ansi\n" + "\n".join([header, separator] + first_half) + "\n```"
+            embed.add_field(name="📊 Rankings (1)", value=first_content, inline=False)
+            
+            # Second field
+            second_content = "```ansi\n" + "\n".join([header, separator] + second_half) + "\n```"
+            embed.add_field(name="📊 Rankings (2)", value=second_content, inline=False)
     else:
-        # Split into chunks if needed
-        lines_per_chunk = 20
-        chunks = [player_lines[i:i + lines_per_chunk] for i in range(0, len(player_lines), lines_per_chunk)]
+        # Split into multiple safe-sized fields
+        chunks = [player_lines[i:i + max_lines_per_field] for i in range(0, len(player_lines), max_lines_per_field)]
         
         for idx, chunk in enumerate(chunks):
             chunk_lines = [header, separator] + chunk
             chunk_content = "```ansi\n" + "\n".join(chunk_lines) + "\n```"
-            field_name = "📊 Rankings" if idx == 0 else f"📊 Rankings (Page {idx + 1})"
-            embed.add_field(name=field_name, value=chunk_content, inline=False)
+            
+            # Final length validation
+            if len(chunk_content) > 1020:
+                print(f"[WARNING] Field {idx} still too long: {len(chunk_content)} chars - forcing smaller split")
+                # Emergency split in half
+                mid = len(chunk) // 2
+                for sub_idx, sub_chunk in enumerate([chunk[:mid], chunk[mid:]]):
+                    if sub_chunk:  # Only add if not empty
+                        sub_content = "```ansi\n" + "\n".join([header, separator] + sub_chunk) + "\n```"
+                        sub_field_name = f"📊 Rankings ({idx + 1}.{sub_idx + 1})"
+                        embed.add_field(name=sub_field_name, value=sub_content, inline=False)
+            else:
+                field_name = "📊 Rankings" if idx == 0 else f"📊 Rankings ({idx + 1})"
+                embed.add_field(name=field_name, value=chunk_content, inline=False)
     
     # Add footer with legend
     legend_parts = []
