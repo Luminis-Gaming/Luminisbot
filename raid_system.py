@@ -18,87 +18,85 @@ logger = logging.getLogger(__name__)
 # WoW CLASS AND SPEC DATA
 # ============================================================================
 
-# WoW class emojis (custom Discord emojis - format: :emojiname:)
-# You'll need to upload these to your Discord server
+# WoW class emojis (Custom Discord emojis)
 CLASS_EMOJIS = {
-    'Death Knight': ':deathknight:',
-    'Demon Hunter': ':demonhunter:',
-    'Druid': ':druid:',
-    'Evoker': ':evoker:',
-    'Hunter': ':hunter:',
-    'Mage': ':mage:',
-    'Monk': ':monk:',
-    'Paladin': ':paladin:',
-    'Priest': ':priest:',
-    'Rogue': ':rogue:',
-    'Shaman': ':shaman:',
-    'Warlock': ':warlock:',
-    'Warrior': ':warrior:',
+    'Death Knight': '<:deathknight:1422571795097325691>',
+    'Demon Hunter': '<:demonhunter:1422571061525872720>',
+    'Druid': '<:druid:1422571184859512954>',
+    'Evoker': '<:evoker:1422570796701843590>',
+    'Hunter': '<:hunter:1422571250047389798>',
+    'Mage': '<:mage:1422571804882370652>',
+    'Monk': '<:monk:1422571230103601202>',
+    'Paladin': '<:paladin:1422570970140508392>',
+    'Priest': '<:priest:1422572641989955676>',
+    'Rogue': '<:rogue:1422571038226780170>',
+    'Shaman': '<:shaman:1422570941170323518>',
+    'Warlock': '<:warlock:1422571125455589376>',
+    'Warrior': '<:warrior:1422570812971421739>',
 }
 
-# Role emojis
+# Role emojis (Custom Discord emojis)
 ROLE_EMOJIS = {
-    'tank': ':tank:',
-    'healer': ':healer:',
-    'melee': ':melee:',
-    'ranged': ':ranged:',
+    'tank': '<:tank:1422570700882841610>',
+    'healer': '<:healer:1422570731103064176>',
+    'melee': '<:melee:1422570750673420352>',
+    'ranged': '<:ranged:1422570779874431126>',
 }
 
-# Spec emojis (custom Discord emojis)
+# Spec emojis (Custom Discord emojis)
 SPEC_EMOJIS = {
     # Death Knight
-    'Blood': ':blood:',
-    'Frost': ':frostdk:',
-    'Unholy': ':unholy:',
+    'Blood': '<:blood:1422570899122688151>',
+    'Frost': '<:frostdk:1422570671648800868>',
+    'Unholy': '<:unholy:1422570872518213704>',
     # Demon Hunter
-    'Havoc': ':havoc:',
-    'Vengeance': ':vengeance:',
+    'Havoc': '<:havoc:1422570642699714693>',
+    'Vengeance': '<:vengeance:1422570584037920908>',
     # Druid
-    'Balance': ':balance:',
-    'Feral': ':feral:',
-    'Guardian': ':guardian:',
-    'Restoration': ':restodruid:',
+    'Balance': '<:balance:1422562897975971912>',
+    'Feral': '<:feral:1422570561980076174>',
+    'Guardian': '<:guardian:1422570550554923072>',
+    'Restoration': '<:restodruid:1422562869031206934>',
     # Evoker
-    'Devastation': ':devastation:',
-    'Preservation': ':preservation:',
-    'Augmentation': ':augmentation:',
+    'Devastation': '<:devastation:1422570533781770270>',
+    'Preservation': '<:preservation:1422570992131113091>',
+    'Augmentation': '<:augmentation:1422570520989405234>',
     # Hunter
-    'Beast Mastery': ':beastmastery:',
-    'Marksmanship': ':marksmanship:',
-    'Survival': ':survival:',
+    'Beast Mastery': '<:beastmastery:1422570508989497436>',
+    'Marksmanship': '<:marksmanship:1422570479557939283>',
+    'Survival': '<:survival:1422570463258869920>',
     # Mage
-    'Arcane': ':arcane:',
-    'Fire': ':fire:',
-    # Frost Mage (different from DK Frost)
-    'Frost': ':frostmage:',
+    'Arcane': '<:arcane:1422572651892965488>',
+    'Fire': '<:fire:1422571107218624553>',
+    'Frost': '<:frostmage:1422571083197976658>',
     # Monk
-    'Brewmaster': ':brewmaster:',
-    'Mistweaver': ':mistweaver:',
-    'Windwalker': ':windwalker:',
+    'Brewmaster': '<:brewmaster:1422570449212149891>',
+    'Mistweaver': '<:mistweaver:1422570438596231229>',
+    'Windwalker': '<:windwalker:1422570424109367418>',
     # Paladin
-    'Holy': ':holypala:',
-    'Protection': ':protpala:',
-    'Retribution': ':retribution:',
+    'Holy': '<:holypala:1422562920633598073>',
+    'Protection': '<:protpala:1422570391649648762>',
+    'Retribution': '<:retribution:1422570373110825011>',
     # Priest
-    'Discipline': ':discipline:',
-    'Holy': ':holypriest:',
-    'Shadow': ':shadow:',
+    'Discipline': '<:discipline:1422570366043295754>',
+    'Holy': '<:holypriest:1422570354014163036>',
+    'Shadow': '<:shadow:1422570345612709888>',
     # Rogue
-    'Assassination': ':assassination:',
-    'Outlaw': ':outlaw:',
-    'Subtlety': ':subtlety:',
+    'Assassination': '<:assassination:1422570337714962552>',
+    'Outlaw': '<:outlaw:1422570329338941440>',
+    'Subtlety': '<:subtlety:1422570318068977744>',
     # Shaman
-    'Elemental': ':elemental:',
-    'Enhancement': ':enhancement:',
-    'Restoration': ':restoshaman:',
+    'Elemental': '<:elemental:1422570304630161448>',
+    'Enhancement': '<:enhancement:1422570295369269308>',
+    'Restoration': '<:restoshaman:1422570282907992175>',
     # Warlock
-    'Affliction': ':affliction:',
-    'Demonology': ':demonology:',
-    'Destruction': ':destruction:',
+    'Affliction': '<:affliction:1422570226679287869>',
+    'Demonology': '<:demonology:1422570215631224873>',
+    'Destruction': '<:destruction:1422570204671770779>',
     # Warrior
-    'Arms': ':arms:',
-    'Fury': ':fury:',
-    'Protection': ':protwarrior:',
+    'Arms': '<:arms:1422570195007963297>',
+    'Fury': '<:fury:1422570186288140381>',
+    'Protection': '<:protwarrior:1422570154650239098>',
 }
 
 # Status emojis
@@ -206,6 +204,32 @@ CLASS_SPECS = {
 }
 
 # ============================================================================
+# EMOJI HELPER FUNCTIONS
+# ============================================================================
+
+def parse_emoji_for_dropdown(emoji_str: str):
+    """
+    Convert emoji string to PartialEmoji object for use in SelectOptions.
+    
+    Custom Discord emojis in format <:name:id> are converted to PartialEmoji objects.
+    Unicode emojis are returned as-is.
+    
+    Args:
+        emoji_str: Emoji string (either Unicode or <:name:id> format)
+    
+    Returns:
+        discord.PartialEmoji or str: PartialEmoji object for custom emojis, string for Unicode
+    """
+    if emoji_str.startswith('<:') and emoji_str.endswith('>'):
+        # Extract name and id from <:name:id>
+        parts = emoji_str[2:-1].split(':')
+        if len(parts) == 2:
+            emoji_name, emoji_id = parts
+            return discord.PartialEmoji(name=emoji_name, id=int(emoji_id))
+    # Unicode emoji - return as string
+    return emoji_str
+
+# ============================================================================
 # DATABASE HELPER FUNCTIONS
 # ============================================================================
 
@@ -225,10 +249,10 @@ def get_user_characters(discord_id: str):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     
     cursor.execute("""
-        SELECT character_name, realm_slug, realm_name, character_class, faction
+        SELECT character_name, realm_slug, realm_name, character_class, faction, level
         FROM wow_characters
         WHERE discord_id = %s
-        ORDER BY character_name
+        ORDER BY level DESC, character_name ASC
     """, (discord_id,))
     
     characters = cursor.fetchall()
@@ -592,7 +616,7 @@ class RaidButtonsView(View):
     def __init__(self):
         super().__init__(timeout=None)  # Persistent view
     
-    @discord.ui.button(label="Sign Up", style=discord.ButtonStyle.success, custom_id="raid:signup", emoji="✅")
+    @discord.ui.button(label="Sign Up", style=discord.ButtonStyle.secondary, custom_id="raid:signup", emoji="✅")
     async def signup_button(self, interaction: discord.Interaction, button: Button):
         """Handle sign up button click"""
         await handle_signup_click(interaction)
@@ -607,12 +631,12 @@ class RaidButtonsView(View):
         """Handle tentative button click"""
         await handle_status_change(interaction, 'tentative')
     
-    @discord.ui.button(label="Absence", style=discord.ButtonStyle.danger, custom_id="raid:absent", emoji="❌")
+    @discord.ui.button(label="Absence", style=discord.ButtonStyle.secondary, custom_id="raid:absent", emoji="❌")
     async def absent_button(self, interaction: discord.Interaction, button: Button):
         """Handle absence button click"""
         await handle_status_change(interaction, 'absent')
     
-    @discord.ui.button(label="Change Role", style=discord.ButtonStyle.primary, custom_id="raid:changerole", emoji="🔄")
+    @discord.ui.button(label="Change Role", style=discord.ButtonStyle.secondary, custom_id="raid:changerole", emoji="🔄")
     async def changerole_button(self, interaction: discord.Interaction, button: Button):
         """Handle change role button click"""
         await handle_change_role_click(interaction)
@@ -624,18 +648,27 @@ class CharacterSelectDropdown(Select):
     def __init__(self, characters, event_id, show_all=False):
         self.event_id = event_id
         self.all_characters = characters
+        self.show_all = show_all
         
         # Filter to max-level characters first (unless show_all is True)
-        if not show_all and len(characters) > 25:
-            # Find max level
-            max_level = max(char.get('level', 0) for char in characters)
-            filtered_chars = [char for char in characters if char.get('level', 0) == max_level]
+        if not show_all:
+            # Filter to level 80 characters
+            max_level_chars = [char for char in characters if char.get('level') == 80]
+            
+            # If no level 80s, find actual max level
+            if not max_level_chars:
+                levels = [char.get('level', 0) for char in characters if char.get('level') is not None]
+                if levels:
+                    max_level = max(levels)
+                    max_level_chars = [char for char in characters if char.get('level') == max_level]
+                else:
+                    max_level_chars = characters  # Fallback to all if no levels
             
             # If still too many, take first 24 (leave room for "Show All" option)
-            if len(filtered_chars) > 24:
-                display_chars = filtered_chars[:24]
+            if len(max_level_chars) > 24:
+                display_chars = max_level_chars[:24]
             else:
-                display_chars = filtered_chars
+                display_chars = max_level_chars
         else:
             # Show all - take first 25
             display_chars = characters[:25]
@@ -643,16 +676,23 @@ class CharacterSelectDropdown(Select):
         # Create options from characters
         options = []
         for char in display_chars:
-            label = f"{char['character_name']} - {char['realm_name']}"
-            level = char.get('level', '??')
-            description = f"Level {level} {char['character_class']} ({char['faction']})"
+            label = f"{char['character_name']} - {char.get('realm_name', 'Unknown')}"
+            level = char.get('level')
+            if level is None:
+                level_str = '?'
+            else:
+                level_str = str(level)
+            char_class = char.get('character_class', 'Unknown')
+            faction = char.get('faction', 'Unknown')
+            description = f"Level {level_str} {char_class} ({faction})"
+            
             options.append(discord.SelectOption(
-                label=label,
-                description=description,
-                value=f"{char['character_name']}|{char['realm_slug']}|{char['character_class']}"
+                label=label[:100],  # Discord label limit
+                description=description[:100],  # Discord description limit
+                value=f"{char['character_name']}|{char['realm_slug']}|{char_class}"
             ))
         
-        # Add "Show All Characters" option if we filtered
+        # Add "Show All Characters" option if we filtered and have more
         if not show_all and len(characters) > len(display_chars):
             options.append(discord.SelectOption(
                 label="🔍 Show All Characters...",
@@ -733,7 +773,9 @@ class RoleSelectDropdown(Select):
         # Create options from available roles
         options = []
         for role in available_roles:
-            emoji = ROLE_EMOJIS.get(role, '❓')
+            emoji_str = ROLE_EMOJIS.get(role, '❓')
+            emoji = parse_emoji_for_dropdown(emoji_str)
+            
             options.append(discord.SelectOption(
                 label=role.capitalize(),
                 description=f"Sign up as {role}",
@@ -798,7 +840,16 @@ class SpecSelectDropdown(Select):
         self.role = role
         
         # Create options from specs
-        options = [discord.SelectOption(label=spec, value=spec) for spec in specs]
+        options = []
+        for spec in specs:
+            emoji_str = SPEC_EMOJIS.get(spec, '❓')
+            emoji = parse_emoji_for_dropdown(emoji_str)
+            
+            options.append(discord.SelectOption(
+                label=spec,
+                value=spec,
+                emoji=emoji
+            ))
         
         super().__init__(
             placeholder="Choose your specialization...",

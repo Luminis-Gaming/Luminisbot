@@ -317,7 +317,7 @@ async def mycharacters_command(interaction: discord.Interaction):
         )
         
         for char in characters[:25]:  # Discord embed field limit
-            faction_emoji = "🔵" if char['faction'] == 'ALLIANCE' else "🔴"
+            faction_emoji = "<:alliance:1422562308600893542>" if char['faction'] == 'ALLIANCE' else "<:horde:1422562343015022723>"
             class_name = char['character_class'] or 'Unknown'
             
             embed.add_field(
@@ -394,8 +394,8 @@ async def createraid_command(interaction: discord.Interaction, title: str, date:
     )
     
     embed.add_field(
-        name="� Composition",
-        value=":tank: **0** Tanks  |  :melee: **0** Melee  |  :ranged: **0** Ranged  |  :healer: **0** Healers",
+        name="📊 Composition",
+        value="<:tank:1422570700882841610> **0** Tanks  |  <:melee:1422570750673420352> **0** Melee  |  <:ranged:1422570779874431126> **0** Ranged  |  <:healer:1422570731103064176> **0** Healers",
         inline=False
     )
     
