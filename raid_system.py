@@ -716,6 +716,11 @@ class RaidButtonsView(View):
     async def delete_button(self, interaction: discord.Interaction, button: Button):
         """Handle delete event button click (creator only)"""
         await handle_delete_event_click(interaction)
+    
+    @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, custom_id="raid:invitemacro", emoji="📋", row=1)
+    async def invitemacro_button(self, interaction: discord.Interaction, button: Button):
+        """Generate WoW invite macro for all signed up players"""
+        await handle_invite_macro_click(interaction)
 
 
 class CharacterSelectDropdown(Select):
@@ -1264,6 +1269,67 @@ async def handle_delete_event_click(interaction: discord.Interaction):
         view=view,
         ephemeral=True
     )
+
+
+async def handle_invite_macro_click(interaction: discord.Interaction):
+    """Generate WoW invite macro for all signed up players (creator only)"""
+    # Get event
+    event = get_raid_event(interaction.message.id)
+    if not event:
+        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
+        return
+    
+    # Check if user is the creator
+    if str(interaction.user.id) != str(event['created_by']):
+        await interaction.response.send_message(
+            "❌ Only the event creator can generate the invite macro!",
+            ephemeral=True
+        )
+        return
+    
+    event_id = event['id']
+    
+    # Get all signed up players (status = 'signed')
+    signed_signups = get_raid_signups(event_id, 'signed')
+    
+    if not signed_signups:
+        await interaction.response.send_message(
+            "❌ No one has signed up yet!",
+            ephemeral=True
+        )
+        return
+    
+    # Extract character names (max 40 characters for WoW raid)
+    character_names = [signup['character_name'] for signup in signed_signups[:40]]
+    
+    # Create WoW invite macro
+    # WoW macros have a 255 character limit per line, so we need to split into multiple lines
+    invite_commands = []
+    for name in character_names:
+        invite_commands.append(f"/invite {name}")
+    
+    # Split into chunks of ~10 invites per macro (to stay under 255 char limit)
+    macro_chunks = []
+    chunk_size = 10
+    for i in range(0, len(invite_commands), chunk_size):
+        chunk = invite_commands[i:i + chunk_size]
+        macro_text = "\n".join(chunk)
+        macro_chunks.append(macro_text)
+    
+    # Format the response
+    response = f"📋 **WoW Invite Macro for {event['title']}**\n"
+    response += f"Found **{len(character_names)}** signed up players.\n\n"
+    
+    if len(macro_chunks) == 1:
+        response += "Copy and paste this into WoW chat:\n```\n"
+        response += macro_chunks[0]
+        response += "\n```"
+    else:
+        response += f"Due to character limits, split into {len(macro_chunks)} parts:\n\n"
+        for idx, chunk in enumerate(macro_chunks, 1):
+            response += f"**Part {idx}:**\n```\n{chunk}\n```\n"
+    
+    await interaction.response.send_message(response, ephemeral=True)
 
 
 async def show_role_selection(interaction: discord.Interaction, character_name: str, 
