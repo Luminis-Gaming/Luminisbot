@@ -300,19 +300,26 @@ def parse_time(time_str: str) -> time:
     
     return time(hour, minute)
 
-def text_to_emoji_letters(text: str) -> str:
+def text_to_emoji_letters(text: str, max_chars: int = 20) -> str:
     """
     Convert text to Discord regional indicator emojis (letter emojis).
+    Limits to max_chars to prevent titles from being too long.
     
     Args:
         text: Text to convert
+        max_chars: Maximum number of characters to convert (default: 20)
     
     Returns:
         str: Text with letters converted to regional indicator emojis
     
     Examples:
         "Raid Night" -> "🇷 🇦 🇮 🇩   🇳 🇮 🇬 🇭 🇹"
+        "Very Long Title That Exceeds" -> "🇻 🇪 🇷 🇾   🇱 🇴 🇳 🇬   🇹 🇮 🇹 🇱 🇪 ..."
     """
+    # Truncate text if it's too long (keeping whole words when possible)
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(' ', 1)[0] + '...'
+    
     result = []
     for char in text.upper():
         if 'A' <= char <= 'Z':
@@ -326,8 +333,8 @@ def text_to_emoji_letters(text: str) -> str:
             # Use digit emojis for numbers
             digit_emojis = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣']
             result.append(digit_emojis[int(char)])
-        elif char in '!?':
-            # Keep punctuation as-is
+        elif char in '!?.':
+            # Keep punctuation as-is (added '.' for ellipsis)
             result.append(char)
         else:
             # Skip other characters
@@ -649,13 +656,18 @@ def generate_raid_embed(event_id: int):
         timestamp=datetime.now()
     )
     
-    # Format date field with countdown on same line
-    date_str = event_datetime.strftime("%A, %d %B %Y %H:%M")
+    # Format date field with Discord timestamp (shows in user's local timezone with hover tooltip!)
+    # Discord timestamp format: <t:UNIX_TIMESTAMP:FORMAT>
+    # F = Full date/time, R = Relative time ("in 6 days")
+    unix_timestamp = int(event_datetime.timestamp())
+    
     if is_past:
-        # Red text for past events using ANSI color codes in code block
-        date_display = f"```ansi\n\u001b[0;31m{date_str} - {countdown_text}\u001b[0m\n```"
+        # For past events, show red text with both formats
+        date_display = f"```ansi\n\u001b[0;31m{event_datetime.strftime('%A, %d %B %Y %H:%M')} - {countdown_text}\u001b[0m\n```"
     else:
-        date_display = f"{date_str} - ⏰ **{countdown_text}**"
+        # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
+        # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
+        date_display = f"<t:{unix_timestamp}:F> - ⏰ <t:{unix_timestamp}:R>"
     
     embed.add_field(
         name="\u200b",  # Zero-width space for no visible title
@@ -679,6 +691,9 @@ def generate_raid_embed(event_id: int):
         value=role_summary,
         inline=False
     )
+    
+    # Add spacing between composition and roster
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
     
     # Group signups by class
     class_groups = {}
@@ -708,8 +723,8 @@ def generate_raid_embed(event_id: int):
             char_name = player['character_name']
             player_lines.append(f"{spec_emoji} {char_name}")
         
-        # Create field
-        field_value = "\n".join(player_lines) if player_lines else "_None_"
+        # Create field with extra newline at end for spacing between classes
+        field_value = "\n".join(player_lines) + "\n\u200b" if player_lines else "_None_"
         class_fields.append({
             'name': f"{class_emoji} **{class_display}** ({len(players)})",
             'value': field_value,
@@ -723,6 +738,9 @@ def generate_raid_embed(event_id: int):
     else:
         embed.add_field(name="📋 Roster", value="_No signups yet_", inline=False)
     
+    # Add spacing after roster section (before late/tentative/absent)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
+    
     # Late section
     late_signups = get_raid_signups(event_id, 'late')
     if late_signups:
@@ -731,9 +749,23 @@ def generate_raid_embed(event_id: int):
             spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
             late_names.append(f"{spec_emoji} {signup['character_name']}")
         
+        late_text = "\n".join(late_names)
+        
+        # Safety check: Discord field value limit is 1024 characters
+        if len(late_text) > 1024:
+            # Show first N players that fit, then add count
+            truncated_names = []
+            char_count = 0
+            for name in late_names:
+                if char_count + len(name) + 1 > 1000:  # +1 for newline
+                    break
+                truncated_names.append(name)
+                char_count += len(name) + 1
+            late_text = "\n".join(truncated_names) + f"\n_...and {len(late_signups) - len(truncated_names)} more_"
+        
         embed.add_field(
             name=f"🕐 Late ({len(late_signups)})",
-            value="\n".join(late_names),
+            value=late_text,
             inline=False
         )
     
@@ -745,19 +777,40 @@ def generate_raid_embed(event_id: int):
             spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
             tentative_names.append(f"{spec_emoji} {signup['character_name']}")
         
+        tentative_text = "\n".join(tentative_names)
+        
+        # Safety check: Discord field value limit is 1024 characters
+        if len(tentative_text) > 1024:
+            # Show first N players that fit, then add count
+            truncated_names = []
+            char_count = 0
+            for name in tentative_names:
+                if char_count + len(name) + 1 > 1000:  # +1 for newline
+                    break
+                truncated_names.append(name)
+                char_count += len(name) + 1
+            tentative_text = "\n".join(truncated_names) + f"\n_...and {len(tentative_signups) - len(truncated_names)} more_"
+        
         embed.add_field(
             name=f"⚖️ Tentative ({len(tentative_signups)})",
-            value="\n".join(tentative_names),
+            value=tentative_text,
             inline=False
         )
     
-    # Absence section
+    # Absence section (comma-separated to save space)
     absent_signups = get_raid_signups(event_id, 'absent')
     if absent_signups:
         absence_names = [s['character_name'] for s in absent_signups]
+        absence_text = ", ".join(absence_names) if absence_names else "_None_"
+        
+        # Safety check: Discord field value limit is 1024 characters
+        if len(absence_text) > 1024:
+            # Truncate and add count
+            absence_text = absence_text[:1000] + f"... +{len(absent_signups) - absence_text[:1000].count(',') - 1} more"
+        
         embed.add_field(
             name=f"❌ Absence ({len(absent_signups)})",
-            value=", ".join(absence_names) if absence_names else "_None_",
+            value=absence_text,
             inline=False
         )
     
