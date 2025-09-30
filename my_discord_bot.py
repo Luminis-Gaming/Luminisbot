@@ -20,6 +20,9 @@ from discord_ui import LogButtonsView, send_message_with_auto_delete
 # --- Import for your original command ---
 from warcraft_recorder_automator import add_email_to_roster
 
+# --- Import OAuth server ---
+from oauth_server import start_oauth_server
+
 # --- Load All Secrets from Environment ---
 load_dotenv()
 BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -28,6 +31,9 @@ RECORDER_PASSWORD = os.getenv('RECORDER_PASSWORD')
 WCL_CLIENT_ID = os.getenv('WCL_CLIENT_ID')
 WCL_CLIENT_SECRET = os.getenv('WCL_CLIENT_SECRET')
 DATABASE_URL = os.getenv('DATABASE_URL')
+BLIZZARD_CLIENT_ID = os.getenv('BLIZZARD_CLIENT_ID')
+BLIZZARD_CLIENT_SECRET = os.getenv('BLIZZARD_CLIENT_SECRET')
+BLIZZARD_REDIRECT_URI = os.getenv('BLIZZARD_REDIRECT_URI')
 
 # --- Configuration Constants ---
 WCL_GUILD_ID = 771376 # Example Guild ID
@@ -142,6 +148,15 @@ async def on_ready():
     await tree.sync()
     if not check_for_new_logs.is_running():
         check_for_new_logs.start()
+    
+    # Start OAuth web server for Battle.net integration
+    if not hasattr(client, 'oauth_server_started'):
+        try:
+            client.oauth_runner = await start_oauth_server(client, port=8000)
+            client.oauth_server_started = True
+            print("[OAUTH] OAuth web server started on port 8000")
+        except Exception as e:
+            print(f"[ERROR] Failed to start OAuth server: {e}")
         
     # Debug info
     print(f'--- BOT READY --- Logged in as {client.user}')
@@ -204,6 +219,111 @@ async def warcraft_recorder_command(interaction: discord.Interaction, email: str
         # Use edit_original_response if the initial message was already sent
         if interaction.response.is_done():
             await interaction.edit_original_response(content="A critical error occurred after the initial response.")
+
+@tree.command(name="connectwow", description="Link your World of Warcraft characters to your Discord account")
+async def connectwow_command(interaction: discord.Interaction):
+    """Generate OAuth URL for user to connect their Battle.net account."""
+    await interaction.response.defer(ephemeral=True)
+    
+    discord_id = str(interaction.user.id)
+    
+    # Generate authorization URL
+    auth_url = f"{BLIZZARD_REDIRECT_URI.replace('/callback', '')}/authorize?discord_id={discord_id}"
+    
+    embed = discord.Embed(
+        title="🎮 Connect Your WoW Characters",
+        description=(
+            "Click the button below to authorize LuminisBot to access your World of Warcraft character information.\n\n"
+            "**What we'll access:**\n"
+            "• Character names and realms\n"
+            "• Character classes and levels\n"
+            "• Basic character stats\n\n"
+            "**Privacy:** Your data is only used for guild features and is never shared."
+        ),
+        color=0x00ff00
+    )
+    
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Authorize Battle.net",
+        url=auth_url,
+        style=discord.ButtonStyle.link,
+        emoji="🔗"
+    ))
+    
+    await interaction.edit_original_response(embed=embed, view=view)
+    print(f"[CMD] Generated WoW connection URL for Discord user {discord_id}")
+
+@tree.command(name="mycharacters", description="View your linked World of Warcraft characters")
+async def mycharacters_command(interaction: discord.Interaction):
+    """Display user's linked WoW characters."""
+    await interaction.response.defer(ephemeral=True)
+    
+    discord_id = str(interaction.user.id)
+    
+    conn = get_db_connection()
+    if not conn:
+        await interaction.edit_original_response(content="❌ **Database Error:** Could not connect to database.")
+        return
+    
+    try:
+        import psycopg2.extras
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        # Check if user has connected their account
+        cur.execute("SELECT * FROM wow_connections WHERE discord_id = %s", (discord_id,))
+        connection = cur.fetchone()
+        
+        if not connection:
+            await interaction.edit_original_response(
+                content="❌ You haven't connected your Battle.net account yet. Use `/connectwow` to get started!"
+            )
+            return
+        
+        # Fetch characters
+        cur.execute("""
+            SELECT character_name, realm_name, character_class, level, faction
+            FROM wow_characters 
+            WHERE discord_id = %s
+            ORDER BY level DESC, character_name ASC
+        """, (discord_id,))
+        
+        characters = cur.fetchall()
+        
+        if not characters:
+            await interaction.edit_original_response(
+                content="⚠️ No characters found. Try reconnecting with `/connectwow`."
+            )
+            return
+        
+        # Build character list
+        embed = discord.Embed(
+            title=f"🎮 {interaction.user.display_name}'s WoW Characters",
+            description=f"Found {len(characters)} character(s)",
+            color=0x0099ff
+        )
+        
+        for char in characters[:25]:  # Discord embed field limit
+            faction_emoji = "🔵" if char['faction'] == 'ALLIANCE' else "🔴"
+            class_name = char['character_class'] or 'Unknown'
+            
+            embed.add_field(
+                name=f"{faction_emoji} {char['character_name']} - {char['realm_name']}",
+                value=f"Level {char['level']} {class_name}",
+                inline=True
+            )
+        
+        last_updated = connection['last_updated'].strftime('%Y-%m-%d %H:%M UTC')
+        embed.set_footer(text=f"Last updated: {last_updated} • Use /connectwow to refresh")
+        
+        await interaction.edit_original_response(embed=embed)
+        print(f"[CMD] Displayed {len(characters)} characters for Discord user {discord_id}")
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch characters: {e}")
+        await interaction.edit_original_response(content=f"❌ **Error:** {e}")
+    finally:
+        conn.close()
 
 # --- Main Execution Block ---
 if __name__ == "__main__":

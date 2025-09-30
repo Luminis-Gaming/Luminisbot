@@ -13,8 +13,19 @@ services:
       WCL_CLIENT_ID: ${WCL_CLIENT_ID}
       WCL_CLIENT_SECRET: ${WCL_CLIENT_SECRET}
       
+      # Battle.net OAuth
+      BLIZZARD_CLIENT_ID: ${BLIZZARD_CLIENT_ID}
+      BLIZZARD_CLIENT_SECRET: ${BLIZZARD_CLIENT_SECRET}
+      BLIZZARD_REDIRECT_URI: ${BLIZZARD_REDIRECT_URI}
+      OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
+      
       # Database Configuration
       DATABASE_URL: postgresql://luminisbot:${POSTGRES_PASSWORD}@postgres:5432/luminisbot
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: luminisbot
+      DB_USER: luminisbot
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
       
       # Warcraft Recorder
       RECORDER_EMAIL: ${RECORDER_EMAIL}
@@ -24,6 +35,8 @@ services:
         condition: service_healthy
     networks:
       - luminisbot-network
+    ports:
+      - "8095:8000"  # OAuth web server port
     volumes:
       - ./logs:/app/logs  # Optional: for log files
     labels:
