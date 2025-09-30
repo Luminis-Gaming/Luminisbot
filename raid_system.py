@@ -229,6 +229,58 @@ def parse_emoji_for_dropdown(emoji_str: str):
     # Unicode emoji - return as string
     return emoji_str
 
+def abbreviate_class_name(class_name: str) -> str:
+    """
+    Abbreviate long class names for compact display.
+    
+    Args:
+        class_name: Full WoW class name
+    
+    Returns:
+        str: Abbreviated class name
+    """
+    abbreviations = {
+        'Death Knight': 'DK',
+        'Demon Hunter': 'DH',
+    }
+    return abbreviations.get(class_name, class_name)
+
+def format_countdown(event_datetime: datetime) -> tuple[str, bool]:
+    """
+    Format a countdown string for the event.
+    
+    Args:
+        event_datetime: The datetime of the event
+    
+    Returns:
+        tuple: (countdown_string, is_past) - countdown text and whether event has passed
+    """
+    now = datetime.now()
+    time_diff = event_datetime - now
+    
+    if time_diff.total_seconds() <= 0:
+        # Event has passed
+        return ("Event has started!", True)
+    
+    # Calculate time components
+    days = time_diff.days
+    hours, remainder = divmod(time_diff.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    
+    # Format countdown string
+    if days > 1:
+        return (f"in {days} days", False)
+    elif days == 1:
+        return (f"in 1 day, {hours} hours", False)
+    elif hours > 1:
+        return (f"in {hours} hours", False)
+    elif hours == 1:
+        return (f"in 1 hour, {minutes} minutes", False)
+    elif minutes > 1:
+        return (f"in {minutes} minutes", False)
+    else:
+        return (f"Starting soon!", False)
+
 # ============================================================================
 # DATABASE HELPER FUNCTIONS
 # ============================================================================
@@ -490,18 +542,31 @@ def generate_raid_embed(event_id: int):
     if not event:
         return None
     
+    # Format date and time with countdown
+    event_datetime = datetime.combine(event['event_date'], event['event_time'])
+    countdown_text, is_past = format_countdown(event_datetime)
+    
+    # Set embed color based on whether event has passed
+    embed_color = discord.Color.red() if is_past else discord.Color.blue()
+    
     # Create embed
     embed = discord.Embed(
         title=f"📅 {event['title']}",
-        color=discord.Color.blue(),
+        color=embed_color,
         timestamp=datetime.now()
     )
     
-    # Format date and time
-    event_datetime = datetime.combine(event['event_date'], event['event_time'])
+    # Format date field with countdown
+    date_str = event_datetime.strftime("%A, %d %B %Y %H:%M")
+    if is_past:
+        # Red text for past events using ANSI color codes in code block
+        date_display = f"```ansi\n\u001b[0;31m{date_str}\u001b[0m\n```\n🔴 **{countdown_text}**"
+    else:
+        date_display = f"{date_str}\n⏰ **{countdown_text}**"
+    
     embed.add_field(
         name="🗓️ Date & Time",
-        value=event_datetime.strftime("%A, %d %B %Y %H:%M"),
+        value=date_display,
         inline=False
     )
     
@@ -540,6 +605,7 @@ def generate_raid_embed(event_id: int):
         
         players = class_groups[class_name]
         class_emoji = CLASS_EMOJIS.get(class_name, '❓')
+        class_display = abbreviate_class_name(class_name)
         
         # Build player list with spec emojis
         player_lines = []
@@ -552,7 +618,7 @@ def generate_raid_embed(event_id: int):
         # Create field
         field_value = "\n".join(player_lines) if player_lines else "_None_"
         class_fields.append({
-            'name': f"{class_emoji} **{class_name}** ({len(players)})",
+            'name': f"{class_emoji} **{class_display}** ({len(players)})",
             'value': field_value,
             'inline': True
         })
@@ -616,30 +682,40 @@ class RaidButtonsView(View):
     def __init__(self):
         super().__init__(timeout=None)  # Persistent view
     
-    @discord.ui.button(label="Sign Up", style=discord.ButtonStyle.secondary, custom_id="raid:signup", emoji="✅")
+    @discord.ui.button(label="Sign Up", style=discord.ButtonStyle.secondary, custom_id="raid:signup", emoji="✅", row=0)
     async def signup_button(self, interaction: discord.Interaction, button: Button):
         """Handle sign up button click"""
         await handle_signup_click(interaction)
     
-    @discord.ui.button(label="Late", style=discord.ButtonStyle.secondary, custom_id="raid:late", emoji="🕐")
+    @discord.ui.button(label="Late", style=discord.ButtonStyle.secondary, custom_id="raid:late", emoji="🕐", row=0)
     async def late_button(self, interaction: discord.Interaction, button: Button):
         """Handle late button click"""
         await handle_status_change(interaction, 'late')
     
-    @discord.ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="raid:tentative", emoji="⚖️")
+    @discord.ui.button(label="Tentative", style=discord.ButtonStyle.secondary, custom_id="raid:tentative", emoji="⚖️", row=0)
     async def tentative_button(self, interaction: discord.Interaction, button: Button):
         """Handle tentative button click"""
         await handle_status_change(interaction, 'tentative')
     
-    @discord.ui.button(label="Absence", style=discord.ButtonStyle.secondary, custom_id="raid:absent", emoji="❌")
+    @discord.ui.button(label="Absence", style=discord.ButtonStyle.secondary, custom_id="raid:absent", emoji="❌", row=0)
     async def absent_button(self, interaction: discord.Interaction, button: Button):
         """Handle absence button click"""
         await handle_status_change(interaction, 'absent')
     
-    @discord.ui.button(label="Change Role", style=discord.ButtonStyle.secondary, custom_id="raid:changerole", emoji="🔄")
+    @discord.ui.button(label="Change Role", style=discord.ButtonStyle.secondary, custom_id="raid:changerole", emoji="🔄", row=0)
     async def changerole_button(self, interaction: discord.Interaction, button: Button):
         """Handle change role button click"""
         await handle_change_role_click(interaction)
+    
+    @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, custom_id="raid:edit", emoji="✏️", row=1)
+    async def edit_button(self, interaction: discord.Interaction, button: Button):
+        """Handle edit event button click (creator only)"""
+        await handle_edit_event_click(interaction)
+    
+    @discord.ui.button(label="Delete Event", style=discord.ButtonStyle.danger, custom_id="raid:delete", emoji="🗑️", row=1)
+    async def delete_button(self, interaction: discord.Interaction, button: Button):
+        """Handle delete event button click (creator only)"""
+        await handle_delete_event_click(interaction)
 
 
 class CharacterSelectDropdown(Select):
@@ -730,7 +806,7 @@ class CharacterSelectDropdown(Select):
             role = preference['preferred_role']
             spec = preference['preferred_spec']
             
-            # Add signup to database
+            # Add signup to database (this also updates status to 'signed')
             add_raid_signup(
                 self.event_id,
                 discord_id,
@@ -741,8 +817,22 @@ class CharacterSelectDropdown(Select):
                 spec
             )
             
-            # Update the embed
-            await update_raid_message(interaction.message)
+            # Fetch and update the raid event message
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SELECT message_id, channel_id FROM raid_events WHERE id = %s", (self.event_id,))
+            event_data = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            
+            if event_data:
+                channel = interaction.guild.get_channel(event_data['channel_id'])
+                if channel:
+                    try:
+                        message = await channel.fetch_message(event_data['message_id'])
+                        await update_raid_message(message)
+                    except Exception as e:
+                        logger.error(f"Failed to update raid message: {e}")
             
             await interaction.response.send_message(
                 f"✅ Signed up as **{char_name}** ({spec} {role.capitalize()})!",
@@ -879,6 +969,143 @@ class SpecSelectView(View):
         self.add_item(SpecSelectDropdown(character_name, realm_slug, character_class, event_id, role, specs))
 
 
+class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
+    """Modal for editing raid event details"""
+    
+    def __init__(self, event):
+        super().__init__()
+        self.event = event
+        
+        # Add input fields with current values
+        event_datetime = datetime.combine(event['event_date'], event['event_time'])
+        
+        self.title_input = discord.ui.TextInput(
+            label="Event Title",
+            default=event['title'],
+            max_length=100,
+            required=True
+        )
+        self.add_item(self.title_input)
+        
+        self.date_input = discord.ui.TextInput(
+            label="Date (YYYY-MM-DD or DD/MM/YYYY)",
+            default=event['event_date'].strftime("%Y-%m-%d"),
+            placeholder="2025-12-25 or 25/12/2025",
+            max_length=20,
+            required=True
+        )
+        self.add_item(self.date_input)
+        
+        self.time_input = discord.ui.TextInput(
+            label="Time (HH:MM in 24h format)",
+            default=event['event_time'].strftime("%H:%M"),
+            placeholder="20:00",
+            max_length=5,
+            required=True
+        )
+        self.add_item(self.time_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle modal submission"""
+        from my_discord_bot import parse_date, parse_time
+        
+        try:
+            # Parse new date and time
+            new_date = parse_date(self.date_input.value)
+            new_time = parse_time(self.time_input.value)
+            new_title = self.title_input.value
+            
+            # Update event in database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                UPDATE raid_events
+                SET title = %s, event_date = %s, event_time = %s
+                WHERE id = %s
+            """, (new_title, new_date, new_time, self.event['id']))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Update the embed
+            message = interaction.message if interaction.message else await interaction.channel.fetch_message(self.event['message_id'])
+            embed = generate_raid_embed(self.event['id'])
+            if embed:
+                await message.edit(embed=embed)
+            
+            await interaction.response.send_message(
+                f"✅ Event updated successfully!\n**{new_title}** - {new_date.strftime('%d/%m/%Y')} at {new_time.strftime('%H:%M')}",
+                ephemeral=True
+            )
+        except ValueError as e:
+            await interaction.response.send_message(
+                f"❌ Invalid date or time format: {e}",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error updating event: {e}",
+                ephemeral=True
+            )
+
+
+class ConfirmDeleteView(View):
+    """View with confirm/cancel buttons for event deletion"""
+    
+    def __init__(self, event_id, message_id):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        self.message_id = message_id
+    
+    @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: Button):
+        """Confirm deletion"""
+        try:
+            # Delete from database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Delete signups first (foreign key constraint)
+            cursor.execute("DELETE FROM raid_signups WHERE event_id = %s", (self.event_id,))
+            # Delete event
+            cursor.execute("DELETE FROM raid_events WHERE id = %s", (self.event_id,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Delete the message
+            try:
+                message = await interaction.channel.fetch_message(self.message_id)
+                await message.delete()
+            except:
+                pass  # Message might already be deleted
+            
+            await interaction.response.send_message(
+                "✅ Event deleted successfully!",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error deleting event: {e}",
+                ephemeral=True
+            )
+        
+        # Disable buttons
+        self.stop()
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: Button):
+        """Cancel deletion"""
+        await interaction.response.send_message(
+            "Deletion cancelled.",
+            ephemeral=True
+        )
+        self.stop()
+
+
 # ============================================================================
 # BUTTON HANDLER FUNCTIONS
 # ============================================================================
@@ -993,6 +1220,52 @@ async def handle_change_role_click(interaction: discord.Interaction):
     )
 
 
+async def handle_edit_event_click(interaction: discord.Interaction):
+    """Handle edit event button click (creator only)"""
+    # Get event
+    event = get_raid_event(interaction.message.id)
+    if not event:
+        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
+        return
+    
+    # Check if user is the creator
+    if str(interaction.user.id) != str(event['created_by']):
+        await interaction.response.send_message(
+            "❌ Only the event creator can edit this event!",
+            ephemeral=True
+        )
+        return
+    
+    # Show edit modal
+    modal = EditEventModal(event)
+    await interaction.response.send_modal(modal)
+
+
+async def handle_delete_event_click(interaction: discord.Interaction):
+    """Handle delete event button click (creator only)"""
+    # Get event
+    event = get_raid_event(interaction.message.id)
+    if not event:
+        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
+        return
+    
+    # Check if user is the creator
+    if str(interaction.user.id) != str(event['created_by']):
+        await interaction.response.send_message(
+            "❌ Only the event creator can delete this event!",
+            ephemeral=True
+        )
+        return
+    
+    # Confirm deletion
+    view = ConfirmDeleteView(event['id'], interaction.message.id)
+    await interaction.response.send_message(
+        f"⚠️ Are you sure you want to delete the event **{event['title']}**?\nThis will remove all signups and cannot be undone!",
+        view=view,
+        ephemeral=True
+    )
+
+
 async def show_role_selection(interaction: discord.Interaction, character_name: str, 
                               realm_slug: str, character_class: str, event_id: int, is_change=False):
     """Show role selection dropdown"""
@@ -1072,3 +1345,43 @@ async def update_raid_message(message: discord.Message):
     embed = generate_raid_embed(event['id'])
     if embed:
         await message.edit(embed=embed)
+
+
+# ============================================================================
+# BACKGROUND TASKS
+# ============================================================================
+
+def cleanup_old_events():
+    """Delete raid events that are more than 24 hours old"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Calculate cutoff time (24 hours after event datetime)
+        cursor.execute("""
+            DELETE FROM raid_signups
+            WHERE event_id IN (
+                SELECT id FROM raid_events
+                WHERE (event_date + event_time) < (NOW() - INTERVAL '24 hours')
+            )
+        """)
+        
+        cursor.execute("""
+            DELETE FROM raid_events
+            WHERE (event_date + event_time) < (NOW() - INTERVAL '24 hours')
+            RETURNING id, title
+        """)
+        
+        deleted = cursor.fetchall()
+        conn.commit()
+        
+        if deleted:
+            logger.info(f"Cleaned up {len(deleted)} old raid events")
+            for event_id, title in deleted:
+                logger.info(f"  - Deleted: {title} (ID: {event_id})")
+        
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up old events: {e}")

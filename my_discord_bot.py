@@ -141,6 +141,16 @@ async def check_for_new_logs():
         if conn:
             conn.close()
 
+
+@tasks.loop(hours=24)
+async def cleanup_old_raid_events():
+    """Clean up raid events that are more than 24 hours old."""
+    print("[TASK] Running raid event cleanup...")
+    from raid_system import cleanup_old_events
+    cleanup_old_events()
+    print("[TASK] Raid event cleanup completed.")
+
+
 # --- Discord Event Handlers ---
 @client.event
 async def on_ready():
@@ -157,10 +167,12 @@ async def on_ready():
         client.add_view(RaidButtonsView())  # Add raid system buttons
         client.added_view = True
     
-    # Sync command tree and start background task
+    # Sync command tree and start background tasks
     await tree.sync()
     if not check_for_new_logs.is_running():
         check_for_new_logs.start()
+    if not cleanup_old_raid_events.is_running():
+        cleanup_old_raid_events.start()
     
     # Start OAuth web server for Battle.net integration
     if not hasattr(client, 'oauth_server_started'):
