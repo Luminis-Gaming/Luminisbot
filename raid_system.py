@@ -18,28 +18,87 @@ logger = logging.getLogger(__name__)
 # WoW CLASS AND SPEC DATA
 # ============================================================================
 
-# WoW class emojis (using Unicode - can be replaced with custom Discord emojis later)
+# WoW class emojis (custom Discord emojis - format: :emojiname:)
+# You'll need to upload these to your Discord server
 CLASS_EMOJIS = {
-    'Death Knight': '🛡️',
-    'Demon Hunter': '🐉',
-    'Druid': '🌿',
-    'Evoker': '🐲',
-    'Hunter': '🏹',
-    'Mage': '🔮',
-    'Monk': '🥋',
-    'Paladin': '⚔️',
-    'Priest': '✨',
-    'Rogue': '🗡️',
-    'Shaman': '⚡',
-    'Warlock': '💀',
-    'Warrior': '⚔️',
+    'Death Knight': ':deathknight:',
+    'Demon Hunter': ':demonhunter:',
+    'Druid': ':druid:',
+    'Evoker': ':evoker:',
+    'Hunter': ':hunter:',
+    'Mage': ':mage:',
+    'Monk': ':monk:',
+    'Paladin': ':paladin:',
+    'Priest': ':priest:',
+    'Rogue': ':rogue:',
+    'Shaman': ':shaman:',
+    'Warlock': ':warlock:',
+    'Warrior': ':warrior:',
 }
 
 # Role emojis
 ROLE_EMOJIS = {
-    'tank': '🛡️',
-    'healer': '💚',
-    'dps': '⚔️',
+    'tank': ':tank:',
+    'healer': ':healer:',
+    'melee': ':melee:',
+    'ranged': ':ranged:',
+}
+
+# Spec emojis (custom Discord emojis)
+SPEC_EMOJIS = {
+    # Death Knight
+    'Blood': ':blood:',
+    'Frost': ':frostdk:',
+    'Unholy': ':unholy:',
+    # Demon Hunter
+    'Havoc': ':havoc:',
+    'Vengeance': ':vengeance:',
+    # Druid
+    'Balance': ':balance:',
+    'Feral': ':feral:',
+    'Guardian': ':guardian:',
+    'Restoration': ':restodruid:',
+    # Evoker
+    'Devastation': ':devastation:',
+    'Preservation': ':preservation:',
+    'Augmentation': ':augmentation:',
+    # Hunter
+    'Beast Mastery': ':beastmastery:',
+    'Marksmanship': ':marksmanship:',
+    'Survival': ':survival:',
+    # Mage
+    'Arcane': ':arcane:',
+    'Fire': ':fire:',
+    # Frost Mage (different from DK Frost)
+    'Frost': ':frostmage:',
+    # Monk
+    'Brewmaster': ':brewmaster:',
+    'Mistweaver': ':mistweaver:',
+    'Windwalker': ':windwalker:',
+    # Paladin
+    'Holy': ':holypala:',
+    'Protection': ':protpala:',
+    'Retribution': ':retribution:',
+    # Priest
+    'Discipline': ':discipline:',
+    'Holy': ':holypriest:',
+    'Shadow': ':shadow:',
+    # Rogue
+    'Assassination': ':assassination:',
+    'Outlaw': ':outlaw:',
+    'Subtlety': ':subtlety:',
+    # Shaman
+    'Elemental': ':elemental:',
+    'Enhancement': ':enhancement:',
+    'Restoration': ':restoshaman:',
+    # Warlock
+    'Affliction': ':affliction:',
+    'Demonology': ':demonology:',
+    'Destruction': ':destruction:',
+    # Warrior
+    'Arms': ':arms:',
+    'Fury': ':fury:',
+    'Protection': ':protwarrior:',
 }
 
 # Status emojis
@@ -48,6 +107,47 @@ STATUS_EMOJIS = {
     'late': '🕐',
     'tentative': '⚖️',
     'absent': '❌',
+}
+
+# Class order for display (alphabetical)
+CLASS_ORDER = [
+    'Death Knight',
+    'Demon Hunter',
+    'Druid',
+    'Evoker',
+    'Hunter',
+    'Mage',
+    'Monk',
+    'Paladin',
+    'Priest',
+    'Rogue',
+    'Shaman',
+    'Warlock',
+    'Warrior',
+]
+
+# Melee vs Ranged DPS specs
+MELEE_SPECS = {
+    'Death Knight': ['Frost', 'Unholy'],
+    'Demon Hunter': ['Havoc'],
+    'Druid': ['Feral'],
+    'Evoker': ['Augmentation'],
+    'Hunter': ['Survival'],
+    'Monk': ['Windwalker'],
+    'Paladin': ['Retribution'],
+    'Rogue': ['Assassination', 'Outlaw', 'Subtlety'],
+    'Shaman': ['Enhancement'],
+    'Warrior': ['Arms', 'Fury'],
+}
+
+RANGED_SPECS = {
+    'Druid': ['Balance'],
+    'Evoker': ['Devastation'],
+    'Hunter': ['Beast Mastery', 'Marksmanship'],
+    'Mage': ['Arcane', 'Fire', 'Frost'],
+    'Priest': ['Shadow'],
+    'Shaman': ['Elemental'],
+    'Warlock': ['Affliction', 'Demonology', 'Destruction'],
 }
 
 # WoW class to available specs mapping
@@ -103,13 +203,6 @@ CLASS_SPECS = {
         'tank': ['Protection'],
         'dps': ['Arms', 'Fury']
     },
-}
-
-# Default role limits for raids
-ROLE_LIMITS = {
-    'tank': 3,
-    'healer': 5,
-    'dps': 20,  # Flexible limit
 }
 
 # ============================================================================
@@ -195,6 +288,26 @@ def get_specs_for_class_and_role(character_class: str, role: str):
         return []
     
     return CLASS_SPECS[character_class][role]
+
+def is_melee_dps(character_class: str, spec: str):
+    """Check if a spec is melee DPS"""
+    if character_class in MELEE_SPECS:
+        return spec in MELEE_SPECS[character_class]
+    return False
+
+def is_ranged_dps(character_class: str, spec: str):
+    """Check if a spec is ranged DPS"""
+    if character_class in RANGED_SPECS:
+        return spec in RANGED_SPECS[character_class]
+    return False
+
+def get_dps_type(character_class: str, spec: str):
+    """Get DPS type: 'melee' or 'ranged'"""
+    if is_melee_dps(character_class, spec):
+        return 'melee'
+    elif is_ranged_dps(character_class, spec):
+        return 'ranged'
+    return 'dps'  # Fallback
 
 # ============================================================================
 # RAID EVENT DATABASE FUNCTIONS
@@ -368,76 +481,95 @@ def generate_raid_embed(event_id: int):
         inline=False
     )
     
-    # Get signups by status
+    # Get signed up players only (for main roster)
     signed_signups = get_raid_signups(event_id, 'signed')
-    late_signups = get_raid_signups(event_id, 'late')
-    tentative_signups = get_raid_signups(event_id, 'tentative')
-    absent_signups = get_raid_signups(event_id, 'absent')
     
-    # Group signed signups by role
-    tanks = [s for s in signed_signups if s['role'] == 'tank']
-    healers = [s for s in signed_signups if s['role'] == 'healer']
-    dps = [s for s in signed_signups if s['role'] == 'dps']
+    # Count role types
+    tank_count = sum(1 for s in signed_signups if s['role'] == 'tank')
+    healer_count = sum(1 for s in signed_signups if s['role'] == 'healer')
+    melee_count = sum(1 for s in signed_signups if s['role'] == 'dps' and is_melee_dps(s['character_class'], s.get('spec', '')))
+    ranged_count = sum(1 for s in signed_signups if s['role'] == 'dps' and is_ranged_dps(s['character_class'], s.get('spec', '')))
     
-    # Build role sections
-    def format_signup_list(signups, show_role=True):
-        """Format a list of signups with emojis"""
-        if not signups:
-            return "_No signups yet_"
+    # Role summary at the top
+    role_summary = f"{ROLE_EMOJIS['tank']} **{tank_count}** Tanks  |  {ROLE_EMOJIS['melee']} **{melee_count}** Melee  |  {ROLE_EMOJIS['ranged']} **{ranged_count}** Ranged  |  {ROLE_EMOJIS['healer']} **{healer_count}** Healers"
+    embed.add_field(
+        name="📊 Composition",
+        value=role_summary,
+        inline=False
+    )
+    
+    # Group signups by class
+    class_groups = {}
+    for signup in signed_signups:
+        char_class = signup['character_class']
+        if char_class not in class_groups:
+            class_groups[char_class] = []
+        class_groups[char_class].append(signup)
+    
+    # Build class sections in 3-column layout
+    # We'll create fields for each class
+    class_fields = []
+    
+    for class_name in CLASS_ORDER:
+        if class_name not in class_groups:
+            continue
         
-        lines = []
-        for signup in signups:
-            class_emoji = CLASS_EMOJIS.get(signup['character_class'], '❓')
-            name = signup['character_name']
-            spec = f" ({signup['spec']})" if signup.get('spec') else ""
-            lines.append(f"{class_emoji} **{name}**{spec}")
+        players = class_groups[class_name]
+        class_emoji = CLASS_EMOJIS.get(class_name, '❓')
         
-        return "\n".join(lines)
+        # Build player list with spec emojis
+        player_lines = []
+        for player in players:
+            spec = player.get('spec', '')
+            spec_emoji = SPEC_EMOJIS.get(spec, '')
+            char_name = player['character_name']
+            player_lines.append(f"{spec_emoji} {char_name}")
+        
+        # Create field
+        field_value = "\n".join(player_lines) if player_lines else "_None_"
+        class_fields.append({
+            'name': f"{class_emoji} **{class_name}** ({len(players)})",
+            'value': field_value,
+            'inline': True
+        })
     
-    # Tanks section
-    tank_count = len(tanks)
-    tank_limit = ROLE_LIMITS['tank']
-    embed.add_field(
-        name=f"🛡️ Tanks ({tank_count}/{tank_limit})",
-        value=format_signup_list(tanks),
-        inline=False
-    )
-    
-    # Healers section
-    healer_count = len(healers)
-    healer_limit = ROLE_LIMITS['healer']
-    embed.add_field(
-        name=f"💚 Healers ({healer_count}/{healer_limit})",
-        value=format_signup_list(healers),
-        inline=False
-    )
-    
-    # DPS section
-    dps_count = len(dps)
-    dps_limit = ROLE_LIMITS['dps']
-    embed.add_field(
-        name=f"⚔️ DPS ({dps_count}/{dps_limit})",
-        value=format_signup_list(dps),
-        inline=False
-    )
+    # Add class fields (Discord supports up to 25 fields, we have max 13 classes)
+    if class_fields:
+        for field in class_fields:
+            embed.add_field(name=field['name'], value=field['value'], inline=field['inline'])
+    else:
+        embed.add_field(name="📋 Roster", value="_No signups yet_", inline=False)
     
     # Late section
+    late_signups = get_raid_signups(event_id, 'late')
     if late_signups:
+        late_names = []
+        for signup in late_signups:
+            spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
+            late_names.append(f"{spec_emoji} {signup['character_name']}")
+        
         embed.add_field(
             name=f"🕐 Late ({len(late_signups)})",
-            value=format_signup_list(late_signups),
+            value="\n".join(late_names),
             inline=False
         )
     
     # Tentative section
+    tentative_signups = get_raid_signups(event_id, 'tentative')
     if tentative_signups:
+        tentative_names = []
+        for signup in tentative_signups:
+            spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
+            tentative_names.append(f"{spec_emoji} {signup['character_name']}")
+        
         embed.add_field(
             name=f"⚖️ Tentative ({len(tentative_signups)})",
-            value=format_signup_list(tentative_signups),
+            value="\n".join(tentative_names),
             inline=False
         )
     
     # Absence section
+    absent_signups = get_raid_signups(event_id, 'absent')
     if absent_signups:
         absence_names = [s['character_name'] for s in absent_signups]
         embed.add_field(
@@ -489,18 +621,43 @@ class RaidButtonsView(View):
 class CharacterSelectDropdown(Select):
     """Dropdown for selecting a WoW character"""
     
-    def __init__(self, characters, event_id):
+    def __init__(self, characters, event_id, show_all=False):
         self.event_id = event_id
+        self.all_characters = characters
+        
+        # Filter to max-level characters first (unless show_all is True)
+        if not show_all and len(characters) > 25:
+            # Find max level
+            max_level = max(char.get('level', 0) for char in characters)
+            filtered_chars = [char for char in characters if char.get('level', 0) == max_level]
+            
+            # If still too many, take first 24 (leave room for "Show All" option)
+            if len(filtered_chars) > 24:
+                display_chars = filtered_chars[:24]
+            else:
+                display_chars = filtered_chars
+        else:
+            # Show all - take first 25
+            display_chars = characters[:25]
         
         # Create options from characters
         options = []
-        for char in characters[:25]:  # Discord limit is 25 options
+        for char in display_chars:
             label = f"{char['character_name']} - {char['realm_name']}"
-            description = f"{char['character_class']} ({char['faction']})"
+            level = char.get('level', '??')
+            description = f"Level {level} {char['character_class']} ({char['faction']})"
             options.append(discord.SelectOption(
                 label=label,
                 description=description,
                 value=f"{char['character_name']}|{char['realm_slug']}|{char['character_class']}"
+            ))
+        
+        # Add "Show All Characters" option if we filtered
+        if not show_all and len(characters) > len(display_chars):
+            options.append(discord.SelectOption(
+                label="🔍 Show All Characters...",
+                description=f"View all {len(characters)} characters",
+                value="__SHOW_ALL__"
             ))
         
         super().__init__(
@@ -511,6 +668,16 @@ class CharacterSelectDropdown(Select):
     
     async def callback(self, interaction: discord.Interaction):
         """Handle character selection"""
+        # Check if user wants to show all characters
+        if self.values[0] == "__SHOW_ALL__":
+            # Show all characters view
+            view = CharacterSelectView(self.all_characters, self.event_id, show_all=True)
+            await interaction.response.edit_message(
+                content="🎮 Showing all characters:",
+                view=view
+            )
+            return
+        
         # Parse selection
         char_name, realm_slug, char_class = self.values[0].split('|')
         
@@ -549,9 +716,9 @@ class CharacterSelectDropdown(Select):
 class CharacterSelectView(View):
     """View containing character selection dropdown"""
     
-    def __init__(self, characters, event_id):
+    def __init__(self, characters, event_id, show_all=False):
         super().__init__(timeout=180)  # 3 minute timeout
-        self.add_item(CharacterSelectDropdown(characters, event_id))
+        self.add_item(CharacterSelectDropdown(characters, event_id, show_all))
 
 
 class RoleSelectDropdown(Select):

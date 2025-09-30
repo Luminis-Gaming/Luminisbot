@@ -393,9 +393,13 @@ async def createraid_command(interaction: discord.Interaction, title: str, date:
         inline=False
     )
     
-    embed.add_field(name="🛡️ Tanks (0/3)", value="_No signups yet_", inline=False)
-    embed.add_field(name="💚 Healers (0/5)", value="_No signups yet_", inline=False)
-    embed.add_field(name="⚔️ DPS (0/20)", value="_No signups yet_", inline=False)
+    embed.add_field(
+        name="� Composition",
+        value=":tank: **0** Tanks  |  :melee: **0** Melee  |  :ranged: **0** Ranged  |  :healer: **0** Healers",
+        inline=False
+    )
+    
+    embed.add_field(name="📋 Roster", value="_No signups yet - click Sign Up below!_", inline=False)
     
     embed.set_footer(text="Click a button below to sign up or change your status")
     
