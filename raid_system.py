@@ -642,23 +642,23 @@ def generate_raid_embed(event_id: int):
     # Convert title to emoji letters
     emoji_title = text_to_emoji_letters(event['title'])
     
-    # Create embed
+    # Create embed with emoji title (no date emoji)
     embed = discord.Embed(
-        title=f"📅 {emoji_title}",
+        title=emoji_title,
         color=embed_color,
         timestamp=datetime.now()
     )
     
-    # Format date field with countdown
+    # Format date field with countdown on same line
     date_str = event_datetime.strftime("%A, %d %B %Y %H:%M")
     if is_past:
         # Red text for past events using ANSI color codes in code block
-        date_display = f"```ansi\n\u001b[0;31m{date_str}\u001b[0m\n```\n🔴 **{countdown_text}**"
+        date_display = f"```ansi\n\u001b[0;31m{date_str} - {countdown_text}\u001b[0m\n```"
     else:
-        date_display = f"{date_str}\n⏰ **{countdown_text}**"
+        date_display = f"{date_str} - ⏰ **{countdown_text}**"
     
     embed.add_field(
-        name="🗓️ Date & Time",
+        name="\u200b",  # Zero-width space for no visible title
         value=date_display,
         inline=False
     )
@@ -672,10 +672,10 @@ def generate_raid_embed(event_id: int):
     melee_count = sum(1 for s in signed_signups if s['role'] == 'dps' and is_melee_dps(s['character_class'], s.get('spec', '')))
     ranged_count = sum(1 for s in signed_signups if s['role'] == 'dps' and is_ranged_dps(s['character_class'], s.get('spec', '')))
     
-    # Role summary at the top
+    # Role summary at the top (no title needed, just the counts)
     role_summary = f"{ROLE_EMOJIS['tank']} **{tank_count}** Tanks  |  {ROLE_EMOJIS['melee']} **{melee_count}** Melee  |  {ROLE_EMOJIS['ranged']} **{ranged_count}** Ranged  |  {ROLE_EMOJIS['healer']} **{healer_count}** Healers"
     embed.add_field(
-        name="📊 Composition",
+        name="\u200b",  # Zero-width space for no visible title
         value=role_summary,
         inline=False
     )
@@ -1390,14 +1390,20 @@ async def handle_invite_macro_click(interaction: discord.Interaction):
         )
         return
     
-    # Extract character names (max 40 characters for WoW raid)
-    character_names = [signup['character_name'] for signup in signed_signups[:40]]
+    # Extract character names with realm (max 40 characters for WoW raid)
+    # Format: "CharacterName-RealmSlug" for cross-realm invites
+    character_invites = []
+    for signup in signed_signups[:40]:
+        char_name = signup['character_name']
+        realm_slug = signup['realm_slug']
+        # WoW uses format: /invite CharacterName-RealmSlug
+        character_invites.append(f"{char_name}-{realm_slug}")
     
     # Create WoW invite macro
     # WoW macros have a 255 character limit per line, so we need to split into multiple lines
     invite_commands = []
-    for name in character_names:
-        invite_commands.append(f"/invite {name}")
+    for invite_target in character_invites:
+        invite_commands.append(f"/invite {invite_target}")
     
     # Split into chunks of ~10 invites per macro (to stay under 255 char limit)
     macro_chunks = []
@@ -1409,7 +1415,7 @@ async def handle_invite_macro_click(interaction: discord.Interaction):
     
     # Format the response
     response = f"📋 **WoW Invite Macro for {event['title']}**\n"
-    response += f"Found **{len(character_names)}** signed up players.\n\n"
+    response += f"Found **{len(character_invites)}** signed up players.\n\n"
     
     if len(macro_chunks) == 1:
         response += "Copy and paste this into WoW chat:\n```\n"
