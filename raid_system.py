@@ -8,11 +8,29 @@ from discord import app_commands
 from discord.ui import View, Button, Select
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timezone
+from zoneinfo import ZoneInfo
 import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# Default timezone for raid events
+# When users create events, they enter times in this timezone
+# Discord will then automatically show the correct time for each user's local timezone
+# 
+# Common European timezones:
+#   "Europe/Berlin"  - Germany, most of Central Europe (CET/CEST - UTC+1/+2)
+#   "Europe/London"  - UK (GMT/BST - UTC+0/+1)
+#   "Europe/Paris"   - France (same as Berlin)
+# 
+# Other options: "America/New_York", "America/Los_Angeles", "UTC"
+# Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+DEFAULT_TIMEZONE = "Europe/Berlin"  # Change this to your guild's timezone
 
 # ============================================================================
 # WoW CLASS AND SPEC DATA
@@ -347,12 +365,18 @@ def format_countdown(event_datetime: datetime) -> tuple[str, bool]:
     Format a countdown string for the event.
     
     Args:
-        event_datetime: The datetime of the event
+        event_datetime: The datetime of the event (timezone-aware)
     
     Returns:
         tuple: (countdown_string, is_past) - countdown text and whether event has passed
     """
-    now = datetime.now()
+    # Get current time in UTC to compare with event time
+    now = datetime.now(timezone.utc)
+    
+    # If event_datetime is naive (no timezone), assume UTC
+    if event_datetime.tzinfo is None:
+        event_datetime = event_datetime.replace(tzinfo=timezone.utc)
+    
     time_diff = event_datetime - now
     
     if time_diff.total_seconds() <= 0:
@@ -640,7 +664,12 @@ def generate_raid_embed(event_id: int):
         return None
     
     # Format date and time with countdown
-    event_datetime = datetime.combine(event['event_date'], event['event_time'])
+    # Combine date and time, treating it as being in the configured timezone
+    # Then convert to UTC for Discord timestamp display
+    tz = ZoneInfo(DEFAULT_TIMEZONE)
+    event_datetime_local = datetime.combine(event['event_date'], event['event_time'], tzinfo=tz)
+    event_datetime = event_datetime_local.astimezone(timezone.utc)
+    
     countdown_text, is_past = format_countdown(event_datetime)
     
     # Set embed color based on whether event has passed
