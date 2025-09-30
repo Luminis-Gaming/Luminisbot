@@ -23,6 +23,9 @@ from warcraft_recorder_automator import add_email_to_roster
 # --- Import OAuth server ---
 from oauth_server import start_oauth_server
 
+# --- Import database migrations ---
+from run_migrations import run_migrations
+
 # --- Load All Secrets from Environment ---
 load_dotenv()
 BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -137,6 +140,10 @@ async def check_for_new_logs():
 @client.event
 async def on_ready():
     """Bot ready event handler."""
+    # Run database migrations first
+    print("[MIGRATIONS] Running database migrations...")
+    run_migrations()
+    
     setup_database()
     
     # Add persistent view for button interactions
