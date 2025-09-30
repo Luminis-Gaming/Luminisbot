@@ -403,35 +403,15 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
         # Defer the response since we're going to create a message
         await interaction.response.defer(ephemeral=True)
         
-        # Generate initial embed (empty signups)
-        embed = discord.Embed(
-            title=f"📅 {title}",
-            color=discord.Color.blue(),
-            timestamp=datetime.now()
-        )
-        
-        event_datetime = datetime.combine(event_date, event_time)
-        embed.add_field(
-            name="🗓️ Date & Time",
-            value=event_datetime.strftime("%A, %d %B %Y %H:%M"),
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📊 Composition",
-            value="<:tank:1422570700882841610> **0** Tanks  |  <:melee:1422570750673420352> **0** Melee  |  <:ranged:1422570779874431126> **0** Ranged  |  <:healer:1422570731103064176> **0** Healers",
-            inline=False
-        )
-        
-        embed.add_field(name="📋 Roster", value="_No signups yet - click Sign Up below!_", inline=False)
-        
-        embed.set_footer(text="Click a button below to sign up or change your status")
-        
         # Create view with buttons
         view = RaidButtonsView()
         
-        # Send message
-        message = await interaction.channel.send(embed=embed, view=view)
+        # Send a placeholder message first (we need the message ID for the database)
+        placeholder_embed = discord.Embed(
+            title="Creating raid event...",
+            color=discord.Color.blue()
+        )
+        message = await interaction.channel.send(embed=placeholder_embed, view=view)
         
         # Store event in database
         event_id = create_raid_event(
@@ -443,6 +423,13 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             event_time=event_time,
             created_by=interaction.user.id
         )
+        
+        # Now generate the proper embed using generate_raid_embed
+        from raid_system import generate_raid_embed
+        embed = generate_raid_embed(event_id)
+        
+        # Update the message with the proper embed
+        await message.edit(embed=embed, view=view)
         
         await interaction.followup.send(
             f"✅ Raid event **{title}** created successfully!\n📋 Event ID: {event_id}",
