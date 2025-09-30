@@ -245,6 +245,96 @@ def abbreviate_class_name(class_name: str) -> str:
     }
     return abbreviations.get(class_name, class_name)
 
+def parse_date(date_str: str) -> date:
+    """
+    Parse date string in DD/MM/YYYY or YYYY-MM-DD format.
+    
+    Args:
+        date_str: Date string to parse
+    
+    Returns:
+        date: Parsed date object
+    
+    Raises:
+        ValueError: If date format is invalid
+    """
+    # Try DD/MM/YYYY format first
+    if '/' in date_str:
+        parts = date_str.split('/')
+        if len(parts) != 3:
+            raise ValueError("Date must be in DD/MM/YYYY format (e.g., 25/12/2025)")
+        day, month, year = map(int, parts)
+        return date(year, month, day)
+    
+    # Try YYYY-MM-DD format
+    elif '-' in date_str:
+        parts = date_str.split('-')
+        if len(parts) != 3:
+            raise ValueError("Date must be in YYYY-MM-DD format (e.g., 2025-12-25)")
+        year, month, day = map(int, parts)
+        return date(year, month, day)
+    
+    else:
+        raise ValueError("Date must be in DD/MM/YYYY or YYYY-MM-DD format")
+
+def parse_time(time_str: str) -> time:
+    """
+    Parse time string in HH:MM format (24-hour).
+    
+    Args:
+        time_str: Time string to parse
+    
+    Returns:
+        time: Parsed time object
+    
+    Raises:
+        ValueError: If time format is invalid
+    """
+    parts = time_str.split(':')
+    if len(parts) != 2:
+        raise ValueError("Time must be in HH:MM format (e.g., 20:00)")
+    
+    hour, minute = map(int, parts)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("Invalid time - hour must be 0-23, minute must be 0-59")
+    
+    return time(hour, minute)
+
+def text_to_emoji_letters(text: str) -> str:
+    """
+    Convert text to Discord regional indicator emojis (letter emojis).
+    
+    Args:
+        text: Text to convert
+    
+    Returns:
+        str: Text with letters converted to regional indicator emojis
+    
+    Examples:
+        "Raid Night" -> "🇷 🇦 🇮 🇩   🇳 🇮 🇬 🇭 🇹"
+    """
+    result = []
+    for char in text.upper():
+        if 'A' <= char <= 'Z':
+            # Convert A-Z to regional indicator emojis (🇦-🇿)
+            # Regional indicators are Unicode: 🇦 = U+1F1E6, 🇧 = U+1F1E7, etc.
+            emoji_code = 0x1F1E6 + (ord(char) - ord('A'))
+            result.append(chr(emoji_code))
+        elif char == ' ':
+            result.append('  ')  # Double space for word separation
+        elif char.isdigit():
+            # Use digit emojis for numbers
+            digit_emojis = ['0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣']
+            result.append(digit_emojis[int(char)])
+        elif char in '!?':
+            # Keep punctuation as-is
+            result.append(char)
+        else:
+            # Skip other characters
+            continue
+    
+    return ' '.join(result)
+
 def format_countdown(event_datetime: datetime) -> tuple[str, bool]:
     """
     Format a countdown string for the event.
@@ -549,9 +639,12 @@ def generate_raid_embed(event_id: int):
     # Set embed color based on whether event has passed
     embed_color = discord.Color.red() if is_past else discord.Color.blue()
     
+    # Convert title to emoji letters
+    emoji_title = text_to_emoji_letters(event['title'])
+    
     # Create embed
     embed = discord.Embed(
-        title=f"📅 {event['title']}",
+        title=f"📅 {emoji_title}",
         color=embed_color,
         timestamp=datetime.now()
     )
@@ -1012,10 +1105,8 @@ class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
     
     async def on_submit(self, interaction: discord.Interaction):
         """Handle modal submission"""
-        from my_discord_bot import parse_date, parse_time
-        
         try:
-            # Parse new date and time
+            # Parse new date and time using functions from this module
             new_date = parse_date(self.date_input.value)
             new_time = parse_time(self.time_input.value)
             new_title = self.title_input.value

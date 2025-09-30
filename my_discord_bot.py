@@ -350,93 +350,114 @@ async def mycharacters_command(interaction: discord.Interaction):
     finally:
         conn.close()
 
-@tree.command(name="createraid", description="Create a new raid event with signup system")
-@app_commands.describe(
-    title="Raid title (e.g., 'Monday Raid', 'Mythic Night')",
-    date="Date in DD/MM/YYYY format (e.g., 06/10/2025)",
-    time="Time in HH:MM format (24-hour, e.g., 18:30)"
-)
-async def createraid_command(interaction: discord.Interaction, title: str, date: str, time: str):
-    """Create a raid event with interactive signup system."""
-    await interaction.response.defer()
+
+class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
+    """Modal for creating a new raid event"""
     
-    try:
-        # Parse date (DD/MM/YYYY)
-        from datetime import datetime, date as date_type, time as time_type
+    def __init__(self):
+        super().__init__()
         
-        date_parts = date.split('/')
-        if len(date_parts) != 3:
-            await interaction.edit_original_response(
-                content="❌ Invalid date format! Use DD/MM/YYYY (e.g., 06/10/2025)"
-            )
-            return
-        
-        day, month, year = map(int, date_parts)
-        event_date = date_type(year, month, day)
-        
-        # Parse time (HH:MM)
-        time_parts = time.split(':')
-        if len(time_parts) != 2:
-            await interaction.edit_original_response(
-                content="❌ Invalid time format! Use HH:MM (e.g., 18:30)"
-            )
-            return
-        
-        hour, minute = map(int, time_parts)
-        event_time = time_type(hour, minute)
-        
-    except ValueError as e:
-        await interaction.edit_original_response(
-            content=f"❌ Invalid date/time format! Please use DD/MM/YYYY for date and HH:MM for time.\nError: {e}"
+        self.title_input = discord.ui.TextInput(
+            label="Event Title",
+            placeholder="e.g., Monday Raid, Mythic Night, Weekly Clear",
+            max_length=100,
+            required=True
         )
-        return
+        self.add_item(self.title_input)
+        
+        self.date_input = discord.ui.TextInput(
+            label="Date (DD/MM/YYYY or YYYY-MM-DD)",
+            placeholder="e.g., 06/10/2025 or 2025-10-06",
+            max_length=20,
+            required=True
+        )
+        self.add_item(self.date_input)
+        
+        self.time_input = discord.ui.TextInput(
+            label="Time (HH:MM in 24-hour format)",
+            placeholder="e.g., 20:00 for 8 PM",
+            max_length=5,
+            required=True
+        )
+        self.add_item(self.time_input)
     
-    # Generate initial embed (empty signups)
-    embed = discord.Embed(
-        title=f"📅 {title}",
-        color=discord.Color.blue(),
-        timestamp=datetime.now()
-    )
-    
-    event_datetime = datetime.combine(event_date, event_time)
-    embed.add_field(
-        name="🗓️ Date & Time",
-        value=event_datetime.strftime("%A, %d %B %Y %H:%M"),
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📊 Composition",
-        value="<:tank:1422570700882841610> **0** Tanks  |  <:melee:1422570750673420352> **0** Melee  |  <:ranged:1422570779874431126> **0** Ranged  |  <:healer:1422570731103064176> **0** Healers",
-        inline=False
-    )
-    
-    embed.add_field(name="📋 Roster", value="_No signups yet - click Sign Up below!_", inline=False)
-    
-    embed.set_footer(text="Click a button below to sign up or change your status")
-    
-    # Create view with buttons
-    view = RaidButtonsView()
-    
-    # Send message
-    message = await interaction.channel.send(embed=embed, view=view)
-    
-    # Store event in database
-    event_id = create_raid_event(
-        guild_id=interaction.guild.id,
-        channel_id=interaction.channel.id,
-        message_id=message.id,
-        title=title,
-        event_date=event_date,
-        event_time=event_time,
-        created_by=interaction.user.id
-    )
-    
-    await interaction.edit_original_response(
-        content=f"✅ Raid event **{title}** created successfully!\n📋 Event ID: {event_id}"
-    )
-    
-    print(f"[RAID] Created raid event '{title}' by {interaction.user.name} (ID: {event_id})")
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle modal submission"""
+        try:
+            # Import parse functions from raid_system
+            from raid_system import parse_date, parse_time, create_raid_event, RaidButtonsView
+            from datetime import datetime
+            
+            # Parse date and time
+            event_date = parse_date(self.date_input.value)
+            event_time = parse_time(self.time_input.value)
+            title = self.title_input.value
+            
+        except ValueError as e:
+            await interaction.response.send_message(
+                f"❌ Invalid date/time format!\nError: {e}",
+                ephemeral=True
+            )
+            return
+        
+        # Defer the response since we're going to create a message
+        await interaction.response.defer(ephemeral=True)
+        
+        # Generate initial embed (empty signups)
+        embed = discord.Embed(
+            title=f"📅 {title}",
+            color=discord.Color.blue(),
+            timestamp=datetime.now()
+        )
+        
+        event_datetime = datetime.combine(event_date, event_time)
+        embed.add_field(
+            name="🗓️ Date & Time",
+            value=event_datetime.strftime("%A, %d %B %Y %H:%M"),
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📊 Composition",
+            value="<:tank:1422570700882841610> **0** Tanks  |  <:melee:1422570750673420352> **0** Melee  |  <:ranged:1422570779874431126> **0** Ranged  |  <:healer:1422570731103064176> **0** Healers",
+            inline=False
+        )
+        
+        embed.add_field(name="📋 Roster", value="_No signups yet - click Sign Up below!_", inline=False)
+        
+        embed.set_footer(text="Click a button below to sign up or change your status")
+        
+        # Create view with buttons
+        view = RaidButtonsView()
+        
+        # Send message
+        message = await interaction.channel.send(embed=embed, view=view)
+        
+        # Store event in database
+        event_id = create_raid_event(
+            guild_id=interaction.guild.id,
+            channel_id=interaction.channel.id,
+            message_id=message.id,
+            title=title,
+            event_date=event_date,
+            event_time=event_time,
+            created_by=interaction.user.id
+        )
+        
+        await interaction.followup.send(
+            f"✅ Raid event **{title}** created successfully!\n📋 Event ID: {event_id}",
+            ephemeral=True
+        )
+        
+        print(f"[RAID] Created raid event '{title}' by {interaction.user.name} (ID: {event_id})")
+
+
+@tree.command(name="createraid", description="Create a new raid event with signup system")
+async def createraid_command(interaction: discord.Interaction):
+    """Create a raid event with interactive signup system."""
+    modal = CreateRaidModal()
+    await interaction.response.send_modal(modal)
+
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
