@@ -26,6 +26,11 @@ from oauth_server import start_oauth_server
 # --- Import database migrations ---
 from run_migrations import run_migrations
 
+# --- Import raid system ---
+from raid_system import (
+    RaidButtonsView, generate_raid_embed, create_raid_event
+)
+
 # --- Load All Secrets from Environment ---
 load_dotenv()
 BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -149,6 +154,7 @@ async def on_ready():
     # Add persistent view for button interactions
     if not hasattr(client, 'added_view'):
         client.add_view(LogButtonsView())
+        client.add_view(RaidButtonsView())  # Add raid system buttons
         client.added_view = True
     
     # Sync command tree and start background task
@@ -331,6 +337,90 @@ async def mycharacters_command(interaction: discord.Interaction):
         await interaction.edit_original_response(content=f"❌ **Error:** {e}")
     finally:
         conn.close()
+
+@tree.command(name="createraid", description="Create a new raid event with signup system")
+@app_commands.describe(
+    title="Raid title (e.g., 'Monday Raid', 'Mythic Night')",
+    date="Date in DD/MM/YYYY format (e.g., 06/10/2025)",
+    time="Time in HH:MM format (24-hour, e.g., 18:30)"
+)
+async def createraid_command(interaction: discord.Interaction, title: str, date: str, time: str):
+    """Create a raid event with interactive signup system."""
+    await interaction.response.defer()
+    
+    try:
+        # Parse date (DD/MM/YYYY)
+        from datetime import datetime, date as date_type, time as time_type
+        
+        date_parts = date.split('/')
+        if len(date_parts) != 3:
+            await interaction.edit_original_response(
+                content="❌ Invalid date format! Use DD/MM/YYYY (e.g., 06/10/2025)"
+            )
+            return
+        
+        day, month, year = map(int, date_parts)
+        event_date = date_type(year, month, day)
+        
+        # Parse time (HH:MM)
+        time_parts = time.split(':')
+        if len(time_parts) != 2:
+            await interaction.edit_original_response(
+                content="❌ Invalid time format! Use HH:MM (e.g., 18:30)"
+            )
+            return
+        
+        hour, minute = map(int, time_parts)
+        event_time = time_type(hour, minute)
+        
+    except ValueError as e:
+        await interaction.edit_original_response(
+            content=f"❌ Invalid date/time format! Please use DD/MM/YYYY for date and HH:MM for time.\nError: {e}"
+        )
+        return
+    
+    # Generate initial embed (empty signups)
+    embed = discord.Embed(
+        title=f"📅 {title}",
+        color=discord.Color.blue(),
+        timestamp=datetime.now()
+    )
+    
+    event_datetime = datetime.combine(event_date, event_time)
+    embed.add_field(
+        name="🗓️ Date & Time",
+        value=event_datetime.strftime("%A, %d %B %Y %H:%M"),
+        inline=False
+    )
+    
+    embed.add_field(name="🛡️ Tanks (0/3)", value="_No signups yet_", inline=False)
+    embed.add_field(name="💚 Healers (0/5)", value="_No signups yet_", inline=False)
+    embed.add_field(name="⚔️ DPS (0/20)", value="_No signups yet_", inline=False)
+    
+    embed.set_footer(text="Click a button below to sign up or change your status")
+    
+    # Create view with buttons
+    view = RaidButtonsView()
+    
+    # Send message
+    message = await interaction.channel.send(embed=embed, view=view)
+    
+    # Store event in database
+    event_id = create_raid_event(
+        guild_id=interaction.guild.id,
+        channel_id=interaction.channel.id,
+        message_id=message.id,
+        title=title,
+        event_date=event_date,
+        event_time=event_time,
+        created_by=interaction.user.id
+    )
+    
+    await interaction.edit_original_response(
+        content=f"✅ Raid event **{title}** created successfully!\n📋 Event ID: {event_id}"
+    )
+    
+    print(f"[RAID] Created raid event '{title}' by {interaction.user.name} (ID: {event_id})")
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
