@@ -2361,8 +2361,9 @@ async def update_started_events(bot):
         # Debug: First let's see all events and their times
         cursor.execute("""
             SELECT id, title, event_date, event_time,
-                   (event_date + event_time) as event_datetime,
-                   NOW() as current_time
+                   (event_date + event_time) as event_datetime_local,
+                   (event_date + event_time) AT TIME ZONE 'Europe/Berlin' AT TIME ZONE 'UTC' as event_datetime_utc,
+                   NOW() as current_time_utc
             FROM raid_events
             ORDER BY event_date DESC, event_time DESC
             LIMIT 5
@@ -2371,17 +2372,22 @@ async def update_started_events(bot):
         all_events = cursor.fetchall()
         print(f"[DEBUG] Current time check - found {len(all_events)} recent events:")
         for event in all_events:
-            # event is a tuple: (id, title, event_date, event_time, event_datetime, current_time)
-            print(f"  Event: {event[1]} - Time: {event[4]} (Now: {event[5]})")
+            # event is a tuple: (id, title, event_date, event_time, event_datetime_local, event_datetime_utc, current_time_utc)
+            print(f"  Event: {event[1]}")
+            print(f"    Local time: {event[4]} (Europe/Berlin)")
+            print(f"    UTC time: {event[5]}")
+            print(f"    Current UTC: {event[6]}")
+            print(f"    ---")
         
         # Find events that should show "started" status but might not be updated yet
-        # Look for events that started within the last 10 minutes to catch them promptly
+        # Convert both times to UTC for proper comparison
+        # Event times are stored in Europe/Berlin timezone, so we need to convert them to UTC
         cursor.execute("""
             SELECT id, guild_id, channel_id, message_id, title,
                    event_date, event_time
             FROM raid_events
-            WHERE (event_date + event_time) BETWEEN 
-                (NOW() - INTERVAL '10 minutes') AND NOW()
+            WHERE (event_date + event_time) AT TIME ZONE 'Europe/Berlin' AT TIME ZONE 'UTC'
+                  BETWEEN (NOW() - INTERVAL '10 minutes') AND NOW()
         """)
         
         recently_started = cursor.fetchall()
