@@ -1705,8 +1705,12 @@ class ManageAssistantsView(View):
     @discord.ui.button(label="Add Assistant", style=discord.ButtonStyle.success, emoji="➕", row=0)
     async def add_assistant_button(self, interaction: discord.Interaction, button: Button):
         """Add an assistant"""
-        modal = AddAssistantModal(self.event_id)
-        await interaction.response.send_modal(modal)
+        view = AddAssistantSelectView(self.event_id)
+        await interaction.response.send_message(
+            "Select a user to add as an event assistant:",
+            view=view,
+            ephemeral=True
+        )
     
     @discord.ui.button(label="Remove Assistant", style=discord.ButtonStyle.danger, emoji="➖", row=0)
     async def remove_assistant_button(self, interaction: discord.Interaction, button: Button):
@@ -1720,14 +1724,6 @@ class ManageAssistantsView(View):
             )
             return
         
-        # Create dropdown with assistants
-        options = []
-        for assistant in assistants[:25]:
-            options.append(discord.SelectOption(
-                label=f"User ID: {assistant['discord_id']}",
-                value=assistant['discord_id']
-            ))
-        
         view = RemoveAssistantSelectView(self.event_id, assistants)
         await interaction.response.send_message(
             "Select an assistant to remove:",
@@ -1736,38 +1732,26 @@ class ManageAssistantsView(View):
         )
 
 
-class AddAssistantModal(discord.ui.Modal, title="Add Event Assistant"):
-    """Modal for adding an event assistant"""
+class AddAssistantSelectView(View):
+    """View for selecting a user to add as assistant"""
     
     def __init__(self, event_id):
-        super().__init__()
+        super().__init__(timeout=60)
         self.event_id = event_id
         
-        self.user_input = discord.ui.TextInput(
-            label="Discord User ID",
-            placeholder="Enter user ID or paste mention (@username)",
-            required=True,
-            max_length=100
+        # Add user select dropdown
+        self.user_select = discord.ui.UserSelect(
+            placeholder="Select a user to add as assistant",
+            min_values=1,
+            max_values=1
         )
-        self.add_item(self.user_input)
+        self.user_select.callback = self.user_selected
+        self.add_item(self.user_select)
     
-    async def on_submit(self, interaction: discord.Interaction):
-        """Handle modal submission"""
-        user_input = self.user_input.value.strip()
-        
-        # Extract user ID from mention or use as-is
-        import re
-        match = re.search(r'<@!?(\d+)>', user_input)
-        if match:
-            user_id = match.group(1)
-        elif user_input.isdigit():
-            user_id = user_input
-        else:
-            await interaction.response.send_message(
-                "❌ Invalid user ID format! Please enter a numeric user ID or mention a user.",
-                ephemeral=True
-            )
-            return
+    async def user_selected(self, interaction: discord.Interaction):
+        """Handle user selection"""
+        selected_user = self.user_select.values[0]
+        user_id = str(selected_user.id)
         
         # Check if user is already creator
         event = get_raid_event_by_id(self.event_id)
@@ -1778,13 +1762,23 @@ class AddAssistantModal(discord.ui.Modal, title="Add Event Assistant"):
             )
             return
         
+        # Check if user is already an assistant
+        assistants = get_event_assistants(self.event_id)
+        if any(str(a['discord_id']) == user_id for a in assistants):
+            await interaction.response.send_message(
+                f"❌ {selected_user.mention} is already an event assistant!",
+                ephemeral=True
+            )
+            return
+        
         # Add assistant
         add_event_assistant(self.event_id, user_id, interaction.user.id)
         
         await interaction.response.send_message(
-            f"✅ Added <@{user_id}> as an event assistant!",
+            f"✅ Added {selected_user.mention} as an event assistant!",
             ephemeral=True
         )
+        self.stop()
 
 
 class RemoveAssistantSelectView(View):
@@ -2151,10 +2145,40 @@ async def handle_admin_panel_click(interaction: discord.Interaction):
     assistants = get_event_assistants(event_id)
     assistant_list = "\n".join([f"<@{a['discord_id']}>" for a in assistants]) if assistants else "_None_"
     
+    # Build player roster for quick reference
+    roster_text = ""
+    for status in ['signed', 'late', 'tentative', 'benched', 'absent']:
+        signups = get_raid_signups(event_id, status)
+        if signups:
+            status_display = {
+                'signed': '✅ Signed',
+                'late': '🕐 Late', 
+                'tentative': '⚖️ Tentative',
+                'benched': '🪑 Benched',
+                'absent': '❌ Absent'
+            }[status]
+            
+            roster_text += f"\n**{status_display}** ({len(signups)}):\n"
+            for signup in signups[:10]:  # Limit to 10 per status to avoid embed size limit
+                role_emoji = ROLE_EMOJIS.get(signup['role'], '')
+                roster_text += f"{role_emoji} {signup['character_name']} ({signup['character_class']})\n"
+            
+            if len(signups) > 10:
+                roster_text += f"_...and {len(signups) - 10} more_\n"
+    
+    if not roster_text:
+        roster_text = "_No players signed up yet_"
+    
     embed = discord.Embed(
         title="⚙️ Admin Panel",
         description=f"**Event:** {event['title']}\n\n**Current Assistants:**\n{assistant_list}",
         color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="📋 Current Roster",
+        value=roster_text,
+        inline=False
     )
     
     embed.add_field(
