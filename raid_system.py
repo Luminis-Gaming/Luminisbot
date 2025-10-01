@@ -886,8 +886,9 @@ def generate_raid_embed(event_id: int):
     unix_timestamp = int(event_datetime.timestamp())
     
     if is_past:
-        # For past events, show red text in ANSI code block
-        date_display = f"```ansi\n\u001b[1;31m⚠️ EVENT STARTED - {countdown_text.upper()}\u001b[0m\n{event_datetime.strftime('%A, %d %B %Y at %H:%M')} ({DEFAULT_TIMEZONE})\n```"
+        # For past events, use Discord native timestamp with red warning
+        # Discord will automatically show the correct local time and "X minutes ago" on hover
+        date_display = f"```diff\n- ⚠️ EVENT STARTED\n```<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
     else:
         # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
         # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
@@ -1966,87 +1967,6 @@ class AdminPanelView(View):
             view=view,
             ephemeral=True
         )
-    async def manage_assistants_button(self, interaction: discord.Interaction, button: Button):
-        """Manage event assistants (owner only)"""
-        if not self.is_owner:
-            await interaction.response.send_message(
-                "❌ Only the event creator can manage assistants!",
-                ephemeral=True
-            )
-            return
-        
-        view = ManageAssistantsView(self.event_id)
-        await interaction.response.send_message(
-            "Enter the Discord User ID or mention of the user to add as assistant:",
-            view=view,
-            ephemeral=True
-        )
-    
-    @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, emoji="✏️", row=2)
-    async def edit_event_button(self, interaction: discord.Interaction, button: Button):
-        """Edit event details (owner and assistants only)"""
-        # Show edit modal with the event we already have
-        modal = EditEventModal(self.event)
-        await interaction.response.send_modal(modal)
-    
-    @discord.ui.button(label="Delete Event", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
-    async def delete_event_button(self, interaction: discord.Interaction, button: Button):
-        """Delete event (owner and assistants only)"""
-        # Confirm deletion using the event we already have
-        view = ConfirmDeleteView(self.event_id, self.event['message_id'])
-        await interaction.response.send_message(
-            f"⚠️ Are you sure you want to delete the event **{self.event['title']}**?\nThis will remove all signups and cannot be undone!",
-            view=view,
-            ephemeral=True
-        )
-    
-    @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, emoji="📋", row=2)
-    async def invite_macro_button(self, interaction: discord.Interaction, button: Button):
-        """Generate WoW invite macro (owner and assistants only)"""
-        # Get all signed up players (status = 'signed')
-        signed_signups = get_raid_signups(self.event_id, 'signed')
-        
-        if not signed_signups:
-            await interaction.response.send_message(
-                "❌ No one has signed up yet!",
-                ephemeral=True
-            )
-            return
-        
-        # Extract character names with realm (max 40 characters for WoW raid)
-        character_invites = []
-        for signup in signed_signups[:40]:
-            char_name = signup['character_name']
-            realm_slug = signup['realm_slug']
-            character_invites.append(f"{char_name}-{realm_slug}")
-        
-        # Create WoW invite macro
-        macro_lines = []
-        current_line = "/invite "
-        
-        for char in character_invites:
-            # Check if adding this character would exceed 255 character limit
-            test_line = current_line + char + " "
-            if len(test_line) > 250:  # Leave some buffer for safety
-                macro_lines.append(current_line.rstrip())
-                current_line = "/invite " + char + " "
-            else:
-                current_line += char + " "
-        
-        # Add the last line if it has content
-        if current_line.strip() != "/invite":
-            macro_lines.append(current_line.rstrip())
-        
-        # Format response
-        if len(macro_lines) == 1:
-            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players):\n```\n{macro_lines[0]}\n```"
-        else:
-            macro_text = "\n".join(macro_lines)
-            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players, {len(macro_lines)} lines):\n```\n{macro_text}\n```"
-        
-        response += "\n💡 Copy and paste this into WoW chat or create a macro with it!"
-        
-        await interaction.response.send_message(response, ephemeral=True)
 
 
 # ============================================================================
@@ -2431,6 +2351,61 @@ async def update_raid_message(message: discord.Message):
 # ============================================================================
 # BACKGROUND TASKS
 # ============================================================================
+
+async def update_started_events(bot):
+    """Check for events that have started and update their embed messages"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Find events that should show "started" status but might not be updated yet
+        # Look for events that started within the last 5 minutes to catch them promptly
+        cursor.execute("""
+            SELECT id, guild_id, channel_id, message_id, title,
+                   event_date, event_time
+            FROM raid_events
+            WHERE (event_date + event_time) BETWEEN 
+                (NOW() - INTERVAL '5 minutes') AND NOW()
+        """)
+        
+        recently_started = cursor.fetchall()
+        
+        for event in recently_started:
+            try:
+                # Get the Discord guild, channel, and message
+                guild = bot.get_guild(event['guild_id'])
+                if not guild:
+                    continue
+                    
+                channel = guild.get_channel(event['channel_id'])
+                if not channel:
+                    continue
+                
+                # Fetch and update the message
+                message = await channel.fetch_message(event['message_id'])
+                if message:
+                    embed, view = generate_raid_embed(event['id'])
+                    if embed:
+                        await message.edit(embed=embed, view=view)
+                        print(f"[TASK] Updated started event: {event['title']} in guild {event['guild_id']}")
+                        
+            except discord.NotFound:
+                # Message was deleted, could clean up database entry
+                print(f"[WARNING] Message not found for event {event['id']}: {event['title']}")
+                continue
+            except Exception as e:
+                print(f"[ERROR] Failed to update started event {event['id']}: {e}")
+                continue
+        
+        cursor.close()
+        conn.close()
+        
+        if recently_started:
+            print(f"[TASK] Checked {len(recently_started)} recently started events")
+            
+    except Exception as e:
+        print(f"[ERROR] TASK: Exception during started event updates: {e}")
+
 
 def cleanup_old_events():
     """Delete raid events that are more than 24 hours old"""

@@ -164,6 +164,13 @@ async def cleanup_old_raid_events():
     print("[TASK] Raid event cleanup completed.")
 
 
+@tasks.loop(minutes=1)
+async def update_started_events():
+    """Update raid events that have recently started."""
+    from raid_system import update_started_events
+    await update_started_events(client)
+
+
 # --- Discord Event Handlers ---
 @client.event
 async def on_ready():
@@ -186,6 +193,8 @@ async def on_ready():
         check_for_new_logs.start()
     if not cleanup_old_raid_events.is_running():
         cleanup_old_raid_events.start()
+    if not update_started_events.is_running():
+        update_started_events.start()
     
     # Start OAuth web server for Battle.net integration
     if not hasattr(client, 'oauth_server_started'):
