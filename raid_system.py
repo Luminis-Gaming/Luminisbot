@@ -1836,7 +1836,90 @@ class AdminPanelView(View):
         self.admin_id = admin_id
         self.is_owner = str(event['created_by']) == str(admin_id)
     
-    @discord.ui.button(label="Move Player", style=discord.ButtonStyle.primary, emoji="➡️", row=0)
+    @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, emoji="✏️", row=0)
+    async def edit_event_button(self, interaction: discord.Interaction, button: Button):
+        """Edit event details (owner and assistants only)"""
+        # Show edit modal with the event we already have
+        modal = EditEventModal(self.event)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Delete Event", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    async def delete_event_button(self, interaction: discord.Interaction, button: Button):
+        """Delete event (owner and assistants only)"""
+        # Confirm deletion using the event we already have
+        view = ConfirmDeleteView(self.event_id, self.event['message_id'])
+        await interaction.response.send_message(
+            f"⚠️ Are you sure you want to delete the event **{self.event['title']}**?\nThis will remove all signups and cannot be undone!",
+            view=view,
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, emoji="📋", row=0)
+    async def invite_macro_button(self, interaction: discord.Interaction, button: Button):
+        """Generate WoW invite macro (owner and assistants only)"""
+        # Get all signed up players (status = 'signed')
+        signed_signups = get_raid_signups(self.event_id, 'signed')
+        
+        if not signed_signups:
+            await interaction.response.send_message(
+                "❌ No one has signed up yet!",
+                ephemeral=True
+            )
+            return
+        
+        # Extract character names with realm (max 40 characters for WoW raid)
+        character_invites = []
+        for signup in signed_signups[:40]:
+            char_name = signup['character_name']
+            realm_slug = signup['realm_slug']
+            character_invites.append(f"{char_name}-{realm_slug}")
+        
+        # Create WoW invite macro
+        macro_lines = []
+        current_line = "/invite "
+        
+        for char in character_invites:
+            # Check if adding this character would exceed 255 character limit
+            test_line = current_line + char + " "
+            if len(test_line) > 250:  # Leave some buffer for safety
+                macro_lines.append(current_line.rstrip())
+                current_line = "/invite " + char + " "
+            else:
+                current_line += char + " "
+        
+        # Add the last line if it has content
+        if current_line.strip() != "/invite":
+            macro_lines.append(current_line.rstrip())
+        
+        # Format response
+        if len(macro_lines) == 1:
+            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players):\n```\n{macro_lines[0]}\n```"
+        else:
+            macro_text = "\n".join(macro_lines)
+            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players, {len(macro_lines)} lines):\n```\n{macro_text}\n```"
+        
+        response += "\n💡 Copy and paste this into WoW chat or create a macro with it!"
+        
+        await interaction.response.send_message(response, ephemeral=True)
+    
+    @discord.ui.button(label="Manage Assistants", style=discord.ButtonStyle.secondary, emoji="👥", row=1)
+    async def manage_assistants_button(self, interaction: discord.Interaction, button: Button):
+        """Manage event assistants (owner only)"""
+        if not self.is_owner:
+            await interaction.response.send_message(
+                "❌ Only the event creator can manage assistants!",
+                ephemeral=True
+            )
+            return
+        
+        view = ManageAssistantsView(self.event_id)
+        await interaction.response.send_message(
+            "Enter the Discord User ID or mention of the user to add as assistant:",
+            view=view,
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="Move Player", style=discord.ButtonStyle.primary, emoji="➡️", row=1)
     async def move_player_button(self, interaction: discord.Interaction, button: Button):
         """Move a player to a different status"""
         # Get all signups for the event
@@ -1860,7 +1943,7 @@ class AdminPanelView(View):
             ephemeral=True
         )
     
-    @discord.ui.button(label="Remove Player", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    @discord.ui.button(label="Remove Player", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
     async def remove_player_button(self, interaction: discord.Interaction, button: Button):
         """Remove a player from the event"""
         # Get all signups for the event
@@ -1883,8 +1966,6 @@ class AdminPanelView(View):
             view=view,
             ephemeral=True
         )
-    
-    @discord.ui.button(label="Manage Assistants", style=discord.ButtonStyle.secondary, emoji="👥", row=1)
     async def manage_assistants_button(self, interaction: discord.Interaction, button: Button):
         """Manage event assistants (owner only)"""
         if not self.is_owner:
@@ -1904,17 +1985,68 @@ class AdminPanelView(View):
     @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, emoji="✏️", row=2)
     async def edit_event_button(self, interaction: discord.Interaction, button: Button):
         """Edit event details (owner and assistants only)"""
-        await handle_edit_event_click(interaction)
+        # Show edit modal with the event we already have
+        modal = EditEventModal(self.event)
+        await interaction.response.send_modal(modal)
     
     @discord.ui.button(label="Delete Event", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
     async def delete_event_button(self, interaction: discord.Interaction, button: Button):
         """Delete event (owner and assistants only)"""
-        await handle_delete_event_click(interaction)
+        # Confirm deletion using the event we already have
+        view = ConfirmDeleteView(self.event_id, self.event['message_id'])
+        await interaction.response.send_message(
+            f"⚠️ Are you sure you want to delete the event **{self.event['title']}**?\nThis will remove all signups and cannot be undone!",
+            view=view,
+            ephemeral=True
+        )
     
     @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, emoji="📋", row=2)
     async def invite_macro_button(self, interaction: discord.Interaction, button: Button):
         """Generate WoW invite macro (owner and assistants only)"""
-        await handle_invite_macro_click(interaction)
+        # Get all signed up players (status = 'signed')
+        signed_signups = get_raid_signups(self.event_id, 'signed')
+        
+        if not signed_signups:
+            await interaction.response.send_message(
+                "❌ No one has signed up yet!",
+                ephemeral=True
+            )
+            return
+        
+        # Extract character names with realm (max 40 characters for WoW raid)
+        character_invites = []
+        for signup in signed_signups[:40]:
+            char_name = signup['character_name']
+            realm_slug = signup['realm_slug']
+            character_invites.append(f"{char_name}-{realm_slug}")
+        
+        # Create WoW invite macro
+        macro_lines = []
+        current_line = "/invite "
+        
+        for char in character_invites:
+            # Check if adding this character would exceed 255 character limit
+            test_line = current_line + char + " "
+            if len(test_line) > 250:  # Leave some buffer for safety
+                macro_lines.append(current_line.rstrip())
+                current_line = "/invite " + char + " "
+            else:
+                current_line += char + " "
+        
+        # Add the last line if it has content
+        if current_line.strip() != "/invite":
+            macro_lines.append(current_line.rstrip())
+        
+        # Format response
+        if len(macro_lines) == 1:
+            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players):\n```\n{macro_lines[0]}\n```"
+        else:
+            macro_text = "\n".join(macro_lines)
+            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players, {len(macro_lines)} lines):\n```\n{macro_text}\n```"
+        
+        response += "\n💡 Copy and paste this into WoW chat or create a macro with it!"
+        
+        await interaction.response.send_message(response, ephemeral=True)
 
 
 # ============================================================================
