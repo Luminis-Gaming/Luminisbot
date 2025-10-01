@@ -1442,8 +1442,8 @@ class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
             cursor.close()
             conn.close()
             
-            # Update the embed
-            message = interaction.message if interaction.message else await interaction.channel.fetch_message(self.event['message_id'])
+            # Update the embed - always use the stored message_id to get the original raid message
+            message = await interaction.channel.fetch_message(self.event['message_id'])
             embed, view = generate_raid_embed(self.event['id'])
             if embed:
                 await message.edit(embed=embed, view=view)
