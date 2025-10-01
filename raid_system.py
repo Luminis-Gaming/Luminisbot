@@ -886,9 +886,9 @@ def generate_raid_embed(event_id: int):
     unix_timestamp = int(event_datetime.timestamp())
     
     if is_past:
-        # For past events, use Discord native timestamp with red warning
-        # Discord will automatically show the correct local time and "X minutes ago" on hover
-        date_display = f"```diff\n- ⚠️ EVENT STARTED\n```<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
+        # For past events, use Discord native timestamp with red warning text
+        # Using ANSI escape codes for red text without a code block background
+        date_display = f"**🚨 EVENT STARTED** \n<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
     else:
         # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
         # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
@@ -2359,13 +2359,13 @@ async def update_started_events(bot):
         cursor = conn.cursor()
         
         # Find events that should show "started" status but might not be updated yet
-        # Look for events that started within the last 5 minutes to catch them promptly
+        # Look for events that started within the last 10 minutes to catch them promptly
         cursor.execute("""
             SELECT id, guild_id, channel_id, message_id, title,
                    event_date, event_time
             FROM raid_events
             WHERE (event_date + event_time) BETWEEN 
-                (NOW() - INTERVAL '5 minutes') AND NOW()
+                (NOW() - INTERVAL '10 minutes') AND NOW()
         """)
         
         recently_started = cursor.fetchall()
@@ -2387,21 +2387,15 @@ async def update_started_events(bot):
                     embed, view = generate_raid_embed(event['id'])
                     if embed:
                         await message.edit(embed=embed, view=view)
-                        print(f"[TASK] Updated started event: {event['title']} in guild {event['guild_id']}")
                         
             except discord.NotFound:
-                # Message was deleted, could clean up database entry
-                print(f"[WARNING] Message not found for event {event['id']}: {event['title']}")
+                # Message was deleted
                 continue
             except Exception as e:
-                print(f"[ERROR] Failed to update started event {event['id']}: {e}")
                 continue
         
         cursor.close()
         conn.close()
-        
-        if recently_started:
-            print(f"[TASK] Checked {len(recently_started)} recently started events")
             
     except Exception as e:
         print(f"[ERROR] TASK: Exception during started event updates: {e}")
