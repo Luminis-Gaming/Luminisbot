@@ -1108,21 +1108,6 @@ class RaidButtonsView(View):
         """Handle change role button click"""
         await handle_change_role_click(interaction)
     
-    @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, custom_id="raid:edit", emoji="✏️", row=1)
-    async def edit_button(self, interaction: discord.Interaction, button: Button):
-        """Handle edit event button click (creator only)"""
-        await handle_edit_event_click(interaction)
-    
-    @discord.ui.button(label="Delete Event", style=discord.ButtonStyle.danger, custom_id="raid:delete", emoji="🗑️", row=1)
-    async def delete_button(self, interaction: discord.Interaction, button: Button):
-        """Handle delete event button click (creator only)"""
-        await handle_delete_event_click(interaction)
-    
-    @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, custom_id="raid:invitemacro", emoji="📋", row=1)
-    async def invitemacro_button(self, interaction: discord.Interaction, button: Button):
-        """Generate WoW invite macro for all signed up players"""
-        await handle_invite_macro_click(interaction)
-    
     @discord.ui.button(label="Admin Panel", style=discord.ButtonStyle.secondary, custom_id="raid:admin", emoji="⚙️", row=1)
     async def admin_button(self, interaction: discord.Interaction, button: Button):
         """Open admin panel (owner and assistants only)"""
@@ -1915,6 +1900,21 @@ class AdminPanelView(View):
             view=view,
             ephemeral=True
         )
+    
+    @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, emoji="✏️", row=2)
+    async def edit_event_button(self, interaction: discord.Interaction, button: Button):
+        """Edit event details (owner and assistants only)"""
+        await handle_edit_event_click(interaction)
+    
+    @discord.ui.button(label="Delete Event", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
+    async def delete_event_button(self, interaction: discord.Interaction, button: Button):
+        """Delete event (owner and assistants only)"""
+        await handle_delete_event_click(interaction)
+    
+    @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, emoji="📋", row=2)
+    async def invite_macro_button(self, interaction: discord.Interaction, button: Button):
+        """Generate WoW invite macro (owner and assistants only)"""
+        await handle_invite_macro_click(interaction)
 
 
 # ============================================================================
@@ -2032,17 +2032,18 @@ async def handle_change_role_click(interaction: discord.Interaction):
 
 
 async def handle_edit_event_click(interaction: discord.Interaction):
-    """Handle edit event button click (creator only)"""
+    """Handle edit event button click (owner and assistants only)"""
     # Get event
     event = get_raid_event(interaction.message.id)
     if not event:
         await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
         return
     
-    # Check if user is the creator
-    if str(interaction.user.id) != str(event['created_by']):
+    # Check if user is admin (owner or assistant)
+    event_id = event['id']
+    if not is_event_admin(event_id, str(interaction.user.id)):
         await interaction.response.send_message(
-            "❌ Only the event creator can edit this event!",
+            "❌ Only the event creator and assistants can edit this event!",
             ephemeral=True
         )
         return
@@ -2053,17 +2054,18 @@ async def handle_edit_event_click(interaction: discord.Interaction):
 
 
 async def handle_delete_event_click(interaction: discord.Interaction):
-    """Handle delete event button click (creator only)"""
+    """Handle delete event button click (owner and assistants only)"""
     # Get event
     event = get_raid_event(interaction.message.id)
     if not event:
         await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
         return
     
-    # Check if user is the creator
-    if str(interaction.user.id) != str(event['created_by']):
+    # Check if user is admin (owner or assistant)
+    event_id = event['id']
+    if not is_event_admin(event_id, str(interaction.user.id)):
         await interaction.response.send_message(
-            "❌ Only the event creator can delete this event!",
+            "❌ Only the event creator and assistants can delete this event!",
             ephemeral=True
         )
         return
@@ -2078,22 +2080,21 @@ async def handle_delete_event_click(interaction: discord.Interaction):
 
 
 async def handle_invite_macro_click(interaction: discord.Interaction):
-    """Generate WoW invite macro for all signed up players (creator only)"""
+    """Generate WoW invite macro for all signed up players (owner and assistants only)"""
     # Get event
     event = get_raid_event(interaction.message.id)
     if not event:
         await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
         return
     
-    # Check if user is the creator
-    if str(interaction.user.id) != str(event['created_by']):
+    # Check if user is admin (owner or assistant)
+    event_id = event['id']
+    if not is_event_admin(event_id, str(interaction.user.id)):
         await interaction.response.send_message(
-            "❌ Only the event creator can generate the invite macro!",
+            "❌ Only the event creator and assistants can generate the invite macro!",
             ephemeral=True
         )
         return
-    
-    event_id = event['id']
     
     # Get all signed up players (status = 'signed')
     signed_signups = get_raid_signups(event_id, 'signed')
@@ -2207,7 +2208,7 @@ async def handle_admin_panel_click(interaction: discord.Interaction):
     
     embed.add_field(
         name="📝 Available Actions",
-        value="• **Move Player** - Change a player's status\n• **Remove Player** - Remove a player from the event\n• **Manage Assistants** - Grant/revoke admin rights",
+        value="• **Move Player** - Change a player's status\n• **Remove Player** - Remove a player from the event\n• **Manage Assistants** - Grant/revoke admin rights\n• **Edit Event** - Change event details\n• **Delete Event** - Remove the entire event\n• **Invite Macro** - Generate WoW invite commands",
         inline=False
     )
     
