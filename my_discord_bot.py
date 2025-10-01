@@ -167,7 +167,6 @@ async def cleanup_old_raid_events():
 @tasks.loop(minutes=1)
 async def update_started_events():
     """Update raid events that have recently started."""
-    print("[DEBUG] Running update_started_events task...")
     from raid_system import update_started_events
     await update_started_events(client)
 

@@ -886,9 +886,9 @@ def generate_raid_embed(event_id: int):
     unix_timestamp = int(event_datetime.timestamp())
     
     if is_past:
-        # For past events, use Discord native timestamp with red warning text
-        # Using ANSI escape codes for red text without a code block background
-        date_display = f"**🚨 EVENT STARTED** \n<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
+        # For past events, use red ANSI text for the warning
+        # This will show red text without a copyable background
+        date_display = f"```ansi\n\u001b[0;31m🚨 EVENT STARTED\u001b[0m\n```<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
     else:
         # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
         # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
@@ -2358,27 +2358,6 @@ async def update_started_events(bot):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Debug: First let's see all events and their times
-        cursor.execute("""
-            SELECT id, title, event_date, event_time,
-                   (event_date + event_time) as event_datetime_local,
-                   (event_date + event_time) AT TIME ZONE 'Europe/Berlin' AT TIME ZONE 'UTC' as event_datetime_utc,
-                   NOW() as current_time_utc
-            FROM raid_events
-            ORDER BY event_date DESC, event_time DESC
-            LIMIT 5
-        """)
-        
-        all_events = cursor.fetchall()
-        print(f"[DEBUG] Current time check - found {len(all_events)} recent events:")
-        for event in all_events:
-            # event is a tuple: (id, title, event_date, event_time, event_datetime_local, event_datetime_utc, current_time_utc)
-            print(f"  Event: {event[1]}")
-            print(f"    Local time: {event[4]} (Europe/Berlin)")
-            print(f"    UTC time: {event[5]}")
-            print(f"    Current UTC: {event[6]}")
-            print(f"    ---")
-        
         # Find events that should show "started" status but might not be updated yet
         # Convert both times to UTC for proper comparison
         # Event times are stored in Europe/Berlin timezone, so we need to convert them to UTC
@@ -2392,12 +2371,6 @@ async def update_started_events(bot):
         
         recently_started = cursor.fetchall()
         
-        # Debug: Print if we found any events
-        print(f"[DEBUG] Found {len(recently_started)} recently started events")
-        for event in recently_started:
-            # event is a tuple: (id, guild_id, channel_id, message_id, title, event_date, event_time)
-            print(f"  Started event: {event[4]} - Event ID: {event[0]}")
-        
         for event in recently_started:
             try:
                 # Access tuple elements by index
@@ -2410,12 +2383,10 @@ async def update_started_events(bot):
                 # Get the Discord guild, channel, and message
                 guild = bot.get_guild(guild_id)
                 if not guild:
-                    print(f"[DEBUG] Guild not found: {guild_id}")
                     continue
                     
                 channel = guild.get_channel(channel_id)
                 if not channel:
-                    print(f"[DEBUG] Channel not found: {channel_id}")
                     continue
                 
                 # Fetch and update the message
@@ -2424,13 +2395,10 @@ async def update_started_events(bot):
                     embed, view = generate_raid_embed(event_id)
                     if embed:
                         await message.edit(embed=embed, view=view)
-                        print(f"[DEBUG] Updated event: {title}")
                         
             except discord.NotFound:
-                print(f"[DEBUG] Message not found: {message_id}")
                 continue
             except Exception as e:
-                print(f"[DEBUG] Error updating event: {e}")
                 continue
         
         cursor.close()
