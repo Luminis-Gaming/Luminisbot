@@ -2358,11 +2358,28 @@ async def update_started_events(bot):
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # Debug: First let's see all events and their times
+        cursor.execute("""
+            SELECT id, title, event_date, event_time,
+                   (event_date + event_time) as event_datetime,
+                   NOW() as current_time
+            FROM raid_events
+            ORDER BY event_date DESC, event_time DESC
+            LIMIT 5
+        """)
+        
+        all_events = cursor.fetchall()
+        print(f"[DEBUG] Current time check - found {len(all_events)} recent events:")
+        for event in all_events:
+            print(f"  Event: {event['title']} - Time: {event['event_datetime']} (Now: {event['current_time']})")
+        
         # Find events that should show "started" status but might not be updated yet
         # Look for events that started within the last 10 minutes to catch them promptly
         cursor.execute("""
             SELECT id, guild_id, channel_id, message_id, title,
-                   event_date, event_time
+                   event_date, event_time,
+                   (event_date + event_time) as event_datetime,
+                   NOW() as current_time
             FROM raid_events
             WHERE (event_date + event_time) BETWEEN 
                 (NOW() - INTERVAL '10 minutes') AND NOW()
@@ -2370,15 +2387,22 @@ async def update_started_events(bot):
         
         recently_started = cursor.fetchall()
         
+        # Debug: Print if we found any events
+        print(f"[DEBUG] Found {len(recently_started)} recently started events")
+        for event in recently_started:
+            print(f"  Started event: {event['title']} - {event['event_datetime']}")
+        
         for event in recently_started:
             try:
                 # Get the Discord guild, channel, and message
                 guild = bot.get_guild(event['guild_id'])
                 if not guild:
+                    print(f"[DEBUG] Guild not found: {event['guild_id']}")
                     continue
                     
                 channel = guild.get_channel(event['channel_id'])
                 if not channel:
+                    print(f"[DEBUG] Channel not found: {event['channel_id']}")
                     continue
                 
                 # Fetch and update the message
@@ -2387,11 +2411,13 @@ async def update_started_events(bot):
                     embed, view = generate_raid_embed(event['id'])
                     if embed:
                         await message.edit(embed=embed, view=view)
+                        print(f"[DEBUG] Updated event: {event['title']}")
                         
             except discord.NotFound:
-                # Message was deleted
+                print(f"[DEBUG] Message not found: {event['message_id']}")
                 continue
             except Exception as e:
+                print(f"[DEBUG] Error updating event: {e}")
                 continue
         
         cursor.close()
