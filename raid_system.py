@@ -886,9 +886,8 @@ def generate_raid_embed(event_id: int):
     unix_timestamp = int(event_datetime.timestamp())
     
     if is_past:
-        # For past events, use red ANSI text for the warning
-        # This will show red text without a copyable background
-        date_display = f"```ansi\n\u001b[0;31m🚨 EVENT STARTED\u001b[0m\n```<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
+        # For past events, use red ANSI text (same method as parse% colors)
+        date_display = f"\033[31m🚨 EVENT STARTED\033[0m\n<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
     else:
         # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
         # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
