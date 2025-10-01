@@ -1736,7 +1736,7 @@ class ManageAssistantsView(View):
             )
             return
         
-        view = RemoveAssistantSelectView(self.event_id, assistants)
+        view = RemoveAssistantSelectView(self.event_id, assistants, interaction.guild)
         await interaction.response.send_message(
             "Select an assistant to remove:",
             view=view,
@@ -1796,16 +1796,30 @@ class AddAssistantSelectView(View):
 class RemoveAssistantSelectView(View):
     """View for selecting an assistant to remove"""
     
-    def __init__(self, event_id, assistants):
+    def __init__(self, event_id, assistants, guild):
         super().__init__(timeout=60)
         self.event_id = event_id
+        self.guild = guild
         
-        # Create dropdown with assistants
+        # Create dropdown with assistants showing usernames
         options = []
         for assistant in assistants[:25]:
+            user_id = str(assistant['discord_id'])
+            
+            # Try to get the member from the guild to show their display name
+            member = guild.get_member(int(user_id))
+            if member:
+                # Show display name (nickname if set, otherwise username)
+                display_name = member.display_name
+                username = member.name
+                label = f"{display_name} (@{username})"
+            else:
+                # Fallback if member not found in guild
+                label = f"User ID: {user_id}"
+            
             options.append(discord.SelectOption(
-                label=f"User ID: {assistant['discord_id']}",
-                value=assistant['discord_id']
+                label=label,
+                value=user_id
             ))
         
         self.assistant_select = Select(
@@ -1820,11 +1834,15 @@ class RemoveAssistantSelectView(View):
         """Handle assistant selection"""
         user_id = self.assistant_select.values[0]
         
+        # Get user info for confirmation message
+        member = self.guild.get_member(int(user_id))
+        user_mention = member.mention if member else f"<@{user_id}>"
+        
         # Remove assistant
         remove_event_assistant(self.event_id, user_id)
         
         await interaction.response.send_message(
-            f"✅ Removed <@{user_id}> as an event assistant!",
+            f"✅ Removed {user_mention} as an event assistant!",
             ephemeral=True
         )
 
