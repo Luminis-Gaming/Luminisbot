@@ -265,7 +265,7 @@ def abbreviate_class_name(class_name: str) -> str:
 
 def parse_date(date_str: str) -> date:
     """
-    Parse date string in DD/MM/YYYY or YYYY-MM-DD format.
+    Parse date string in DD/MM/YYYY, DD.MM.YYYY, or YYYY-MM-DD format.
     
     Args:
         date_str: Date string to parse
@@ -284,6 +284,14 @@ def parse_date(date_str: str) -> date:
         day, month, year = map(int, parts)
         return date(year, month, day)
     
+    # Try DD.MM.YYYY format
+    elif '.' in date_str:
+        parts = date_str.split('.')
+        if len(parts) != 3:
+            raise ValueError("Date must be in DD.MM.YYYY format (e.g., 25.12.2025)")
+        day, month, year = map(int, parts)
+        return date(year, month, day)
+    
     # Try YYYY-MM-DD format
     elif '-' in date_str:
         parts = date_str.split('-')
@@ -293,7 +301,7 @@ def parse_date(date_str: str) -> date:
         return date(year, month, day)
     
     else:
-        raise ValueError("Date must be in DD/MM/YYYY or YYYY-MM-DD format")
+        raise ValueError("Date must be in DD/MM/YYYY, DD.MM.YYYY, or YYYY-MM-DD format")
 
 def parse_time(time_str: str) -> time:
     """

@@ -379,8 +379,8 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
         self.add_item(self.title_input)
         
         self.date_input = discord.ui.TextInput(
-            label="Date (DD/MM/YYYY or YYYY-MM-DD)",
-            placeholder="e.g., 06/10/2025 or 2025-10-06",
+            label="Date (DD/MM/YYYY, DD.MM.YYYY, or YYYY-MM-DD)",
+            placeholder="e.g., 06/10/2025, 06.10.2025, or 2025-10-06",
             max_length=20,
             required=True
         )
