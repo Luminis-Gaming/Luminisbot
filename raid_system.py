@@ -1744,7 +1744,7 @@ class ManageAssistantsView(View):
             )
             return
         
-        view = RemoveAssistantSelectView(self.event_id, assistants, interaction.guild)
+        view = RemoveAssistantSelectView(self.event_id, assistants)
         await interaction.response.send_message(
             "Select an assistant to remove:",
             view=view,
@@ -1802,57 +1802,43 @@ class AddAssistantSelectView(View):
 
 
 class RemoveAssistantSelectView(View):
-    """View for selecting an assistant to remove"""
+    """View for selecting an assistant to remove using Discord's UserSelect"""
     
-    def __init__(self, event_id, assistants, guild):
+    def __init__(self, event_id, assistants):
         super().__init__(timeout=60)
         self.event_id = event_id
-        self.guild = guild
+        self.assistant_ids = [str(assistant['discord_id']) for assistant in assistants]
         
-        # Create dropdown with assistants showing usernames
-        options = []
-        for assistant in assistants[:25]:
-            user_id = str(assistant['discord_id'])
-            
-            # Try to get the member from the guild to show their display name
-            member = guild.get_member(int(user_id))
-            if member:
-                # Show display name (nickname if set, otherwise username)
-                display_name = member.display_name
-                username = member.name
-                label = f"{display_name} (@{username})"
-            else:
-                # Fallback if member not found in guild
-                label = f"User ID: {user_id}"
-            
-            options.append(discord.SelectOption(
-                label=label,
-                value=user_id
-            ))
-        
-        self.assistant_select = Select(
-            placeholder="Choose an assistant to remove...",
-            options=options,
-            row=0
+        # Use Discord's native UserSelect - shows usernames automatically!
+        self.user_select = discord.ui.UserSelect(
+            placeholder="Select an assistant to remove",
+            min_values=1,
+            max_values=1
         )
-        self.assistant_select.callback = self.assistant_selected
-        self.add_item(self.assistant_select)
+        self.user_select.callback = self.user_selected
+        self.add_item(self.user_select)
     
-    async def assistant_selected(self, interaction: discord.Interaction):
-        """Handle assistant selection"""
-        user_id = self.assistant_select.values[0]
+    async def user_selected(self, interaction: discord.Interaction):
+        """Handle user selection"""
+        selected_user = self.user_select.values[0]
+        user_id = str(selected_user.id)
         
-        # Get user info for confirmation message
-        member = self.guild.get_member(int(user_id))
-        user_mention = member.mention if member else f"<@{user_id}>"
+        # Check if the selected user is actually an assistant
+        if user_id not in self.assistant_ids:
+            await interaction.response.send_message(
+                f"❌ {selected_user.mention} is not an assistant for this event!",
+                ephemeral=True
+            )
+            return
         
         # Remove assistant
         remove_event_assistant(self.event_id, user_id)
         
         await interaction.response.send_message(
-            f"✅ Removed {user_mention} as an event assistant!",
+            f"✅ Removed {selected_user.mention} as an event assistant!",
             ephemeral=True
         )
+        self.stop()
 
 
 class AdminPanelView(View):
