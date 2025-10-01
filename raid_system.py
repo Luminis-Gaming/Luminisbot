@@ -886,18 +886,29 @@ def generate_raid_embed(event_id: int):
     unix_timestamp = int(event_datetime.timestamp())
     
     if is_past:
-        # For past events, use red circle emoji and bold text (can't make text red in embeds without code blocks)
-        date_display = f"```ansi\n\033[31m🚨 EVENT STARTED\033[0m\n```<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
+        # For past events, put everything in one ANSI code block (no copy icon)
+        date_display = f"```ansi\n\033[31m🚨 EVENT STARTED\033[0m\n```"
+        # Add the Discord timestamps as a separate line
+        timestamp_display = f"<t:{unix_timestamp}:F> - <t:{unix_timestamp}:R>"
     else:
         # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
         # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
         date_display = f"<t:{unix_timestamp}:F> - ⏰ <t:{unix_timestamp}:R>"
+        timestamp_display = None
     
     embed.add_field(
         name="\u200b",  # Zero-width space for no visible title
         value=date_display,
         inline=False
     )
+    
+    # For started events, add the timestamp as a separate field
+    if is_past and timestamp_display:
+        embed.add_field(
+            name="\u200b",  # Zero-width space for no visible title
+            value=timestamp_display,
+            inline=False
+        )
     
     # Get signed up players only (for main roster)
     signed_signups = get_raid_signups(event_id, 'signed')
