@@ -107,7 +107,9 @@ def run_migrations():
                 event_date DATE NOT NULL,
                 event_time TIME NOT NULL,
                 created_by BIGINT NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                log_url TEXT,
+                log_detected_at TIMESTAMP WITH TIME ZONE
             );
         """)
         
@@ -175,6 +177,27 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ character_preferences table ready")
         
+        # Create event_assistants table for raid admin delegation
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS event_assistants (
+                event_id INTEGER NOT NULL REFERENCES raid_events(id) ON DELETE CASCADE,
+                discord_id TEXT NOT NULL,
+                granted_by BIGINT NOT NULL,
+                granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                PRIMARY KEY (event_id, discord_id)
+            );
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_event_assistants_event ON event_assistants(event_id);
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_event_assistants_discord ON event_assistants(discord_id);
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ event_assistants table ready")
+        
         # Grant permissions
         cursor.execute("""
             GRANT ALL PRIVILEGES ON TABLE oauth_states TO luminisbot;
@@ -198,6 +221,10 @@ def run_migrations():
         
         cursor.execute("""
             GRANT ALL PRIVILEGES ON TABLE character_preferences TO luminisbot;
+        """)
+        
+        cursor.execute("""
+            GRANT ALL PRIVILEGES ON TABLE event_assistants TO luminisbot;
         """)
         
         cursor.execute("""

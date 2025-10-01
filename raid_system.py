@@ -544,6 +544,21 @@ def get_raid_event(message_id: int):
     
     return event
 
+def get_raid_event_by_id(event_id: int):
+    """Get raid event by event ID"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT * FROM raid_events WHERE id = %s
+    """, (event_id,))
+    
+    event = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    return event
+
 def get_raid_signups(event_id: int, status: str = None):
     """Get all signups for a raid event, optionally filtered by status"""
     conn = get_db_connection()
@@ -626,6 +641,166 @@ def get_user_signup(event_id: int, discord_id: str):
     conn.close()
     
     return signup
+
+def is_event_admin(event_id: int, discord_id: str) -> bool:
+    """Check if user is event owner or assistant"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    # Check if user is the creator
+    cursor.execute("""
+        SELECT created_by FROM raid_events WHERE id = %s
+    """, (event_id,))
+    event = cursor.fetchone()
+    
+    if event and str(event['created_by']) == str(discord_id):
+        cursor.close()
+        conn.close()
+        return True
+    
+    # Check if user is an assistant
+    cursor.execute("""
+        SELECT 1 FROM event_assistants
+        WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+    
+    is_assistant = cursor.fetchone() is not None
+    cursor.close()
+    conn.close()
+    
+    return is_assistant
+
+def get_event_assistants(event_id: int):
+    """Get all assistants for an event"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT discord_id, granted_by, granted_at
+        FROM event_assistants
+        WHERE event_id = %s
+        ORDER BY granted_at
+    """, (event_id,))
+    
+    assistants = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return assistants
+
+def add_event_assistant(event_id: int, discord_id: str, granted_by: int):
+    """Add an assistant to an event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO event_assistants (event_id, discord_id, granted_by)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (event_id, discord_id) DO NOTHING
+    """, (event_id, discord_id, granted_by))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def remove_event_assistant(event_id: int, discord_id: str):
+    """Remove an assistant from an event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        DELETE FROM event_assistants
+        WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def remove_raid_signup(event_id: int, discord_id: str):
+    """Remove a signup from a raid event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        DELETE FROM raid_signups
+        WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def update_signup_status(event_id: int, discord_id: str, new_status: str):
+    """Update a signup's status (for admin panel)"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        UPDATE raid_signups
+        SET status = %s
+        WHERE event_id = %s AND discord_id = %s
+    """, (new_status, event_id, discord_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def link_raid_log(event_id: int, log_url: str):
+    """Link a Warcraft Logs URL to a raid event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        UPDATE raid_events
+        SET log_url = %s, log_detected_at = NOW()
+        WHERE id = %s
+    """, (log_url, event_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def find_matching_raid_event(guild_id: int, log_timestamp: datetime, time_window_hours: int = 1):
+    """
+    Find raid event that matches the log timestamp.
+    Looks for events in the same Discord server (guild) within ±time_window_hours of the log.
+    
+    Args:
+        guild_id: Discord server (guild) ID where log was posted
+        log_timestamp: Timestamp of when the raid log started (in UTC)
+        time_window_hours: How many hours before/after to search (default: 1)
+    
+    Returns:
+        Event dict if match found, None otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    # Convert log timestamp from UTC to the guild's configured timezone
+    # Event times are stored in the guild's timezone (e.g., Europe/Berlin)
+    # So we need to compare apples to apples
+    tz = ZoneInfo(DEFAULT_TIMEZONE)
+    log_timestamp_local = log_timestamp.astimezone(tz)
+    log_date = log_timestamp_local.date()
+    log_time = log_timestamp_local.time()
+    
+    # Search for events in same guild on same date within time window
+    cursor.execute("""
+        SELECT * FROM raid_events
+        WHERE guild_id = %s
+        AND event_date = %s
+        AND log_url IS NULL
+        AND ABS(EXTRACT(EPOCH FROM (event_time - %s::time))) <= %s
+        ORDER BY ABS(EXTRACT(EPOCH FROM (event_time - %s::time)))
+        LIMIT 1
+    """, (guild_id, log_date, log_time, time_window_hours * 3600, log_time))
+    
+    event = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    return event
 
 def count_signups_by_role(event_id: int, status: str = 'signed'):
     """Count signups by role for an event"""
@@ -826,6 +1001,34 @@ def generate_raid_embed(event_id: int):
             inline=False
         )
     
+    # Benched section
+    benched_signups = get_raid_signups(event_id, 'benched')
+    if benched_signups:
+        benched_names = []
+        for signup in benched_signups:
+            spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
+            benched_names.append(f"{spec_emoji} {signup['character_name']}")
+        
+        benched_text = "\n".join(benched_names)
+        
+        # Safety check: Discord field value limit is 1024 characters
+        if len(benched_text) > 1024:
+            # Show first N players that fit, then add count
+            truncated_names = []
+            char_count = 0
+            for name in benched_names:
+                if char_count + len(name) + 1 > 1000:  # +1 for newline
+                    break
+                truncated_names.append(name)
+                char_count += len(name) + 1
+            benched_text = "\n".join(truncated_names) + f"\n_...and {len(benched_signups) - len(truncated_names)} more_"
+        
+        embed.add_field(
+            name=f"🪑 Benched ({len(benched_signups)})",
+            value=benched_text,
+            inline=False
+        )
+    
     # Absence section (comma-separated to save space)
     absent_signups = get_raid_signups(event_id, 'absent')
     if absent_signups:
@@ -845,7 +1048,10 @@ def generate_raid_embed(event_id: int):
     
     embed.set_footer(text="Click a button below to sign up or change your status")
     
-    return embed
+    # Create view with optional Show Logs button
+    view = create_raid_buttons_view(event.get('log_url'))
+    
+    return embed, view
 
 # ============================================================================
 # DISCORD UI COMPONENTS
@@ -896,6 +1102,30 @@ class RaidButtonsView(View):
     async def invitemacro_button(self, interaction: discord.Interaction, button: Button):
         """Generate WoW invite macro for all signed up players"""
         await handle_invite_macro_click(interaction)
+    
+    @discord.ui.button(label="Admin Panel", style=discord.ButtonStyle.secondary, custom_id="raid:admin", emoji="⚙️", row=1)
+    async def admin_button(self, interaction: discord.Interaction, button: Button):
+        """Open admin panel (owner and assistants only)"""
+        await handle_admin_panel_click(interaction)
+
+
+def create_raid_buttons_view(log_url: str = None):
+    """Create raid buttons view with optional Show Logs button"""
+    view = RaidButtonsView()
+    
+    # Add Show Logs button if log URL exists
+    if log_url:
+        # Discord link buttons open URLs directly
+        show_logs_button = Button(
+            label="Show Logs",
+            style=discord.ButtonStyle.link,
+            emoji="📊",
+            url=log_url,
+            row=2
+        )
+        view.add_item(show_logs_button)
+    
+    return view
 
 
 class CharacterSelectDropdown(Select):
@@ -1209,9 +1439,9 @@ class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
             
             # Update the embed
             message = interaction.message if interaction.message else await interaction.channel.fetch_message(self.event['message_id'])
-            embed = generate_raid_embed(self.event['id'])
+            embed, view = generate_raid_embed(self.event['id'])
             if embed:
-                await message.edit(embed=embed)
+                await message.edit(embed=embed, view=view)
             
             await interaction.response.send_message(
                 f"✅ Event updated successfully!\n**{new_title}** - {new_date.strftime('%d/%m/%Y')} at {new_time.strftime('%H:%M')}",
@@ -1282,6 +1512,391 @@ class ConfirmDeleteView(View):
             ephemeral=True
         )
         self.stop()
+
+
+class MovePlayerSelectView(View):
+    """View for selecting a player to move"""
+    
+    def __init__(self, event_id, signups):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        
+        # Create dropdown with players (max 25 options)
+        options = []
+        for signup in signups[:25]:
+            status_emoji = {'signed': '✅', 'late': '🕐', 'tentative': '⚖️', 'benched': '🪑', 'absent': '❌'}.get(signup['status'], '❓')
+            options.append(discord.SelectOption(
+                label=f"{signup['character_name']} ({signup['status'].title()})",
+                description=f"{signup['character_class']} - {signup['role']}",
+                value=f"{signup['discord_id']}|{signup['character_name']}|{signup['status']}",
+                emoji=status_emoji
+            ))
+        
+        self.player_select = Select(
+            placeholder="Choose a player to move...",
+            options=options,
+            row=0
+        )
+        self.player_select.callback = self.player_selected
+        self.add_item(self.player_select)
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        """Handle player selection"""
+        discord_id, char_name, current_status = self.player_select.values[0].split('|')
+        
+        # Show status options
+        view = MovePlayerStatusView(self.event_id, discord_id, char_name, current_status)
+        await interaction.response.send_message(
+            f"Move **{char_name}** to which status?",
+            view=view,
+            ephemeral=True
+        )
+
+
+class MovePlayerStatusView(View):
+    """View for selecting new status for a player"""
+    
+    def __init__(self, event_id, discord_id, char_name, current_status):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        self.discord_id = discord_id
+        self.char_name = char_name
+        self.current_status = current_status
+        
+        # Create dropdown with status options (excluding current status)
+        statuses = [
+            ('signed', '✅ Signed', 'Move to main roster'),
+            ('late', '🕐 Late', 'Mark as arriving late'),
+            ('tentative', '⚖️ Tentative', 'Mark as tentative'),
+            ('benched', '🪑 Benched', 'Move to bench'),
+            ('absent', '❌ Absent', 'Mark as absent')
+        ]
+        
+        options = []
+        for status_value, status_label, status_desc in statuses:
+            if status_value != current_status:
+                options.append(discord.SelectOption(
+                    label=status_label,
+                    description=status_desc,
+                    value=status_value
+                ))
+        
+        self.status_select = Select(
+            placeholder="Choose new status...",
+            options=options,
+            row=0
+        )
+        self.status_select.callback = self.status_selected
+        self.add_item(self.status_select)
+    
+    async def status_selected(self, interaction: discord.Interaction):
+        """Handle status selection"""
+        new_status = self.status_select.values[0]
+        
+        # Update the status
+        update_signup_status(self.event_id, self.discord_id, new_status)
+        
+        # Update the raid message
+        event = get_raid_event_by_id(self.event_id)
+        if event:
+            try:
+                channel = interaction.guild.get_channel(event['channel_id'])
+                message = await channel.fetch_message(event['message_id'])
+                embed, view = generate_raid_embed(self.event_id)
+                await message.edit(embed=embed, view=view)
+            except:
+                pass
+        
+        status_names = {'signed': 'Signed', 'late': 'Late', 'tentative': 'Tentative', 'benched': 'Benched', 'absent': 'Absent'}
+        await interaction.response.send_message(
+            f"✅ Moved **{self.char_name}** to **{status_names[new_status]}**!",
+            ephemeral=True
+        )
+
+
+class RemovePlayerSelectView(View):
+    """View for selecting a player to remove"""
+    
+    def __init__(self, event_id, signups):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        
+        # Create dropdown with players (max 25 options)
+        options = []
+        for signup in signups[:25]:
+            status_emoji = {'signed': '✅', 'late': '🕐', 'tentative': '⚖️', 'benched': '🪑', 'absent': '❌'}.get(signup['status'], '❓')
+            options.append(discord.SelectOption(
+                label=f"{signup['character_name']} ({signup['status'].title()})",
+                description=f"{signup['character_class']} - {signup['role']}",
+                value=f"{signup['discord_id']}|{signup['character_name']}",
+                emoji=status_emoji
+            ))
+        
+        self.player_select = Select(
+            placeholder="Choose a player to remove...",
+            options=options,
+            row=0
+        )
+        self.player_select.callback = self.player_selected
+        self.add_item(self.player_select)
+    
+    async def player_selected(self, interaction: discord.Interaction):
+        """Handle player selection - confirm removal"""
+        discord_id, char_name = self.player_select.values[0].split('|')
+        
+        # Confirm removal
+        view = ConfirmRemovePlayerView(self.event_id, discord_id, char_name)
+        await interaction.response.send_message(
+            f"⚠️ Are you sure you want to remove **{char_name}** from this event?",
+            view=view,
+            ephemeral=True
+        )
+
+
+class ConfirmRemovePlayerView(View):
+    """View for confirming player removal"""
+    
+    def __init__(self, event_id, discord_id, char_name):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        self.discord_id = discord_id
+        self.char_name = char_name
+    
+    @discord.ui.button(label="Confirm Remove", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: Button):
+        """Confirm removal"""
+        # Remove the signup
+        remove_raid_signup(self.event_id, self.discord_id)
+        
+        # Update the raid message
+        event = get_raid_event_by_id(self.event_id)
+        if event:
+            try:
+                channel = interaction.guild.get_channel(event['channel_id'])
+                message = await channel.fetch_message(event['message_id'])
+                embed, view = generate_raid_embed(self.event_id)
+                await message.edit(embed=embed, view=view)
+            except:
+                pass
+        
+        await interaction.response.send_message(
+            f"✅ Removed **{self.char_name}** from the event!",
+            ephemeral=True
+        )
+        self.stop()
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: Button):
+        """Cancel removal"""
+        await interaction.response.send_message(
+            "Removal cancelled.",
+            ephemeral=True
+        )
+        self.stop()
+
+
+class ManageAssistantsView(View):
+    """View for managing event assistants"""
+    
+    def __init__(self, event_id):
+        super().__init__(timeout=120)
+        self.event_id = event_id
+    
+    @discord.ui.button(label="Add Assistant", style=discord.ButtonStyle.success, emoji="➕", row=0)
+    async def add_assistant_button(self, interaction: discord.Interaction, button: Button):
+        """Add an assistant"""
+        modal = AddAssistantModal(self.event_id)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Remove Assistant", style=discord.ButtonStyle.danger, emoji="➖", row=0)
+    async def remove_assistant_button(self, interaction: discord.Interaction, button: Button):
+        """Remove an assistant"""
+        assistants = get_event_assistants(self.event_id)
+        
+        if not assistants:
+            await interaction.response.send_message(
+                "❌ No assistants to remove!",
+                ephemeral=True
+            )
+            return
+        
+        # Create dropdown with assistants
+        options = []
+        for assistant in assistants[:25]:
+            options.append(discord.SelectOption(
+                label=f"User ID: {assistant['discord_id']}",
+                value=assistant['discord_id']
+            ))
+        
+        view = RemoveAssistantSelectView(self.event_id, assistants)
+        await interaction.response.send_message(
+            "Select an assistant to remove:",
+            view=view,
+            ephemeral=True
+        )
+
+
+class AddAssistantModal(discord.ui.Modal, title="Add Event Assistant"):
+    """Modal for adding an event assistant"""
+    
+    def __init__(self, event_id):
+        super().__init__()
+        self.event_id = event_id
+        
+        self.user_input = discord.ui.TextInput(
+            label="Discord User ID",
+            placeholder="Enter user ID or paste mention (@username)",
+            required=True,
+            max_length=100
+        )
+        self.add_item(self.user_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle modal submission"""
+        user_input = self.user_input.value.strip()
+        
+        # Extract user ID from mention or use as-is
+        import re
+        match = re.search(r'<@!?(\d+)>', user_input)
+        if match:
+            user_id = match.group(1)
+        elif user_input.isdigit():
+            user_id = user_input
+        else:
+            await interaction.response.send_message(
+                "❌ Invalid user ID format! Please enter a numeric user ID or mention a user.",
+                ephemeral=True
+            )
+            return
+        
+        # Check if user is already creator
+        event = get_raid_event_by_id(self.event_id)
+        if event and str(event['created_by']) == user_id:
+            await interaction.response.send_message(
+                "❌ The event creator is already an admin!",
+                ephemeral=True
+            )
+            return
+        
+        # Add assistant
+        add_event_assistant(self.event_id, user_id, interaction.user.id)
+        
+        await interaction.response.send_message(
+            f"✅ Added <@{user_id}> as an event assistant!",
+            ephemeral=True
+        )
+
+
+class RemoveAssistantSelectView(View):
+    """View for selecting an assistant to remove"""
+    
+    def __init__(self, event_id, assistants):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        
+        # Create dropdown with assistants
+        options = []
+        for assistant in assistants[:25]:
+            options.append(discord.SelectOption(
+                label=f"User ID: {assistant['discord_id']}",
+                value=assistant['discord_id']
+            ))
+        
+        self.assistant_select = Select(
+            placeholder="Choose an assistant to remove...",
+            options=options,
+            row=0
+        )
+        self.assistant_select.callback = self.assistant_selected
+        self.add_item(self.assistant_select)
+    
+    async def assistant_selected(self, interaction: discord.Interaction):
+        """Handle assistant selection"""
+        user_id = self.assistant_select.values[0]
+        
+        # Remove assistant
+        remove_event_assistant(self.event_id, user_id)
+        
+        await interaction.response.send_message(
+            f"✅ Removed <@{user_id}> as an event assistant!",
+            ephemeral=True
+        )
+
+
+class AdminPanelView(View):
+    """Admin panel for managing raid events"""
+    
+    def __init__(self, event_id, event, admin_id):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.event_id = event_id
+        self.event = event
+        self.admin_id = admin_id
+        self.is_owner = str(event['created_by']) == str(admin_id)
+    
+    @discord.ui.button(label="Move Player", style=discord.ButtonStyle.primary, emoji="➡️", row=0)
+    async def move_player_button(self, interaction: discord.Interaction, button: Button):
+        """Move a player to a different status"""
+        # Get all signups for the event
+        all_signups = []
+        for status in ['signed', 'late', 'tentative', 'benched', 'absent']:
+            signups = get_raid_signups(self.event_id, status)
+            all_signups.extend(signups)
+        
+        if not all_signups:
+            await interaction.response.send_message(
+                "❌ No players have signed up yet!",
+                ephemeral=True
+            )
+            return
+        
+        # Create dropdown with all players
+        view = MovePlayerSelectView(self.event_id, all_signups)
+        await interaction.response.send_message(
+            "Select a player to move:",
+            view=view,
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="Remove Player", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    async def remove_player_button(self, interaction: discord.Interaction, button: Button):
+        """Remove a player from the event"""
+        # Get all signups for the event
+        all_signups = []
+        for status in ['signed', 'late', 'tentative', 'benched', 'absent']:
+            signups = get_raid_signups(self.event_id, status)
+            all_signups.extend(signups)
+        
+        if not all_signups:
+            await interaction.response.send_message(
+                "❌ No players have signed up yet!",
+                ephemeral=True
+            )
+            return
+        
+        # Create dropdown with all players
+        view = RemovePlayerSelectView(self.event_id, all_signups)
+        await interaction.response.send_message(
+            "Select a player to remove:",
+            view=view,
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="Manage Assistants", style=discord.ButtonStyle.secondary, emoji="👥", row=1)
+    async def manage_assistants_button(self, interaction: discord.Interaction, button: Button):
+        """Manage event assistants (owner only)"""
+        if not self.is_owner:
+            await interaction.response.send_message(
+                "❌ Only the event creator can manage assistants!",
+                ephemeral=True
+            )
+            return
+        
+        view = ManageAssistantsView(self.event_id)
+        await interaction.response.send_message(
+            "Enter the Discord User ID or mention of the user to add as assistant:",
+            view=view,
+            ephemeral=True
+        )
 
 
 # ============================================================================
@@ -1511,6 +2126,46 @@ async def handle_invite_macro_click(interaction: discord.Interaction):
     await interaction.response.send_message(response, ephemeral=True)
 
 
+async def handle_admin_panel_click(interaction: discord.Interaction):
+    """Open admin panel for managing the raid event (owner and assistants only)"""
+    # Get event
+    event = get_raid_event(interaction.message.id)
+    if not event:
+        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
+        return
+    
+    event_id = event['id']
+    
+    # Check if user is admin (owner or assistant)
+    if not is_event_admin(event_id, str(interaction.user.id)):
+        await interaction.response.send_message(
+            "❌ Only the event creator and assistants can access the admin panel!",
+            ephemeral=True
+        )
+        return
+    
+    # Show admin panel
+    view = AdminPanelView(event_id, event, interaction.user.id)
+    
+    # Get current assistants
+    assistants = get_event_assistants(event_id)
+    assistant_list = "\n".join([f"<@{a['discord_id']}>" for a in assistants]) if assistants else "_None_"
+    
+    embed = discord.Embed(
+        title="⚙️ Admin Panel",
+        description=f"**Event:** {event['title']}\n\n**Current Assistants:**\n{assistant_list}",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="📝 Available Actions",
+        value="• **Move Player** - Change a player's status\n• **Remove Player** - Remove a player from the event\n• **Manage Assistants** - Grant/revoke admin rights",
+        inline=False
+    )
+    
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
 async def show_role_selection(interaction: discord.Interaction, character_name: str, 
                               realm_slug: str, character_class: str, event_id: int, is_change=False):
     """Show role selection dropdown"""
@@ -1587,9 +2242,9 @@ async def update_raid_message(message: discord.Message):
     if not event:
         return
     
-    embed = generate_raid_embed(event['id'])
+    embed, view = generate_raid_embed(event['id'])
     if embed:
-        await message.edit(embed=embed)
+        await message.edit(embed=embed, view=view)
 
 
 # ============================================================================
@@ -1630,3 +2285,49 @@ def cleanup_old_events():
         
     except Exception as e:
         logger.error(f"Error cleaning up old events: {e}")
+
+
+async def auto_link_raid_log(bot, guild_id: int, log_url: str, log_timestamp: datetime):
+    """
+    Automatically link a raid log to a matching event.
+    Called when a new raid log is detected.
+    
+    Args:
+        bot: Discord bot instance
+        guild_id: Discord server (guild) ID where log was posted
+        log_url: Warcraft Logs URL
+        log_timestamp: When the raid started
+    
+    Returns:
+        bool: True if linked successfully, False otherwise
+    """
+    try:
+        # Find matching event in the guild
+        event = find_matching_raid_event(guild_id, log_timestamp, time_window_hours=1)
+        
+        if not event:
+            logger.info(f"[RAID LOGS] No matching event found for log in guild {guild_id} at {log_timestamp}")
+            return False
+        
+        # Link the log to the event
+        link_raid_log(event['id'], log_url)
+        logger.info(f"[RAID LOGS] Linked log to event '{event['title']}' (ID: {event['id']})")
+        
+        # Update the Discord message with the new Show Logs button
+        try:
+            channel = bot.get_channel(event['channel_id'])
+            if channel:
+                message = await channel.fetch_message(event['message_id'])
+                embed, view = generate_raid_embed(event['id'])
+                await message.edit(embed=embed, view=view)
+                logger.info(f"[RAID LOGS] Updated event message with Show Logs button")
+        except Exception as e:
+            logger.error(f"[RAID LOGS] Failed to update message: {e}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"[RAID LOGS] Error auto-linking raid log: {e}")
+        return False
+
+

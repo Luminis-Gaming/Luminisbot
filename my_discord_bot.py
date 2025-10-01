@@ -125,6 +125,19 @@ async def check_for_new_logs():
                     await send_message_with_auto_delete(channel, embed=embed, view=view)
                     print(f"[TASK] Posted log {log_code} to guild {guild_id} channel {channel_id}.")
                     
+                    # 🔗 NEW: Auto-link this log to any matching raid event
+                    try:
+                        from datetime import datetime, timezone
+                        from raid_system import auto_link_raid_log
+                        
+                        log_url = f"https://www.warcraftlogs.com/reports/{log_code}"
+                        log_timestamp = datetime.fromtimestamp(log_start_time / 1000, tz=timezone.utc)
+                        
+                        await auto_link_raid_log(client, guild_id, log_url, log_timestamp)
+                        print(f"[TASK] Attempted auto-link for log {log_code} in guild {guild_id}")
+                    except Exception as link_error:
+                        print(f"[WARNING] TASK: Failed to auto-link log {log_code}: {link_error}")
+                    
                     # Update database with new log ID
                     cur.execute(
                         "UPDATE guild_channels SET last_log_id = %s WHERE guild_id = %s",
@@ -426,7 +439,7 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
         
         # Now generate the proper embed using generate_raid_embed
         from raid_system import generate_raid_embed
-        embed = generate_raid_embed(event_id)
+        embed, view = generate_raid_embed(event_id)
         
         # Update the message with the proper embed
         await message.edit(embed=embed, view=view)
