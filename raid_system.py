@@ -380,8 +380,20 @@ def format_countdown(event_datetime: datetime) -> tuple[str, bool]:
     time_diff = event_datetime - now
     
     if time_diff.total_seconds() <= 0:
-        # Event has passed
-        return ("Event has started!", True)
+        # Event has passed - calculate how long ago
+        abs_diff = abs(time_diff)
+        days = abs_diff.days
+        hours, remainder = divmod(abs_diff.seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        
+        if days > 0:
+            return (f"{days} day{'s' if days != 1 else ''} ago", True)
+        elif hours > 0:
+            return (f"{hours} hour{'s' if hours != 1 else ''} ago", True)
+        elif minutes > 0:
+            return (f"{minutes} minute{'s' if minutes != 1 else ''} ago", True)
+        else:
+            return ("Just now!", True)
     
     # Calculate time components
     days = time_diff.days
@@ -866,8 +878,8 @@ def generate_raid_embed(event_id: int):
     unix_timestamp = int(event_datetime.timestamp())
     
     if is_past:
-        # For past events, show red text with both formats
-        date_display = f"```ansi\n\u001b[0;31m{event_datetime.strftime('%A, %d %B %Y %H:%M')} - {countdown_text}\u001b[0m\n```"
+        # For past events, show red text in ANSI code block
+        date_display = f"```ansi\n\u001b[1;31m⚠️ EVENT STARTED - {countdown_text.upper()}\u001b[0m\n{event_datetime.strftime('%A, %d %B %Y at %H:%M')} ({DEFAULT_TIMEZONE})\n```"
     else:
         # Use Discord's native timestamp - shows full date with hover tooltip showing relative time
         # Format: "Saturday, October 5, 2024 at 8:00 PM" (hover shows "in 6 days")
