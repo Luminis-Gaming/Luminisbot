@@ -59,6 +59,9 @@ async def check_for_new_logs():
     """Check for new logs and post them to configured channels."""
     print("[TASK] Checking for new logs from WCL.")
     
+    # Import datetime at the top of the function to avoid scope issues
+    from datetime import datetime, timezone
+    
     conn = get_db_connection()
     if not conn:
         print("[ERROR] TASK: Cannot connect to database for log checking.")
@@ -127,7 +130,6 @@ async def check_for_new_logs():
                     
                     # 🔗 NEW: Auto-link this log to any matching raid event
                     try:
-                        from datetime import datetime, timezone
                         from raid_system import auto_link_raid_log
                         
                         log_url = f"https://www.warcraftlogs.com/reports/{log_code}"
