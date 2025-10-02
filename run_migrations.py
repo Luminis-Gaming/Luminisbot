@@ -125,6 +125,26 @@ def run_migrations():
             CREATE INDEX IF NOT EXISTS idx_raid_events_date ON raid_events(event_date);
         """)
         
+        # Add log_url and log_detected_at columns if they don't exist (for existing databases)
+        cursor.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'raid_events' AND column_name = 'log_url'
+                ) THEN
+                    ALTER TABLE raid_events ADD COLUMN log_url TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'raid_events' AND column_name = 'log_detected_at'
+                ) THEN
+                    ALTER TABLE raid_events ADD COLUMN log_detected_at TIMESTAMP WITH TIME ZONE;
+                END IF;
+            END $$;
+        """)
+        
         logger.info("[MIGRATIONS] ✓ raid_events table ready")
         
         # Create raid_signups table
