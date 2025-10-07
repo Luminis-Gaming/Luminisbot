@@ -39,17 +39,17 @@ DEFAULT_TIMEZONE = "Europe/Berlin"  # Change this to your guild's timezone
 # WoW class emojis (Custom Discord emojis)
 CLASS_EMOJIS = {
     'Death Knight': '<:deathknight:1422571795097325691>',
-    'Demon Hunter': '<:demonhunter:1422571061525872720>',
+    'Demon Hunter': '<:demonhunter:1425008247533735966>',
     'Druid': '<:druid:1422571184859512954>',
-    'Evoker': '<:evoker:1422570796701843590>',
-    'Hunter': '<:hunter:1422571250047389798>',
+    'Evoker': '<:evoker:1425008603013713962>',
+    'Hunter': '<:hunter:1425008380371537941>',
     'Mage': '<:mage:1422571804882370652>',
     'Monk': '<:monk:1422571230103601202>',
     'Paladin': '<:paladin:1422570970140508392>',
     'Priest': '<:priest:1422572641989955676>',
-    'Rogue': '<:rogue:1422571038226780170>',
+    'Rogue': '<:rogue:1425008526975176724>',
     'Shaman': '<:shaman:1422570941170323518>',
-    'Warlock': '<:warlock:1422571125455589376>',
+    'Warlock': '<:warlock:1425008448445349899>',
     'Warrior': '<:warrior:1422570812971421739>',
 }
 
@@ -66,33 +66,33 @@ SPEC_EMOJIS = {
     # Death Knight
     'Death Knight-Blood': '<:blood:1422570899122688151>',
     'Death Knight-Frost': '<:frostdk:1422570671648800868>',
-    'Death Knight-Unholy': '<:unholy:1422570872518213704>',
+    'Death Knight-Unholy': '<:unholy:1425009510728204348>',
     # Demon Hunter
     'Demon Hunter-Havoc': '<:havoc:1422570642699714693>',
     'Demon Hunter-Vengeance': '<:vengeance:1422570584037920908>',
     # Druid
-    'Druid-Balance': '<:balance:1422562897975971912>',
+    'Druid-Balance': '<:balance:1425009588293341264>',
     'Druid-Feral': '<:feral:1422570561980076174>',
     'Druid-Guardian': '<:guardian:1422570550554923072>',
-    'Druid-Restoration': '<:restodruid:1422562869031206934>',
+    'Druid-Restoration': '<:restodruid:142500961431087110>',
     # Evoker
     'Evoker-Devastation': '<:devastation:1422570533781770270>',
-    'Evoker-Preservation': '<:preservation:1422570992131113091>',
+    'Evoker-Preservation': '<:preservation:1425009441262272532>',
     'Evoker-Augmentation': '<:augmentation:1422570520989405234>',
     # Hunter
     'Hunter-Beast Mastery': '<:beastmastery:1422570508989497436>',
     'Hunter-Marksmanship': '<:marksmanship:1422570479557939283>',
     'Hunter-Survival': '<:survival:1422570463258869920>',
     # Mage
-    'Mage-Arcane': '<:arcane:1422572651892965488>',
-    'Mage-Fire': '<:fire:1422571107218624553>',
-    'Mage-Frost': '<:frostmage:1422571083197976658>',
+    'Mage-Arcane': '<:arcane:1425009246302634044>',
+    'Mage-Fire': '<:fire:1425009315411918869>',
+    'Mage-Frost': '<:frostmage:1425009372018245662>',
     # Monk
     'Monk-Brewmaster': '<:brewmaster:1422570449212149891>',
     'Monk-Mistweaver': '<:mistweaver:1422570438596231229>',
     'Monk-Windwalker': '<:windwalker:1422570424109367418>',
     # Paladin
-    'Paladin-Holy': '<:holypala:1422562920633598073>',
+    'Paladin-Holy': '<:holypala:1425009142359392341>',
     'Paladin-Protection': '<:protpala:1422570391649648762>',
     'Paladin-Retribution': '<:retribution:1422570373110825011>',
     # Priest
