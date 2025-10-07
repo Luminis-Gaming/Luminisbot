@@ -64,58 +64,63 @@ ROLE_EMOJIS = {
 # Spec emojis (Custom Discord emojis)
 SPEC_EMOJIS = {
     # Death Knight
-    'Blood': '<:blood:1422570899122688151>',
-    'Frost': '<:frostdk:1422570671648800868>',
-    'Unholy': '<:unholy:1422570872518213704>',
+    'Death Knight-Blood': '<:blood:1422570899122688151>',
+    'Death Knight-Frost': '<:frostdk:1422570671648800868>',
+    'Death Knight-Unholy': '<:unholy:1422570872518213704>',
     # Demon Hunter
-    'Havoc': '<:havoc:1422570642699714693>',
-    'Vengeance': '<:vengeance:1422570584037920908>',
+    'Demon Hunter-Havoc': '<:havoc:1422570642699714693>',
+    'Demon Hunter-Vengeance': '<:vengeance:1422570584037920908>',
     # Druid
-    'Balance': '<:balance:1422562897975971912>',
-    'Feral': '<:feral:1422570561980076174>',
-    'Guardian': '<:guardian:1422570550554923072>',
-    'Restoration': '<:restodruid:1422562869031206934>',
+    'Druid-Balance': '<:balance:1422562897975971912>',
+    'Druid-Feral': '<:feral:1422570561980076174>',
+    'Druid-Guardian': '<:guardian:1422570550554923072>',
+    'Druid-Restoration': '<:restodruid:1422562869031206934>',
     # Evoker
-    'Devastation': '<:devastation:1422570533781770270>',
-    'Preservation': '<:preservation:1422570992131113091>',
-    'Augmentation': '<:augmentation:1422570520989405234>',
+    'Evoker-Devastation': '<:devastation:1422570533781770270>',
+    'Evoker-Preservation': '<:preservation:1422570992131113091>',
+    'Evoker-Augmentation': '<:augmentation:1422570520989405234>',
     # Hunter
-    'Beast Mastery': '<:beastmastery:1422570508989497436>',
-    'Marksmanship': '<:marksmanship:1422570479557939283>',
-    'Survival': '<:survival:1422570463258869920>',
+    'Hunter-Beast Mastery': '<:beastmastery:1422570508989497436>',
+    'Hunter-Marksmanship': '<:marksmanship:1422570479557939283>',
+    'Hunter-Survival': '<:survival:1422570463258869920>',
     # Mage
-    'Arcane': '<:arcane:1422572651892965488>',
-    'Fire': '<:fire:1422571107218624553>',
-    'Frost': '<:frostmage:1422571083197976658>',
+    'Mage-Arcane': '<:arcane:1422572651892965488>',
+    'Mage-Fire': '<:fire:1422571107218624553>',
+    'Mage-Frost': '<:frostmage:1422571083197976658>',
     # Monk
-    'Brewmaster': '<:brewmaster:1422570449212149891>',
-    'Mistweaver': '<:mistweaver:1422570438596231229>',
-    'Windwalker': '<:windwalker:1422570424109367418>',
+    'Monk-Brewmaster': '<:brewmaster:1422570449212149891>',
+    'Monk-Mistweaver': '<:mistweaver:1422570438596231229>',
+    'Monk-Windwalker': '<:windwalker:1422570424109367418>',
     # Paladin
-    'Holy': '<:holypala:1422562920633598073>',
-    'Protection': '<:protpala:1422570391649648762>',
-    'Retribution': '<:retribution:1422570373110825011>',
+    'Paladin-Holy': '<:holypala:1422562920633598073>',
+    'Paladin-Protection': '<:protpala:1422570391649648762>',
+    'Paladin-Retribution': '<:retribution:1422570373110825011>',
     # Priest
-    'Discipline': '<:discipline:1422570366043295754>',
-    'Holy': '<:holypriest:1422570354014163036>',
-    'Shadow': '<:shadow:1422570345612709888>',
+    'Priest-Discipline': '<:discipline:1422570366043295754>',
+    'Priest-Holy': '<:holypriest:1422570354014163036>',
+    'Priest-Shadow': '<:shadow:1422570345612709888>',
     # Rogue
-    'Assassination': '<:assassination:1422570337714962552>',
-    'Outlaw': '<:outlaw:1422570329338941440>',
-    'Subtlety': '<:subtlety:1422570318068977744>',
+    'Rogue-Assassination': '<:assassination:1422570337714962552>',
+    'Rogue-Outlaw': '<:outlaw:1422570329338941440>',
+    'Rogue-Subtlety': '<:subtlety:1422570318068977744>',
     # Shaman
-    'Elemental': '<:elemental:1422570304630161448>',
-    'Enhancement': '<:enhancement:1422570295369269308>',
-    'Restoration': '<:restoshaman:1422570282907992175>',
+    'Shaman-Elemental': '<:elemental:1422570304630161448>',
+    'Shaman-Enhancement': '<:enhancement:1422570295369269308>',
+    'Shaman-Restoration': '<:restoshaman:1422570282907992175>',
     # Warlock
-    'Affliction': '<:affliction:1422570226679287869>',
-    'Demonology': '<:demonology:1422570215631224873>',
-    'Destruction': '<:destruction:1422570204671770779>',
+    'Warlock-Affliction': '<:affliction:1422570226679287869>',
+    'Warlock-Demonology': '<:demonology:1422570215631224873>',
+    'Warlock-Destruction': '<:destruction:1422570204671770779>',
     # Warrior
-    'Arms': '<:arms:1422570195007963297>',
-    'Fury': '<:fury:1422570186288140381>',
-    'Protection': '<:protwarrior:1422570154650239098>',
+    'Warrior-Arms': '<:arms:1422570195007963297>',
+    'Warrior-Fury': '<:fury:1422570186288140381>',
+    'Warrior-Protection': '<:protwarrior:1422570154650239098>',
 }
+
+def get_spec_emoji(character_class: str, spec: str) -> str:
+    """Get the emoji for a class-spec combination"""
+    key = f"{character_class}-{spec}"
+    return SPEC_EMOJIS.get(key, '')
 
 # Status emojis
 STATUS_EMOJIS = {
@@ -910,8 +915,27 @@ def generate_raid_embed(event_id: int):
             inline=False
         )
     
-    # Get signed up players only (for main roster)
+    # Get all signup counts for overview
     signed_signups = get_raid_signups(event_id, 'signed')
+    late_signups = get_raid_signups(event_id, 'late')
+    tentative_signups = get_raid_signups(event_id, 'tentative')
+    
+    # Calculate signup summary: "20(+4)" format where +4 is late+tentative
+    signed_count = len(signed_signups)
+    additional_count = len(late_signups) + len(tentative_signups)
+    
+    if additional_count > 0:
+        signup_summary = f"**{signed_count}(+{additional_count})**"
+    else:
+        signup_summary = f"**{signed_count}**"
+    
+    # Add owner and signup count field
+    owner_mention = f"<@{event['created_by']}>"
+    embed.add_field(
+        name="\u200b",  # Zero-width space for no visible title
+        value=f"👑 **Event by:** {owner_mention}  |  👥 **Signups:** {signup_summary}",
+        inline=False
+    )
     
     # Count role types
     tank_count = sum(1 for s in signed_signups if s['role'] == 'tank')
@@ -954,7 +978,8 @@ def generate_raid_embed(event_id: int):
         player_lines = []
         for player in players:
             spec = player.get('spec', '')
-            spec_emoji = SPEC_EMOJIS.get(spec, '')
+            char_class = player.get('character_class', class_name)
+            spec_emoji = get_spec_emoji(char_class, spec)
             char_name = player['character_name']
             player_lines.append(f"{spec_emoji} {char_name}")
         
@@ -981,7 +1006,9 @@ def generate_raid_embed(event_id: int):
     if late_signups:
         late_names = []
         for signup in late_signups:
-            spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
+            char_class = signup.get('character_class', '')
+            spec = signup.get('spec', '')
+            spec_emoji = get_spec_emoji(char_class, spec)
             late_names.append(f"{spec_emoji} {signup['character_name']}")
         
         late_text = "\n".join(late_names)
@@ -1009,7 +1036,9 @@ def generate_raid_embed(event_id: int):
     if tentative_signups:
         tentative_names = []
         for signup in tentative_signups:
-            spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
+            char_class = signup.get('character_class', '')
+            spec = signup.get('spec', '')
+            spec_emoji = get_spec_emoji(char_class, spec)
             tentative_names.append(f"{spec_emoji} {signup['character_name']}")
         
         tentative_text = "\n".join(tentative_names)
@@ -1037,7 +1066,9 @@ def generate_raid_embed(event_id: int):
     if benched_signups:
         benched_names = []
         for signup in benched_signups:
-            spec_emoji = SPEC_EMOJIS.get(signup.get('spec', ''), '')
+            char_class = signup.get('character_class', '')
+            spec = signup.get('spec', '')
+            spec_emoji = get_spec_emoji(char_class, spec)
             benched_names.append(f"{spec_emoji} {signup['character_name']}")
         
         benched_text = "\n".join(benched_names)
@@ -1358,7 +1389,9 @@ class SpecSelectDropdown(Select):
         # Create options from specs
         options = []
         for spec in specs:
-            emoji_str = SPEC_EMOJIS.get(spec, '❓')
+            emoji_str = get_spec_emoji(self.character_class, spec)
+            if not emoji_str:
+                emoji_str = '❓'
             emoji = parse_emoji_for_dropdown(emoji_str)
             
             options.append(discord.SelectOption(
