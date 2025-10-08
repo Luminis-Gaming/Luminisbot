@@ -74,7 +74,7 @@ SPEC_EMOJIS = {
     'Druid-Balance': '<:balance:1425009588293341264>',
     'Druid-Feral': '<:feral:1422570561980076174>',
     'Druid-Guardian': '<:guardian:1422570550554923072>',
-    'Druid-Restoration': '<:restodruid:142500961431087110>',
+    'Druid-Restoration': '<:restodruid:1425009614310871101>',
     # Evoker
     'Evoker-Devastation': '<:devastation:1422570533781770270>',
     'Evoker-Preservation': '<:preservation:1425009441262272532>',
