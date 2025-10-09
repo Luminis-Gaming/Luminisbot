@@ -1901,22 +1901,48 @@ class AdminPanelView(View):
     @discord.ui.button(label="Invite Macro", style=discord.ButtonStyle.secondary, emoji="📋", row=0)
     async def invite_macro_button(self, interaction: discord.Interaction, button: Button):
         """Generate WoW invite macro (owner and assistants only)"""
-        # Get all signed up players (status = 'signed')
-        signed_signups = get_raid_signups(self.event_id, 'signed')
+        # Get all signed up players with realm_name (need to join with wow_characters)
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        if not signed_signups:
+        cursor.execute("""
+            SELECT rs.character_name, wc.realm_name
+            FROM raid_signups rs
+            LEFT JOIN wow_characters wc 
+                ON rs.discord_id = wc.discord_id 
+                AND rs.character_name = wc.character_name
+                AND rs.realm_slug = wc.realm_slug
+            WHERE rs.event_id = %s AND rs.status = 'signed'
+            ORDER BY rs.role, rs.character_class, rs.character_name
+            LIMIT 40
+        """, (self.event_id,))
+        
+        signed_players = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        if not signed_players:
             await interaction.response.send_message(
                 "❌ No one has signed up yet!",
                 ephemeral=True
             )
             return
         
-        # Extract character names with realm (max 40 characters for WoW raid)
+        # Extract character names with realm in WoW format (max 40 characters for WoW raid)
+        # WoW in-game format: CharacterName-RealmName (no spaces or hyphens in realm, but keep apostrophes)
+        # Example: "Tarren Mill" becomes "TarrenMill", "Quel'Thalas" stays "Quel'Thalas"
         character_invites = []
-        for signup in signed_signups[:40]:
-            char_name = signup['character_name']
-            realm_slug = signup['realm_slug']
-            character_invites.append(f"{char_name}-{realm_slug}")
+        for player in signed_players:
+            char_name = player['character_name']
+            realm_name = player.get('realm_name', '')
+            
+            if realm_name:
+                # Convert realm name to WoW in-game format: remove spaces and hyphens, keep apostrophes
+                realm_ingame = realm_name.replace(' ', '').replace('-', '')
+                character_invites.append(f"{char_name}-{realm_ingame}")
+            else:
+                # Fallback if realm_name not found (shouldn't happen, but just in case)
+                character_invites.append(char_name)
         
         # Create WoW invite macro
         macro_lines = []
