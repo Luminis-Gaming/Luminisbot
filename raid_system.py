@@ -1944,31 +1944,14 @@ class AdminPanelView(View):
                 # Fallback if realm_name not found (shouldn't happen, but just in case)
                 character_invites.append(char_name)
         
-        # Create WoW invite macro
-        macro_lines = []
-        current_line = "/invite "
-        
-        for char in character_invites:
-            # Check if adding this character would exceed 255 character limit
-            test_line = current_line + char + " "
-            if len(test_line) > 250:  # Leave some buffer for safety
-                macro_lines.append(current_line.rstrip())
-                current_line = "/invite " + char + " "
-            else:
-                current_line += char + " "
-        
-        # Add the last line if it has content
-        if current_line.strip() != "/invite":
-            macro_lines.append(current_line.rstrip())
+        # Create WoW invite macro - each invite on its own line
+        # Format: /inv CharacterName-RealmName (one per line)
+        macro_lines = [f"/inv {char}" for char in character_invites]
         
         # Format response
-        if len(macro_lines) == 1:
-            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players):\n```\n{macro_lines[0]}\n```"
-        else:
-            macro_text = "\n".join(macro_lines)
-            response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players, {len(macro_lines)} lines):\n```\n{macro_text}\n```"
-        
-        response += "\n💡 Copy and paste this into WoW chat or create a macro with it!"
+        macro_text = "\n".join(macro_lines)
+        response = f"🎮 **WoW Invite Macro** ({len(character_invites)} players):\n```\n{macro_text}\n```"
+        response += "\n💡 Copy and paste this into WoW chat!"
         
         await interaction.response.send_message(response, ephemeral=True)
     
