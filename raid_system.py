@@ -2019,6 +2019,73 @@ class AdminPanelView(View):
             view=view,
             ephemeral=True
         )
+    
+    @discord.ui.button(label="Show Discord Names", style=discord.ButtonStyle.secondary, emoji="👤", row=2)
+    async def show_discord_names_button(self, interaction: discord.Interaction, button: Button):
+        """Show character names with their Discord usernames"""
+        # Get all signups for the event (all statuses)
+        all_signups = []
+        for status in ['signed', 'late', 'tentative', 'benched', 'absent']:
+            signups = get_raid_signups(self.event_id, status)
+            all_signups.extend(signups)
+        
+        if not all_signups:
+            await interaction.response.send_message(
+                "❌ No players have signed up yet!",
+                ephemeral=True
+            )
+            return
+        
+        # Build the output with character names and Discord usernames
+        output_lines = ["**Character Name → Discord Username**\n"]
+        
+        # Sort by character name for easier reading
+        sorted_signups = sorted(all_signups, key=lambda x: x['character_name'])
+        
+        for signup in sorted_signups:
+            char_name = signup['character_name']
+            discord_id = signup['discord_id']
+            
+            # Try to get the Discord member to show their display name
+            try:
+                member = await interaction.guild.fetch_member(int(discord_id))
+                discord_name = f"{member.name}" if member else f"<@{discord_id}>"
+            except:
+                # Fallback to mention if can't fetch member
+                discord_name = f"<@{discord_id}>"
+            
+            # Add status emoji for context
+            status_emoji = STATUS_EMOJIS.get(signup['status'], '❓')
+            
+            output_lines.append(f"{status_emoji} **{char_name}** → {discord_name}")
+        
+        # Join all lines
+        output_text = "\n".join(output_lines)
+        
+        # Check if output is too long for a single message (Discord limit is 2000 characters)
+        if len(output_text) > 1900:
+            # Split into chunks
+            chunks = []
+            current_chunk = "**Character Name → Discord Username**\n"
+            
+            for line in output_lines[1:]:  # Skip header since we'll add it to first chunk
+                if len(current_chunk) + len(line) + 1 > 1900:
+                    chunks.append(current_chunk)
+                    current_chunk = line + "\n"
+                else:
+                    current_chunk += line + "\n"
+            
+            if current_chunk:
+                chunks.append(current_chunk)
+            
+            # Send first chunk as response
+            await interaction.response.send_message(chunks[0], ephemeral=True)
+            
+            # Send remaining chunks as follow-ups
+            for chunk in chunks[1:]:
+                await interaction.followup.send(chunk, ephemeral=True)
+        else:
+            await interaction.response.send_message(output_text, ephemeral=True)
 
 
 # ============================================================================
