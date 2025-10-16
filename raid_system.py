@@ -2023,6 +2023,9 @@ class AdminPanelView(View):
     @discord.ui.button(label="Show Discord Names", style=discord.ButtonStyle.secondary, emoji="👤", row=2)
     async def show_discord_names_button(self, interaction: discord.Interaction, button: Button):
         """Show character names with their Discord usernames"""
+        # Defer the response immediately to avoid timeout
+        await interaction.response.defer(ephemeral=True)
+        
         # Get all signups for the event (all statuses)
         all_signups = []
         for status in ['signed', 'late', 'tentative', 'benched', 'absent']:
@@ -2030,7 +2033,7 @@ class AdminPanelView(View):
             all_signups.extend(signups)
         
         if not all_signups:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ No players have signed up yet!",
                 ephemeral=True
             )
@@ -2078,14 +2081,11 @@ class AdminPanelView(View):
             if current_chunk:
                 chunks.append(current_chunk)
             
-            # Send first chunk as response
-            await interaction.response.send_message(chunks[0], ephemeral=True)
-            
-            # Send remaining chunks as follow-ups
-            for chunk in chunks[1:]:
+            # Send all chunks as follow-ups
+            for chunk in chunks:
                 await interaction.followup.send(chunk, ephemeral=True)
         else:
-            await interaction.response.send_message(output_text, ephemeral=True)
+            await interaction.followup.send(output_text, ephemeral=True)
 
 
 # ============================================================================
