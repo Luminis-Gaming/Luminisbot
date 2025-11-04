@@ -34,34 +34,68 @@ local CLASS_COLORS = {
 function addon:CreateMainFrame()
     if self.mainFrame then return end
     
-    -- Create main frame
-    local frame = CreateFrame("Frame", "LuminisbotEventsFrame", UIParent, "PortraitFrameTemplate")
-    frame:SetSize(500, 600)
+    -- Create main frame using BasicFrameTemplate (no portrait)
+    local frame = CreateFrame("Frame", "LuminisbotEventsFrame", UIParent, "BasicFrameTemplate")
+    frame:SetSize(520, 620)
     frame:SetPoint("CENTER")
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
     frame:SetFrameStrata("HIGH")
     frame:Hide()
     
-    -- Title (handle both old and new template structures)
+    -- Set title
     if frame.TitleText then
         frame.TitleText:SetText("Luminisbot Events")
     elseif frame.TitleContainer and frame.TitleContainer.TitleText then
         frame.TitleContainer.TitleText:SetText("Luminisbot Events")
     end
     
-    -- Close button (using default X button from template)
+    -- Import section at the top
+    local importLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    importLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -35)
+    importLabel:SetText("Import from Discord:")
+    
+    local importBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    importBox:SetSize(280, 20)
+    importBox:SetPoint("TOPLEFT", importLabel, "BOTTOMLEFT", 0, -5)
+    importBox:SetAutoFocus(false)
+    importBox:SetMaxLetters(0)  -- No limit
+    importBox:SetScript("OnEnterPressed", function(self)
+        local text = self:GetText()
+        if text and text ~= "" then
+            addon:ImportEventString(text)
+            self:SetText("")
+            self:ClearFocus()
+            addon:RefreshUI()
+        end
+    end)
+    importBox:SetScript("OnEscapePressed", function(self)
+        self:SetText("")
+        self:ClearFocus()
+    end)
+    frame.importBox = importBox
+    
+    local importButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    importButton:SetSize(80, 22)
+    importButton:SetPoint("LEFT", importBox, "RIGHT", 10, 0)
+    importButton:SetText("Import")
+    importButton:SetScript("OnClick", function()
+        local text = importBox:GetText()
+        if text and text ~= "" then
+            addon:ImportEventString(text)
+            importBox:SetText("")
+            addon:RefreshUI()
+        else
+            addon:PrintError("Paste the import string in the box first!")
+        end
+    end)
+    frame.importButton = importButton
     
     -- Create scroll frame for events
     local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -30)
+    scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 15, -90)
     scrollFrame:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -30, 50)
     
     local scrollChild = CreateFrame("Frame")
-    scrollChild:SetSize(450, 1)
+    scrollChild:SetSize(460, 1)
     scrollFrame:SetScrollChild(scrollChild)
     
     frame.scrollFrame = scrollFrame
@@ -76,7 +110,7 @@ function addon:CreateMainFrame()
     
     local helpSubtext = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     helpSubtext:SetPoint("TOP", helpText, "BOTTOM", 0, -10)
-    helpSubtext:SetText("Use the Admin Panel in Discord to get an import string")
+    helpSubtext:SetText("Copy the event string from Discord and paste it above")
     helpSubtext:SetTextColor(0.7, 0.7, 0.7)
     helpSubtext:Hide()
     frame.helpSubtext = helpSubtext
@@ -183,7 +217,13 @@ function addon:CreateEventFrame(event)
     local dateTime = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     dateTime:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
     
+    -- Convert date from YYYY-MM-DD to DD/MM/YYYY
     local dateStr = event.date or "Unknown"
+    if dateStr ~= "Unknown" and dateStr:match("^%d%d%d%d%-%d%d%-%d%d$") then
+        local year, month, day = dateStr:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+        dateStr = string.format("%s/%s/%s", day, month, year)
+    end
+    
     local timeStr = (event.time or "00:00:00"):sub(1, 5)  -- HH:MM
     dateTime:SetText(string.format("📅 %s  🕐 %s", dateStr, timeStr))
     dateTime:SetTextColor(0.8, 0.8, 0.8)
@@ -275,6 +315,13 @@ function addon:ShowEventDetails(event)
     end
     
     local frame = self.detailsFrame
+    
+    -- Re-position next to main frame if shown
+    if self.mainFrame and self.mainFrame:IsShown() then
+        frame:ClearAllPoints()
+        frame:SetPoint("LEFT", self.mainFrame, "RIGHT", 20, 0)
+    end
+    
     local scrollChild = frame.scrollChild
     
     -- Clear existing content
@@ -294,7 +341,15 @@ function addon:ShowEventDetails(event)
     -- Create header
     local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     header:SetPoint("TOP", scrollChild, "TOP", 0, -10)
-    header:SetText(string.format("%s - %s", event.date, (event.time or "00:00:00"):sub(1, 5)))
+    
+    -- Convert date from YYYY-MM-DD to DD/MM/YYYY
+    local dateStr = event.date or "Unknown"
+    if dateStr ~= "Unknown" and dateStr:match("^%d%d%d%d%-%d%d%-%d%d$") then
+        local year, month, day = dateStr:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+        dateStr = string.format("%s/%s/%s", day, month, year)
+    end
+    
+    header:SetText(string.format("%s - %s", dateStr, (event.time or "00:00:00"):sub(1, 5)))
     header:SetTextColor(1, 0.82, 0)
     
     local yOffset = -40
@@ -352,8 +407,13 @@ function addon:ShowEventDetails(event)
             
             -- List signups
             for _, signup in ipairs(signups) do
-                local playerText = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                playerText:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 20, yOffset)
+                -- Create a container frame for this player
+                local playerFrame = CreateFrame("Frame", nil, scrollChild)
+                playerFrame:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 20, yOffset)
+                playerFrame:SetSize(400, 18)
+                
+                local playerText = playerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                playerText:SetPoint("LEFT", playerFrame, "LEFT", 0, 0)
                 
                 -- Get class color
                 local classColor = CLASS_COLORS[signup.class] or {r=1, g=1, b=1}
@@ -366,10 +426,28 @@ function addon:ShowEventDetails(event)
                 playerText:SetTextColor(classColor.r, classColor.g, classColor.b)
                 
                 -- Spec/Class
-                local specLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                local specLabel = playerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                 specLabel:SetPoint("LEFT", playerText, "RIGHT", 5, 0)
                 specLabel:SetText(string.format("(%s)", specText))
                 specLabel:SetTextColor(0.6, 0.6, 0.6)
+                
+                -- Individual invite button
+                local inviteBtn = CreateFrame("Button", nil, playerFrame, "UIPanelButtonTemplate")
+                inviteBtn:SetSize(50, 18)
+                inviteBtn:SetPoint("RIGHT", playerFrame, "RIGHT", 0, 0)
+                inviteBtn:SetText("Invite")
+                inviteBtn:SetScript("OnClick", function()
+                    -- Format character name with realm
+                    local characterName = signup.name
+                    if signup.realm then
+                        -- Convert realm to in-game format (remove spaces/hyphens)
+                        local realmFormatted = signup.realm:gsub("%-", ""):gsub(" ", "")
+                        characterName = characterName .. "-" .. realmFormatted
+                    end
+                    
+                    C_PartyInfo.InviteUnit(characterName)
+                    addon:Print("Invited " .. signup.name)
+                end)
                 
                 yOffset = yOffset - 18
             end
@@ -392,15 +470,15 @@ function addon:ShowEventDetails(event)
 end
 
 function addon:CreateDetailsFrame()
-    local frame = CreateFrame("Frame", "LuminisbotEventsDetailsFrame", UIParent, "PortraitFrameTemplate")
-    frame:SetSize(450, 550)
-    frame:SetPoint("CENTER")
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:SetFrameStrata("HIGH")
+    local frame = CreateFrame("Frame", "LuminisbotEventsDetailsFrame", UIParent, "BasicFrameTemplate")
+    frame:SetSize(550, 600)
+    -- Position to the right of main frame if it exists, otherwise center
+    if self.mainFrame and self.mainFrame:IsShown() then
+        frame:SetPoint("LEFT", self.mainFrame, "RIGHT", 20, 0)
+    else
+        frame:SetPoint("CENTER")
+    end
+    frame:SetFrameStrata("DIALOG")  -- Higher than main frame
     frame:Hide()
     
     -- Title (handle both old and new template structures)
@@ -412,11 +490,11 @@ function addon:CreateDetailsFrame()
     
     -- Scroll frame
     local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -30)
+    scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 15, -35)
     scrollFrame:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -30, 50)
     
     local scrollChild = CreateFrame("Frame")
-    scrollChild:SetSize(400, 1)
+    scrollChild:SetSize(490, 1)
     scrollFrame:SetScrollChild(scrollChild)
     
     frame.scrollFrame = scrollFrame

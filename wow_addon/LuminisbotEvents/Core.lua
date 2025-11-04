@@ -65,115 +65,181 @@ local function json_unescape(str)
     })
 end
 
--- Parse a JSON string (simple implementation)
+-- Parse a JSON string (improved recursive parser)
 function addon:ParseJSON(str)
-    -- Remove whitespace
-    str = str:gsub('^%s*', ''):gsub('%s*$', '')
+    if not str or str == "" then return nil end
     
-    -- Check if it's a string
-    if str:match('^".*"$') then
-        local content = str:sub(2, -2)
-        return json_unescape(content)
-    end
-    
-    -- Check if it's a number
-    if str:match('^%-?%d+%.?%d*$') then
-        return tonumber(str)
-    end
-    
-    -- Check if it's boolean or null
-    if str == 'true' then return true end
-    if str == 'false' then return false end
-    if str == 'null' then return nil end
-    
-    -- Check if it's an array
-    if str:match('^%[.*%]$') then
-        local arr = {}
-        local content = str:sub(2, -2)
+    -- Parse value at position, returns value and next position
+    local function parseValue(s, pos)
+        pos = pos or 1
         
-        -- Simple array parser (doesn't handle nested arrays/objects well)
-        local depth = 0
-        local current = ""
-        local inString = false
+        -- Skip whitespace
+        while pos <= #s and s:sub(pos, pos):match("%s") do
+            pos = pos + 1
+        end
         
-        for i = 1, #content do
-            local char = content:sub(i, i)
-            
-            if char == '"' and content:sub(i-1, i-1) ~= '\\' then
-                inString = not inString
+        if pos > #s then return nil, pos end
+        
+        local char = s:sub(pos, pos)
+        
+        -- null
+        if s:sub(pos, pos+3) == "null" then
+            return nil, pos + 4
+        end
+        
+        -- true
+        if s:sub(pos, pos+3) == "true" then
+            return true, pos + 4
+        end
+        
+        -- false
+        if s:sub(pos, pos+4) == "false" then
+            return false, pos + 5
+        end
+        
+        -- number
+        if char == "-" or char:match("%d") then
+            local numStr = s:match("^%-?%d+%.?%d*[eE]?[%+%-]?%d*", pos)
+            if numStr then
+                return tonumber(numStr), pos + #numStr
             end
-            
-            if not inString then
-                if char == '{' or char == '[' then
-                    depth = depth + 1
-                elseif char == '}' or char == ']' then
-                    depth = depth - 1
-                elseif char == ',' and depth == 0 then
-                    table.insert(arr, self:ParseJSON(current))
-                    current = ""
-                else
-                    current = current .. char
+        end
+        
+        -- string
+        if char == '"' then
+            local endPos = pos + 1
+            while endPos <= #s do
+                if s:sub(endPos, endPos) == '"' and s:sub(endPos-1, endPos-1) ~= '\\' then
+                    local str = s:sub(pos+1, endPos-1)
+                    -- Unescape common sequences
+                    str = str:gsub('\\n', '\n')
+                    str = str:gsub('\\t', '\t')
+                    str = str:gsub('\\r', '\r')
+                    str = str:gsub('\\"', '"')
+                    str = str:gsub('\\\\', '\\')
+                    -- Handle unicode escapes (convert to UTF-8)
+                    str = str:gsub('\\u(%x%x%x%x)', function(hex)
+                        local codepoint = tonumber(hex, 16)
+                        if codepoint < 0x80 then
+                            return string.char(codepoint)
+                        elseif codepoint < 0x800 then
+                            return string.char(
+                                0xC0 + math.floor(codepoint / 0x40),
+                                0x80 + (codepoint % 0x40)
+                            )
+                        else
+                            return string.char(
+                                0xE0 + math.floor(codepoint / 0x1000),
+                                0x80 + (math.floor(codepoint / 0x40) % 0x40),
+                                0x80 + (codepoint % 0x40)
+                            )
+                        end
+                    end)
+                    return str, endPos + 1
                 end
-            else
-                current = current .. char
+                endPos = endPos + 1
             end
+            return nil, pos
         end
         
-        if #current > 0 then
-            table.insert(arr, self:ParseJSON(current))
-        end
-        
-        return arr
-    end
-    
-    -- Check if it's an object
-    if str:match('^{.*}$') then
-        local obj = {}
-        local content = str:sub(2, -2)
-        
-        -- Simple object parser
-        local depth = 0
-        local current = ""
-        local inString = false
-        
-        for i = 1, #content do
-            local char = content:sub(i, i)
+        -- array
+        if char == '[' then
+            local arr = {}
+            pos = pos + 1
             
-            if char == '"' and content:sub(i-1, i-1) ~= '\\' then
-                inString = not inString
+            -- Skip whitespace
+            while pos <= #s and s:sub(pos, pos):match("%s") do
+                pos = pos + 1
             end
             
-            if not inString then
-                if char == '{' or char == '[' then
-                    depth = depth + 1
-                elseif char == '}' or char == ']' then
-                    depth = depth - 1
-                elseif char == ',' and depth == 0 then
-                    -- Parse key-value pair
-                    local key, value = current:match('^"([^"]+)"%s*:%s*(.+)$')
-                    if key and value then
-                        obj[key] = self:ParseJSON(value)
-                    end
-                    current = ""
-                else
-                    current = current .. char
+            -- Empty array
+            if s:sub(pos, pos) == ']' then
+                return arr, pos + 1
+            end
+            
+            while pos <= #s do
+                local val
+                val, pos = parseValue(s, pos)
+                table.insert(arr, val)
+                
+                -- Skip whitespace
+                while pos <= #s and s:sub(pos, pos):match("%s") do
+                    pos = pos + 1
                 end
-            else
-                current = current .. char
+                
+                local nextChar = s:sub(pos, pos)
+                if nextChar == ']' then
+                    return arr, pos + 1
+                elseif nextChar == ',' then
+                    pos = pos + 1
+                else
+                    return nil, pos
+                end
             end
+            return nil, pos
         end
         
-        if #current > 0 then
-            local key, value = current:match('^"([^"]+)"%s*:%s*(.+)$')
-            if key and value then
-                obj[key] = self:ParseJSON(value)
+        -- object
+        if char == '{' then
+            local obj = {}
+            pos = pos + 1
+            
+            -- Skip whitespace
+            while pos <= #s and s:sub(pos, pos):match("%s") do
+                pos = pos + 1
             end
+            
+            -- Empty object
+            if s:sub(pos, pos) == '}' then
+                return obj, pos + 1
+            end
+            
+            while pos <= #s do
+                -- Parse key
+                local key
+                key, pos = parseValue(s, pos)
+                
+                if type(key) ~= "string" then
+                    return nil, pos
+                end
+                
+                -- Skip whitespace and colon
+                while pos <= #s and s:sub(pos, pos):match("%s") do
+                    pos = pos + 1
+                end
+                
+                if s:sub(pos, pos) ~= ':' then
+                    return nil, pos
+                end
+                pos = pos + 1
+                
+                -- Parse value
+                local val
+                val, pos = parseValue(s, pos)
+                obj[key] = val
+                
+                -- Skip whitespace
+                while pos <= #s and s:sub(pos, pos):match("%s") do
+                    pos = pos + 1
+                end
+                
+                local nextChar = s:sub(pos, pos)
+                if nextChar == '}' then
+                    return obj, pos + 1
+                elseif nextChar == ',' then
+                    pos = pos + 1
+                else
+                    return nil, pos
+                end
+            end
+            return nil, pos
         end
         
-        return obj
+        return nil, pos
     end
     
-    return nil
+    local result, _ = parseValue(str, 1)
+    return result
 end
 
 -- ============================================================================
@@ -181,6 +247,11 @@ end
 -- ============================================================================
 
 function addon:ImportEventString(encodedString)
+    -- Clean up the string
+    encodedString = encodedString:gsub("^%s*", ""):gsub("%s*$", "")
+    
+    addon:Print("Import string length: " .. #encodedString .. " chars")
+    
     -- Decode base64
     local jsonString = self:Base64Decode(encodedString)
     if not jsonString or jsonString == "" then
@@ -188,16 +259,23 @@ function addon:ImportEventString(encodedString)
         return false
     end
     
-    -- Debug: Show first 100 chars of decoded JSON
-    addon:Print("Decoded JSON (first 100 chars): " .. jsonString:sub(1, 100))
+    -- Debug: Show decoded JSON info
+    addon:Print("Decoded JSON length: " .. #jsonString .. " chars")
+    addon:Print("First 100 chars: " .. jsonString:sub(1, 100))
+    addon:Print("Last 50 chars: " .. jsonString:sub(-50))
     
     -- Parse JSON
     local eventData = self:ParseJSON(jsonString)
     if not eventData or type(eventData) ~= "table" then
         self:PrintError("Failed to parse event data! The import string may be corrupted.")
-        self:PrintError("JSON length: " .. #jsonString .. " chars")
+        self:PrintError("JSON was " .. #jsonString .. " chars long")
         return false
     end
+    
+    addon:Print("Parsed event data successfully!")
+    addon:Print("Event ID: " .. tostring(eventData.id))
+    addon:Print("Event title: " .. tostring(eventData.title))
+    addon:Print("Signups count: " .. (eventData.signups and #eventData.signups or 0))
     
     -- Validate event data
     if not eventData.id or not eventData.title then
@@ -391,6 +469,18 @@ local function RegisterSlashCommands()
     elseif command == "clear" then
         addon:ClearOldEvents()
         
+    elseif command == "reset" then
+        -- Complete reset - wipe all saved data
+        LuminisbotEventsDB = {
+            events = {},
+            lastUpdate = 0
+        }
+        addon.events = {}
+        addon:Print("All saved data has been reset!")
+        if addon.mainFrame then
+            addon:RefreshUI()
+        end
+        
     elseif command == "list" then
         local events = addon:GetEvents()
         if #events == 0 then
@@ -404,16 +494,17 @@ local function RegisterSlashCommands()
         
     elseif command == "help" then
         addon:Print("Available commands:")
-        addon:Print("  /luminisbot (or /lb) - Toggle event window")
-        addon:Print("  /luminisbot show - Toggle event window")
-        addon:Print("  /luminisbot import <string> - Import event from Discord")
+        addon:Print("  /luminisbot (or /lb) - Open event window")
+        addon:Print("  /luminisbot show - Open event window")
+        addon:Print("  /luminisbot import <string> - Import event (for small events)")
         addon:Print("  /luminisbot list - List all imported events")
         addon:Print("  /luminisbot clear - Remove past events")
+        addon:Print("  /luminisbot reset - Wipe ALL saved data (fresh start)")
         addon:Print("  /luminisbot help - Show this help")
         addon:Print(" ")
         addon:Print("To import: Click 'Copy Event String' in Discord,")
-        addon:Print("copy the string from the modal, then paste it after")
-        addon:Print("'/luminisbot import' in WoW chat.")
+        addon:Print("copy the string from the modal, open the addon UI")
+        addon:Print("with /luminisbot, paste in the import box, and click Import.")
         
     else
         -- Default: toggle UI

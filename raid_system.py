@@ -1591,10 +1591,10 @@ class EventStringModal(discord.ui.Modal):
             title="🎮 WoW Addon Import Ready",
             description=(
                 "**Instructions:**\n"
-                "1. Copy the entire string from the modal above\n"
-                "2. In WoW, type: `/luminisbot import`\n"
-                "3. Paste the string after the command\n"
-                "4. Press Enter\n\n"
+                "1. Copy the entire string from the modal above (Ctrl+A, Ctrl+C)\n"
+                "2. In WoW, type: `/luminisbot` (or `/lb`) to open the addon\n"
+                "3. Paste the string into the 'Import from Discord' box\n"
+                "4. Click 'Import' button or press Enter\n\n"
                 "The addon will import and display the event!"
             ),
             color=0x00ff00
@@ -2037,8 +2037,8 @@ class AdminPanelView(View):
             ]
         }
         
-        # Encode to base64
-        json_str = json.dumps(event_data, separators=(',', ':'))
+        # Encode to base64 (ensure_ascii=False to preserve UTF-8 characters)
+        json_str = json.dumps(event_data, separators=(',', ':'), ensure_ascii=False)
         encoded = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
         
         # Show modal with the string for easy copying
