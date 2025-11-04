@@ -1,6 +1,14 @@
 # 🤖 LuminisBot - Self-Hosted Discord Bot
 
-A Discord bot for Warcraft Logs integration and guild management, optimized for self-hosted deployment.
+A Discord bot for Warcraft Logs integration, raid event management, and guild coordination, optimized for self-hosted deployment.
+
+## ✨ Features
+
+- **📊 Warcraft Logs Integration** - Automatic log posting with DPS/HPS/Deaths analysis
+- **🗓️ Raid Event System** - Create events with signup buttons and role selection
+- **🎮 WoW Addon** - Display Discord events in-game with one-click invites
+- **🔗 Battle.net Integration** - Link WoW characters to Discord accounts
+- **📝 Auto Log Detection** - Automatically posts new logs to configured channels
 
 ## 🚀 Quick Setup
 
@@ -36,9 +44,26 @@ Edit the `.env` file with your credentials:
 - `DISCORD_BOT_TOKEN` - Your Discord bot token
 - `WCL_CLIENT_ID` - Warcraft Logs API client ID
 - `WCL_CLIENT_SECRET` - Warcraft Logs API client secret
+- `BLIZZARD_CLIENT_ID` - Battle.net API client ID (for character linking)
+- `BLIZZARD_CLIENT_SECRET` - Battle.net API client secret
+- `BLIZZARD_REDIRECT_URI` - OAuth callback URL (your server)
 - `POSTGRES_PASSWORD` - Database password
 - `RECORDER_EMAIL` - Warcraft Recorder email (optional)
 - `RECORDER_PASSWORD` - Warcraft Recorder password (optional)
+
+## 🎮 WoW Addon
+
+LuminisBot includes a World of Warcraft addon that displays your Discord raid events in-game!
+
+**Features:**
+- View all upcoming events from Discord
+- See all signups with roles and specs
+- One-click invite all signed-up players
+- Automatic cross-realm name formatting
+
+**Installation:** See [`wow_addon/README.md`](wow_addon/README.md) for user instructions
+
+**For Developers:** See [`wow_addon/SETUP.md`](wow_addon/SETUP.md) for technical details
 
 ## 📋 Services Included
 

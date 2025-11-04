@@ -1955,6 +1955,100 @@ class AdminPanelView(View):
         
         await interaction.response.send_message(response, ephemeral=True)
     
+    @discord.ui.button(label="Copy Event String", style=discord.ButtonStyle.secondary, emoji="🎮", row=0)
+    async def copy_event_string_button(self, interaction: discord.Interaction, button: Button):
+        """Generate import string for WoW addon (owner and assistants only)"""
+        import base64
+        import json
+        
+        # Get all signups (all statuses for completeness)
+        all_signups = []
+        for status in ['signed', 'late', 'tentative', 'benched', 'absent']:
+            signups = get_raid_signups(self.event_id, status)
+            all_signups.extend(signups)
+        
+        # Build data structure for addon
+        event_data = {
+            "id": self.event['id'],
+            "title": self.event['title'],
+            "date": self.event['event_date'].isoformat(),
+            "time": self.event['event_time'].isoformat(),
+            "signups": [
+                {
+                    "name": s['character_name'],
+                    "realm": s['realm_slug'],
+                    "class": s['character_class'],
+                    "role": s['role'],
+                    "spec": s.get('spec', ''),
+                    "status": s['status']
+                }
+                for s in all_signups
+            ]
+        }
+        
+        # Encode to base64
+        json_str = json.dumps(event_data, separators=(',', ':'))
+        encoded = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        # Check if string fits in single Discord message (need room for formatting)
+        max_length = 1800  # Leave room for embed formatting
+        
+        if len(encoded) <= max_length:
+            # Single command
+            embed = discord.Embed(
+                title=f"🎮 WoW Addon Import - {self.event['title']}",
+                description=(
+                    "Copy the command below and paste it in WoW:\n\n"
+                    f"```/luminisbot import {encoded}```"
+                ),
+                color=0x00ff00
+            )
+            embed.add_field(
+                name="📊 Event Info",
+                value=(
+                    f"**Event:** {self.event['title']}\n"
+                    f"**Date:** {self.event['event_date'].strftime('%Y-%m-%d')}\n"
+                    f"**Time:** {self.event['event_time'].strftime('%H:%M')}\n"
+                    f"**Signups:** {len([s for s in all_signups if s['status'] == 'signed'])} signed"
+                ),
+                inline=False
+            )
+            embed.set_footer(text="Paste this in WoW to import the event into your Luminisbot Events addon")
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            # Need to split into multiple parts
+            chunk_size = 250  # Conservative chunk size for WoW chat limits
+            chunks = [encoded[i:i+chunk_size] for i in range(0, len(encoded), chunk_size)]
+            
+            embed = discord.Embed(
+                title=f"🎮 WoW Addon Import - {self.event['title']}",
+                description=(
+                    f"This event is large ({len(all_signups)} signups). "
+                    f"Copy these commands in order and paste them in WoW:"
+                ),
+                color=0x00ff00
+            )
+            
+            # Add chunks as fields
+            for i, chunk in enumerate(chunks, 1):
+                embed.add_field(
+                    name=f"Part {i}/{len(chunks)}",
+                    value=f"```/luminisbot import{i} {chunk}```",
+                    inline=False
+                )
+            
+            # Final command to complete import
+            embed.add_field(
+                name="Final Step",
+                value="```/luminisbot importdone```",
+                inline=False
+            )
+            
+            embed.set_footer(text="Paste each command in order, then /luminisbot importdone to finish")
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    
     @discord.ui.button(label="Manage Assistants", style=discord.ButtonStyle.secondary, emoji="👥", row=1)
     async def manage_assistants_button(self, interaction: discord.Interaction, button: Button):
         """Manage event assistants (owner only)"""

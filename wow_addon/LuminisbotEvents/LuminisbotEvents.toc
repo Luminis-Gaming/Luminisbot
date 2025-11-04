@@ -1,0 +1,10 @@
+## Interface: 110002
+## Title: Luminisbot Events
+## Notes: Display Discord raid events in-game with one-click invites
+## Author: Luminis Gaming
+## Version: 1.0.0
+## SavedVariables: LuminisbotEventsDB
+## IconTexture: Interface\Icons\Achievement_Boss_Algalon_01
+
+Core.lua
+UI.lua
