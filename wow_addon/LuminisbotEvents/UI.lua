@@ -46,8 +46,12 @@ function addon:CreateMainFrame()
     frame:SetFrameStrata("HIGH")
     frame:Hide()
     
-    -- Title
-    frame.TitleText:SetText("Luminisbot Events")
+    -- Title (handle both old and new template structures)
+    if frame.TitleText then
+        frame.TitleText:SetText("Luminisbot Events")
+    elseif frame.TitleContainer and frame.TitleContainer.TitleText then
+        frame.TitleContainer.TitleText:SetText("Luminisbot Events")
+    end
     
     -- Close button (using default X button from template)
     
@@ -279,8 +283,13 @@ function addon:ShowEventDetails(event)
         child:SetParent(nil)
     end
     
-    -- Title
-    frame.TitleText:SetText(event.title or "Event Details")
+    -- Title (handle both old and new template structures)
+    local title = event.title or "Event Details"
+    if frame.TitleText then
+        frame.TitleText:SetText(title)
+    elseif frame.TitleContainer and frame.TitleContainer.TitleText then
+        frame.TitleContainer.TitleText:SetText(title)
+    end
     
     -- Create header
     local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -394,8 +403,12 @@ function addon:CreateDetailsFrame()
     frame:SetFrameStrata("HIGH")
     frame:Hide()
     
-    -- Title
-    frame.TitleText:SetText("Event Details")
+    -- Title (handle both old and new template structures)
+    if frame.TitleText then
+        frame.TitleText:SetText("Event Details")
+    elseif frame.TitleContainer and frame.TitleContainer.TitleText then
+        frame.TitleContainer.TitleText:SetText("Event Details")
+    end
     
     -- Scroll frame
     local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")

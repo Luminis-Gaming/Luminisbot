@@ -1563,6 +1563,57 @@ class ConfirmDeleteView(View):
         self.stop()
 
 
+class EventStringModal(discord.ui.Modal):
+    """Modal for displaying WoW addon event import string"""
+    
+    def __init__(self, title, event_string, event_title, event_date, event_time, signup_count):
+        super().__init__(title=title, timeout=300)
+        
+        self.event_title = event_title
+        self.event_date = event_date
+        self.event_time = event_time
+        self.signup_count = signup_count
+        
+        # Add text input with the import string
+        self.import_string = discord.ui.TextInput(
+            label="Copy this entire string and paste it in WoW:",
+            style=discord.TextStyle.paragraph,
+            default=event_string,
+            required=False,
+            max_length=4000
+        )
+        self.add_item(self.import_string)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        """Handle modal submission"""
+        # Send confirmation with instructions
+        embed = discord.Embed(
+            title="🎮 WoW Addon Import Ready",
+            description=(
+                "**Instructions:**\n"
+                "1. Copy the entire string from the modal above\n"
+                "2. In WoW, type: `/luminisbot import`\n"
+                "3. Paste the string after the command\n"
+                "4. Press Enter\n\n"
+                "The addon will import and display the event!"
+            ),
+            color=0x00ff00
+        )
+        embed.add_field(
+            name="📊 Event Info",
+            value=(
+                f"**Event:** {self.event_title}\n"
+                f"**Date:** {self.event_date.strftime('%Y-%m-%d')}\n"
+                f"**Time:** {self.event_time.strftime('%H:%M')}\n"
+                f"**Signups:** {self.signup_count} signed"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="Luminisbot Events - WoW Addon")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 class MovePlayerSelectView(View):
     """View for selecting a player to move"""
     
@@ -1990,64 +2041,16 @@ class AdminPanelView(View):
         json_str = json.dumps(event_data, separators=(',', ':'))
         encoded = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
         
-        # Check if string fits in single Discord message (need room for formatting)
-        max_length = 1800  # Leave room for embed formatting
-        
-        if len(encoded) <= max_length:
-            # Single command
-            embed = discord.Embed(
-                title=f"🎮 WoW Addon Import - {self.event['title']}",
-                description=(
-                    "Copy the command below and paste it in WoW:\n\n"
-                    f"```/luminisbot import {encoded}```"
-                ),
-                color=0x00ff00
-            )
-            embed.add_field(
-                name="📊 Event Info",
-                value=(
-                    f"**Event:** {self.event['title']}\n"
-                    f"**Date:** {self.event['event_date'].strftime('%Y-%m-%d')}\n"
-                    f"**Time:** {self.event['event_time'].strftime('%H:%M')}\n"
-                    f"**Signups:** {len([s for s in all_signups if s['status'] == 'signed'])} signed"
-                ),
-                inline=False
-            )
-            embed.set_footer(text="Paste this in WoW to import the event into your Luminisbot Events addon")
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-        else:
-            # Need to split into multiple parts
-            chunk_size = 250  # Conservative chunk size for WoW chat limits
-            chunks = [encoded[i:i+chunk_size] for i in range(0, len(encoded), chunk_size)]
-            
-            embed = discord.Embed(
-                title=f"🎮 WoW Addon Import - {self.event['title']}",
-                description=(
-                    f"This event is large ({len(all_signups)} signups). "
-                    f"Copy these commands in order and paste them in WoW:"
-                ),
-                color=0x00ff00
-            )
-            
-            # Add chunks as fields
-            for i, chunk in enumerate(chunks, 1):
-                embed.add_field(
-                    name=f"Part {i}/{len(chunks)}",
-                    value=f"```/luminisbot import{i} {chunk}```",
-                    inline=False
-                )
-            
-            # Final command to complete import
-            embed.add_field(
-                name="Final Step",
-                value="```/luminisbot importdone```",
-                inline=False
-            )
-            
-            embed.set_footer(text="Paste each command in order, then /luminisbot importdone to finish")
-            
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Show modal with the string for easy copying
+        modal = EventStringModal(
+            title=f"WoW Import - {self.event['title'][:30]}",
+            event_string=encoded,
+            event_title=self.event['title'],
+            event_date=self.event['event_date'],
+            event_time=self.event['event_time'],
+            signup_count=len([s for s in all_signups if s['status'] == 'signed'])
+        )
+        await interaction.response.send_modal(modal)
     
     @discord.ui.button(label="Manage Assistants", style=discord.ButtonStyle.secondary, emoji="👥", row=1)
     async def manage_assistants_button(self, interaction: discord.Interaction, button: Button):

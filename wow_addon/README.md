@@ -38,13 +38,14 @@ In Discord, open the raid event you want to import:
 
 1. Click the **⚙️ Admin Panel** button on the event
 2. Click **🎮 Copy Event String**
-3. Copy the command from the bot's response
+3. Copy the command from the bot's response (it starts with `/luminisbot import`)
 
 ### Step 2: Import to WoW
 
 1. Open World of Warcraft
-2. Paste the command in chat (press Enter after pasting)
-3. The event will be imported automatically!
+2. **Paste the entire command** in chat (can be very long - that's normal!)
+3. Press Enter
+4. You should see: `✓ Imported event: <EventName> (X signups)`
 
 **Example:**
 ```
@@ -55,15 +56,33 @@ In Discord, open the raid event you want to import:
 
 Open the addon window with any of these commands:
 ```
-/luminisbot show
 /luminisbot
-/lb show
 /lb
 ```
 
+You should see a window with your imported event!
+
 ### Step 4: Invite Players
 
-Click the **Invite** button next to an event to invite all signed-up players!
+Click the **Invite All** button next to an event to invite all signed-up players!
+
+---
+
+## ⚠️ Troubleshooting
+
+**Don't see the window?** → Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+
+**Commands not working?** → See [TESTING.md](TESTING.md) for debug steps
+
+**When you log in, you should see:**
+```
+===========================================
+Luminisbot Events v1.0.0 loaded!
+Type /luminisbot or /lb to get started
+===========================================
+```
+
+If you don't see this message, the addon isn't loading. Check the file structure in TROUBLESHOOTING.md.
 
 ## 🎯 Commands
 

@@ -111,12 +111,12 @@ function addon:ParseJSON(str)
                 elseif char == ',' and depth == 0 then
                     table.insert(arr, self:ParseJSON(current))
                     current = ""
-                    goto continue
+                else
+                    current = current .. char
                 end
+            else
+                current = current .. char
             end
-            
-            current = current .. char
-            ::continue::
         end
         
         if #current > 0 then
@@ -155,12 +155,12 @@ function addon:ParseJSON(str)
                         obj[key] = self:ParseJSON(value)
                     end
                     current = ""
-                    goto continue
+                else
+                    current = current .. char
                 end
+            else
+                current = current .. char
             end
-            
-            current = current .. char
-            ::continue::
         end
         
         if #current > 0 then
@@ -188,10 +188,14 @@ function addon:ImportEventString(encodedString)
         return false
     end
     
+    -- Debug: Show first 100 chars of decoded JSON
+    addon:Print("Decoded JSON (first 100 chars): " .. jsonString:sub(1, 100))
+    
     -- Parse JSON
     local eventData = self:ParseJSON(jsonString)
     if not eventData or type(eventData) ~= "table" then
         self:PrintError("Failed to parse event data! The import string may be corrupted.")
+        self:PrintError("JSON length: " .. #jsonString .. " chars")
         return false
     end
     
@@ -333,14 +337,20 @@ end
 -- SLASH COMMAND HANDLER
 -- ============================================================================
 
-SLASH_LUMINISBOT1 = "/luminisbot"
-SLASH_LUMINISBOT2 = "/lb"
-SlashCmdList["LUMINISBOT"] = function(msg)
-    local command, arg = strsplit(" ", msg, 2)
-    command = (command or ""):lower()
-    
-    if command == "" or command == "show" then
-        addon:ToggleUI()
+-- Slash commands will be registered in PLAYER_LOGIN event
+local function RegisterSlashCommands()
+    SLASH_LUMINISBOT1 = "/luminisbot"
+    SLASH_LUMINISBOT2 = "/lb"
+    SlashCmdList["LUMINISBOT"] = function(msg)
+        local command, arg = strsplit(" ", msg, 2)
+        command = (command or ""):lower()
+        
+        if command == "" or command == "show" then
+            if addon.ToggleUI then
+                addon:ToggleUI()
+            else
+                addon:PrintError("UI not loaded yet! Try /reload and try again.")
+            end
         
     elseif command == "import" then
         if arg and arg ~= "" then
@@ -394,16 +404,26 @@ SlashCmdList["LUMINISBOT"] = function(msg)
         
     elseif command == "help" then
         addon:Print("Available commands:")
+        addon:Print("  /luminisbot (or /lb) - Toggle event window")
         addon:Print("  /luminisbot show - Toggle event window")
         addon:Print("  /luminisbot import <string> - Import event from Discord")
         addon:Print("  /luminisbot list - List all imported events")
         addon:Print("  /luminisbot clear - Remove past events")
         addon:Print("  /luminisbot help - Show this help")
+        addon:Print(" ")
+        addon:Print("To import: Click 'Copy Event String' in Discord,")
+        addon:Print("copy the string from the modal, then paste it after")
+        addon:Print("'/luminisbot import' in WoW chat.")
         
     else
         -- Default: toggle UI
-        addon:ToggleUI()
+        if addon.ToggleUI then
+            addon:ToggleUI()
+        else
+            addon:PrintError("UI not loaded yet! Try /reload and try again.")
+        end
     end
+end
 end
 
 -- ============================================================================
@@ -432,8 +452,16 @@ frame:RegisterEvent("PLAYER_LOGIN")
 
 frame:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
-        -- Addon loaded
-        addon:Print("loaded! Type |cff00ff00/luminisbot|r to get started.")
+        -- Addon loaded - register slash commands
+        RegisterSlashCommands()
+        
+        -- Print to chat so user knows addon loaded
+        print(" ")
+        print("|cff00ff00===========================================|r")
+        print("|cff00ff00Luminisbot Events v" .. addon.version .. " loaded!|r")
+        print("|cffffffffType |cff00ff00/luminisbot|r or |cff00ff00/lb|r to get started|r")
+        print("|cff00ff00===========================================|r")
+        print(" ")
         
     elseif event == "PLAYER_LOGIN" then
         -- Player logged in - check for updates
