@@ -252,14 +252,19 @@ async def warcraft_recorder_command(interaction: discord.Interaction, email: str
     
     try:
         print(f"[CMD] Processing warcraft recorder request for email: {email}")
-        result = await add_email_to_roster(
-            email=email,
-            recorder_email=RECORDER_EMAIL,
-            recorder_password=RECORDER_PASSWORD
+        # Run the synchronous Selenium function in a thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            add_email_to_roster,
+            RECORDER_EMAIL,
+            RECORDER_PASSWORD,
+            email
         )
         
-        if "successfully" in result.lower():
-            await interaction.edit_original_response(content=f"✅ **Success!** {result}")
+        # Check if result is True (success) or a string (error message)
+        if result is True:
+            await interaction.edit_original_response(content=f"✅ **Success!** Email {email} has been added to the Warcraft Recorder roster.")
         else:
             await interaction.edit_original_response(content=f"❌ **Error:** {result}")
 
@@ -267,7 +272,9 @@ async def warcraft_recorder_command(interaction: discord.Interaction, email: str
         print(f"An exception occurred in the command handler: {e}")
         # Use edit_original_response if the initial message was already sent
         if interaction.response.is_done():
-            await interaction.edit_original_response(content="A critical error occurred after the initial response.")
+            await interaction.edit_original_response(content=f"❌ A critical error occurred: {str(e)}")
+        else:
+            await interaction.response.send_message(content=f"❌ A critical error occurred: {str(e)}", ephemeral=True)
 
 @tree.command(name="connectwow", description="Link your World of Warcraft characters to your Discord account")
 async def connectwow_command(interaction: discord.Interaction):
