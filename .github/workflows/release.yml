@@ -68,6 +68,26 @@ jobs:
           cd companion_app
           python build_exe.py
       
+      - name: Self-sign executable
+        run: |
+          # Create a self-signed certificate
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Luminis Gaming, O=Luminis Gaming, C=NO" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(3)
+          
+          # Export certificate
+          $pwd = ConvertTo-SecureString -String "temp" -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath LuminisGaming.pfx -Password $pwd
+          
+          # Sign the executable
+          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" sign /f LuminisGaming.pfx /p temp /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 companion_app\dist\LuminisbotCompanion.exe
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Warning: Failed to sign executable, continuing anyway..."
+          } else {
+            Write-Host "Successfully signed executable"
+          }
+        shell: pwsh
+        continue-on-error: true
+      
       - name: Get version
         id: get_version
         run: |

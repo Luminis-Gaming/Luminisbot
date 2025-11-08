@@ -68,23 +68,24 @@ function addon:CreateMainFrame()
     
     -- Set the portrait to the Luminis logo
     local logoPath = "Interface\\AddOns\\LuminisbotEvents\\assets\\luminis_logo"
-    if frame.portrait then
-        frame.portrait:SetTexture(logoPath)
+    
+    -- Try different portrait references (varies by WoW version)
+    local portraitTexture = frame.PortraitContainer and frame.PortraitContainer.portrait or frame.portrait or frame.Portrait
+    
+    if portraitTexture then
+        portraitTexture:SetTexture(logoPath)
+        portraitTexture:SetTexCoord(0, 1, 0, 1)  -- Reset texture coordinates
+        
         -- If logo fails to load, use a default icon
-        if not frame.portrait:GetTexture() then
-            frame.portrait:SetTexture("Interface\\Icons\\INV_Misc_Note_06")
-        end
-    elseif frame.Portrait then
-        frame.Portrait:SetTexture(logoPath)
-        if not frame.Portrait:GetTexture() then
-            frame.Portrait:SetTexture("Interface\\Icons\\INV_Misc_Note_06")
+        if not portraitTexture:GetTexture() then
+            portraitTexture:SetTexture("Interface\\Icons\\INV_Misc_Note_06")
         end
     end
     
-    -- Tab buttons for switching between views
+    -- Tab buttons for switching between views (positioned to avoid portrait)
     local eventsTab = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     eventsTab:SetSize(100, 25)
-    eventsTab:SetPoint("TOPLEFT", frame, "TOPLEFT", 15, -30)
+    eventsTab:SetPoint("TOPLEFT", frame, "TOPLEFT", 70, -28)  -- Moved right to avoid portrait
     eventsTab:SetText("Events")
     frame.eventsTab = eventsTab
     
