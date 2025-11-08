@@ -32,8 +32,6 @@ SolidCompression=yes
 
 ; Modern UI
 WizardStyle=modern
-WizardImageFile=compiler:WizModernImage-IS.bmp
-WizardSmallImageFile=compiler:WizModernSmallImage-IS.bmp
 
 ; Icons
 SetupIconFile=luminis_logo.ico
