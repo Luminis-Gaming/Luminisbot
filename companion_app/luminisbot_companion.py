@@ -27,7 +27,7 @@ except ImportError:
     print("Warning: updater.py not found - auto-update disabled")
 
 # Version
-VERSION = "1.0.2.5"
+VERSION = "1.0.2.6"
 
 # Luminis Colors
 LUMINIS_BG = "#1a1a1a"
