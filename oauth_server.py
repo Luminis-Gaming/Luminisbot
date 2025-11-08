@@ -348,15 +348,420 @@ async def handle_health(request):
     return web.Response(text="OK")
 
 
+# ============================================================================
+# API KEY AUTHENTICATION & RATE LIMITING
+# ============================================================================
+
+# In-memory rate limiting (use Redis in production for multi-instance deployments)
+from collections import defaultdict
+from time import time
+
+rate_limit_data = defaultdict(list)
+RATE_LIMIT_REQUESTS = 60  # requests
+RATE_LIMIT_WINDOW = 60  # seconds
+
+def check_rate_limit(identifier):
+    """Check if identifier has exceeded rate limit"""
+    now = time()
+    # Clean old requests
+    rate_limit_data[identifier] = [
+        req_time for req_time in rate_limit_data[identifier] 
+        if now - req_time < RATE_LIMIT_WINDOW
+    ]
+    
+    # Check limit
+    if len(rate_limit_data[identifier]) >= RATE_LIMIT_REQUESTS:
+        return False
+    
+    # Add current request
+    rate_limit_data[identifier].append(now)
+    return True
+
+
+def generate_api_key():
+    """Generate a secure API key"""
+    return secrets.token_urlsafe(32)
+
+
+async def verify_api_key(request):
+    """Middleware to verify API key"""
+    # Get API key from header
+    api_key = request.headers.get('X-API-Key')
+    
+    if not api_key:
+        return web.json_response(
+            {'error': 'Missing API key', 'message': 'X-API-Key header required'},
+            status=401
+        )
+    
+    # Verify API key in database
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("""
+            SELECT discord_user_id, guild_id, is_active, created_at, last_used
+            FROM api_keys
+            WHERE key_hash = %s AND is_active = true
+        """, (api_key,))
+        
+        result = cursor.fetchone()
+        
+        if not result:
+            cursor.close()
+            conn.close()
+            return web.json_response(
+                {'error': 'Invalid API key'},
+                status=401
+            )
+        
+        discord_user_id = result['discord_user_id']
+        guild_id = result['guild_id']
+        
+        # Verify user has connected their Battle.net account
+        cursor.execute("""
+            SELECT discord_id FROM wow_connections WHERE discord_id = %s
+        """, (discord_user_id,))
+        
+        connection = cursor.fetchone()
+        
+        if not connection:
+            cursor.close()
+            conn.close()
+            return web.json_response(
+                {'error': 'Battle.net account not connected', 'message': 'Please connect your Battle.net account using /connectwow in Discord'},
+                status=403
+            )
+        
+        # Update last_used timestamp
+        cursor.execute("""
+            UPDATE api_keys 
+            SET last_used = NOW(), request_count = request_count + 1
+            WHERE key_hash = %s
+        """, (api_key,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Rate limiting
+        if not check_rate_limit(api_key):
+            return web.json_response(
+                {'error': 'Rate limit exceeded', 'message': f'Max {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW}s'},
+                status=429
+            )
+        
+        # Store user and guild info in request for later use
+        request['discord_user_id'] = discord_user_id
+        request['guild_id'] = guild_id
+        request['api_key'] = api_key
+        
+        return None  # Success, continue to handler
+        
+    except Exception as e:
+        logger.error(f"Error verifying API key: {e}")
+        return web.json_response(
+            {'error': 'Internal server error'},
+            status=500
+        )
+
+
+# ============================================================================
+# API ENDPOINTS FOR WOW ADDON
+# ============================================================================
+
+async def handle_get_events(request):
+    """
+    GET /api/v1/events
+    Returns all future events for the guild associated with the API key
+    """
+    # Verify API key
+    auth_error = await verify_api_key(request)
+    if auth_error:
+        return auth_error
+    
+    guild_id = request['guild_id']
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all future events for this guild
+        cursor.execute("""
+            SELECT 
+                e.id,
+                e.title,
+                e.event_date,
+                e.event_time,
+                e.creator_id,
+                e.created_at
+            FROM raid_events e
+            WHERE e.guild_id = %s
+                AND e.event_date >= CURRENT_DATE
+            ORDER BY e.event_date, e.event_time
+        """, (guild_id,))
+        
+        events = cursor.fetchall()
+        
+        # For each event, get signups
+        result = []
+        for event in events:
+            cursor.execute("""
+                SELECT 
+                    rs.character_name as name,
+                    wc.realm_slug as realm,
+                    rs.character_class as class,
+                    rs.role,
+                    rs.spec,
+                    rs.status
+                FROM raid_signups rs
+                LEFT JOIN wow_characters wc ON 
+                    rs.discord_id = wc.discord_id 
+                    AND rs.character_name = wc.character_name
+                WHERE rs.event_id = %s
+                ORDER BY 
+                    CASE rs.status
+                        WHEN 'signed' THEN 1
+                        WHEN 'late' THEN 2
+                        WHEN 'tentative' THEN 3
+                        WHEN 'benched' THEN 4
+                        WHEN 'absent' THEN 5
+                    END,
+                    rs.role, rs.character_class, rs.character_name
+            """, (event['id'],))
+            
+            signups = cursor.fetchall()
+            
+            result.append({
+                'id': event['id'],
+                'title': event['title'],
+                'date': event['event_date'].isoformat(),
+                'time': event['event_time'].strftime('%H:%M:%S'),
+                'signups': [dict(s) for s in signups]
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"API: Returned {len(result)} events for guild {guild_id}")
+        
+        return web.json_response({
+            'success': True,
+            'count': len(result),
+            'events': result,
+            'timestamp': datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching events: {e}")
+        return web.json_response(
+            {'success': False, 'error': 'Internal server error'},
+            status=500
+        )
+
+
+async def handle_get_single_event(request):
+    """
+    GET /api/v1/events/{event_id}
+    Returns a single event with all signups
+    """
+    # Verify API key
+    auth_error = await verify_api_key(request)
+    if auth_error:
+        return auth_error
+    
+    guild_id = request['guild_id']
+    event_id = request.match_info.get('event_id')
+    
+    try:
+        event_id = int(event_id)
+    except (ValueError, TypeError):
+        return web.json_response(
+            {'success': False, 'error': 'Invalid event ID'},
+            status=400
+        )
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get event (verify it belongs to this guild)
+        cursor.execute("""
+            SELECT 
+                e.id,
+                e.title,
+                e.event_date,
+                e.event_time,
+                e.creator_id
+            FROM raid_events e
+            WHERE e.id = %s AND e.guild_id = %s
+        """, (event_id, guild_id))
+        
+        event = cursor.fetchone()
+        
+        if not event:
+            cursor.close()
+            conn.close()
+            return web.json_response(
+                {'success': False, 'error': 'Event not found or unauthorized'},
+                status=404
+            )
+        
+        # Get signups
+        cursor.execute("""
+            SELECT 
+                rs.character_name as name,
+                wc.realm_slug as realm,
+                rs.character_class as class,
+                rs.role,
+                rs.spec,
+                rs.status
+            FROM raid_signups rs
+            LEFT JOIN wow_characters wc ON 
+                rs.discord_id = wc.discord_id 
+                AND rs.character_name = wc.character_name
+            WHERE rs.event_id = %s
+            ORDER BY rs.role, rs.character_class, rs.character_name
+        """, (event_id,))
+        
+        signups = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        result = {
+            'id': event['id'],
+            'title': event['title'],
+            'date': event['event_date'].isoformat(),
+            'time': event['event_time'].strftime('%H:%M:%S'),
+            'signups': [dict(s) for s in signups]
+        }
+        
+        logger.info(f"API: Returned event {event_id} for guild {guild_id}")
+        
+        return web.json_response({
+            'success': True,
+            'event': result
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching event: {e}")
+        return web.json_response(
+            {'success': False, 'error': 'Internal server error'},
+            status=500
+        )
+
+
+async def handle_generate_api_key(request):
+    """
+    POST /api/v1/keys/generate
+    Generate a new API key for a guild (requires admin verification)
+    Body: { "guild_id": "123456789", "admin_token": "secret" }
+    """
+    try:
+        data = await request.json()
+    except:
+        return web.json_response(
+            {'error': 'Invalid JSON'},
+            status=400
+        )
+    
+    guild_id = data.get('guild_id')
+    admin_token = data.get('admin_token')
+    
+    # Verify admin token (set in environment)
+    ADMIN_TOKEN = os.getenv('API_ADMIN_TOKEN')
+    if not ADMIN_TOKEN or admin_token != ADMIN_TOKEN:
+        return web.json_response(
+            {'error': 'Unauthorized'},
+            status=401
+        )
+    
+    if not guild_id:
+        return web.json_response(
+            {'error': 'Missing guild_id'},
+            status=400
+        )
+    
+    try:
+        # Generate new API key
+        api_key = generate_api_key()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Store API key
+        cursor.execute("""
+            INSERT INTO api_keys (guild_id, key_hash, is_active, created_at, request_count)
+            VALUES (%s, %s, true, NOW(), 0)
+            RETURNING id
+        """, (guild_id, api_key))
+        
+        key_id = cursor.fetchone()[0]
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"Generated new API key (ID: {key_id}) for guild {guild_id}")
+        
+        return web.json_response({
+            'success': True,
+            'api_key': api_key,
+            'guild_id': guild_id,
+            'message': 'Save this key securely - it cannot be retrieved later'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error generating API key: {e}")
+        return web.json_response(
+            {'success': False, 'error': 'Internal server error'},
+            status=500
+        )
+
+
+# CORS middleware for addon requests
+@web.middleware
+async def cors_middleware(request, handler):
+    """Add CORS headers for WoW addon requests"""
+    if request.path.startswith('/api/'):
+        # Handle preflight
+        if request.method == 'OPTIONS':
+            return web.Response(
+                headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'X-API-Key, Content-Type',
+                    'Access-Control-Max-Age': '3600'
+                }
+            )
+        
+        # Handle actual request
+        response = await handler(request)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'X-API-Key, Content-Type'
+        return response
+    
+    return await handler(request)
+
+
 def create_app(bot=None):
     """Create and configure the web application"""
     global discord_bot
     discord_bot = bot
     
-    app = web.Application()
+    # Create app with middleware
+    app = web.Application(middlewares=[cors_middleware])
+    
+    # OAuth routes
     app.router.add_get('/authorize', handle_authorize)
     app.router.add_get('/callback', handle_callback)
     app.router.add_get('/health', handle_health)
+    
+    # API routes (v1)
+    app.router.add_get('/api/v1/events', handle_get_events)
+    app.router.add_get('/api/v1/events/{event_id}', handle_get_single_event)
+    app.router.add_post('/api/v1/keys/generate', handle_generate_api_key)
     
     return app
 

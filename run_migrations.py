@@ -218,6 +218,44 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ event_assistants table ready")
         
+        # ============================================================================
+        # API KEYS TABLE (for WoW Addon Authentication)
+        # ============================================================================
+        
+        # Create api_keys table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id SERIAL PRIMARY KEY,
+                discord_user_id TEXT NOT NULL,
+                guild_id BIGINT NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                last_used TIMESTAMP WITH TIME ZONE,
+                request_count INTEGER DEFAULT 0,
+                notes TEXT,
+                UNIQUE(discord_user_id, guild_id)
+            );
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash) WHERE is_active = true;
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_api_keys_user_guild ON api_keys(discord_user_id, guild_id);
+        """)
+        
+        cursor.execute("""
+            COMMENT ON TABLE api_keys IS 'API keys for WoW addon authentication - one key per user per guild';
+        """)
+        
+        cursor.execute("""
+            COMMENT ON COLUMN api_keys.key_hash IS 'The actual API key (stored as plain text for now - could be hashed later)';
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ api_keys table ready")
+        
         # Grant permissions
         cursor.execute("""
             GRANT ALL PRIVILEGES ON TABLE oauth_states TO luminisbot;
@@ -245,6 +283,10 @@ def run_migrations():
         
         cursor.execute("""
             GRANT ALL PRIVILEGES ON TABLE event_assistants TO luminisbot;
+        """)
+        
+        cursor.execute("""
+            GRANT ALL PRIVILEGES ON TABLE api_keys TO luminisbot;
         """)
         
         cursor.execute("""

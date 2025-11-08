@@ -355,6 +355,58 @@ function addon:DeleteEvent(eventId)
     return false
 end
 
+function addon:ParseSubscriptionString(subString)
+    -- Decode Base64
+    local decoded = self:Base64Decode(subString)
+    if not decoded then
+        self:PrintError("Invalid subscription string format!")
+        return
+    end
+    
+    -- Parse guild_id:api_key format
+    local guildId, apiKey = decoded:match("^(%d+):(.+)$")
+    if not guildId or not apiKey then
+        self:PrintError("Invalid subscription format! Expected guild_id:api_key")
+        return
+    end
+    
+    -- Save to database
+    LuminisbotEventsDB.guildId = guildId
+    LuminisbotEventsDB.apiKey = apiKey
+    
+    self:Print("✅ Subscription saved successfully!")
+    self:Print("Server ID: " .. guildId)
+    self:Print("Syncing events...")
+    
+    -- Refresh settings tab
+    self:RefreshSettingsTab()
+    
+    -- Auto-sync
+    self:SyncEvents()
+end
+
+function addon:SyncEvents()
+    if not LuminisbotEventsDB.guildId or LuminisbotEventsDB.guildId == "" then
+        self:PrintError("No subscription configured!")
+        self:PrintError("Go to Settings tab and enter your subscription string")
+        self:PrintError("Get it from Discord with /subscribe command")
+        return
+    end
+    
+    if not LuminisbotEventsDB.apiKey or LuminisbotEventsDB.apiKey == "" then
+        self:PrintError("No API key found!")
+        self:PrintError("Please re-subscribe using /subscribe in Discord")
+        return
+    end
+    
+    -- For now, this is a placeholder until we implement the API
+    self:PrintWarning("Sync feature coming soon!")
+    self:PrintWarning("This will require a companion app to fetch events from the API")
+    self:Print("For now, use the Import String tab to manually import events")
+    self:Print("Server ID configured: " .. LuminisbotEventsDB.guildId)
+    self:Print("API Key configured: " .. string.sub(LuminisbotEventsDB.apiKey, 1, 8) .. "...")
+end
+
 function addon:ClearOldEvents()
     local today = date("%Y-%m-%d")
     local removed = 0
@@ -473,12 +525,16 @@ local function RegisterSlashCommands()
         -- Complete reset - wipe all saved data
         LuminisbotEventsDB = {
             events = {},
-            lastUpdate = 0
+            lastUpdate = 0,
+            guildId = nil,
+            apiKey = nil,
+            autoSync = false
         }
         addon.events = {}
         addon:Print("All saved data has been reset!")
         if addon.mainFrame then
             addon:RefreshUI()
+            addon:RefreshSettingsTab()
         end
         
     elseif command == "list" then
@@ -543,6 +599,26 @@ frame:RegisterEvent("PLAYER_LOGIN")
 
 frame:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
+        -- Initialize SavedVariables
+        if not LuminisbotEventsDB then
+            LuminisbotEventsDB = {}
+        end
+        if not LuminisbotEventsDB.events then
+            LuminisbotEventsDB.events = {}
+        end
+        if not LuminisbotEventsDB.lastUpdate then
+            LuminisbotEventsDB.lastUpdate = 0
+        end
+        if not LuminisbotEventsDB.guildId then
+            LuminisbotEventsDB.guildId = ""
+        end
+        if not LuminisbotEventsDB.apiKey then
+            LuminisbotEventsDB.apiKey = ""
+        end
+        if not LuminisbotEventsDB.autoSync then
+            LuminisbotEventsDB.autoSync = false
+        end
+        
         -- Addon loaded - register slash commands
         RegisterSlashCommands()
         

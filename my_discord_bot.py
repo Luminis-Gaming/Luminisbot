@@ -310,6 +310,112 @@ async def connectwow_command(interaction: discord.Interaction):
     await interaction.edit_original_response(embed=embed, view=view)
     print(f"[CMD] Generated WoW connection URL for Discord user {discord_id}")
 
+@tree.command(name="subscribe", description="Subscribe to raid events in WoW addon (requires Battle.net connection)")
+async def subscribe_command(interaction: discord.Interaction):
+    """Generate personalized subscription string for WoW addon."""
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ This command can only be used in a server, not in DMs!",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    discord_id = str(interaction.user.id)
+    guild_id = interaction.guild.id
+    
+    conn = get_db_connection()
+    if not conn:
+        await interaction.edit_original_response(content="❌ **Database Error:** Could not connect to database.")
+        return
+    
+    try:
+        import psycopg2.extras
+        import secrets
+        import base64
+        
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        # Check if user has connected their Battle.net account
+        cur.execute("SELECT * FROM wow_connections WHERE discord_id = %s", (discord_id,))
+        connection = cur.fetchone()
+        
+        if not connection:
+            embed = discord.Embed(
+                title="❌ Battle.net Not Connected",
+                description=(
+                    "You must link your Battle.net account before subscribing to raid events.\n\n"
+                    "**How to connect:**\n"
+                    "1. Use the `/connectwow` command\n"
+                    "2. Authorize LuminisBot with your Battle.net account\n"
+                    "3. Come back here and use `/subscribe` again"
+                ),
+                color=0xff0000
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # Check if user already has an API key for this guild
+        cur.execute("""
+            SELECT key_hash FROM api_keys 
+            WHERE discord_user_id = %s AND guild_id = %s AND is_active = true
+        """, (discord_id, guild_id))
+        
+        existing_key = cur.fetchone()
+        
+        if existing_key:
+            api_key = existing_key['key_hash']
+            print(f"[CMD] Reusing existing API key for user {discord_id} in guild {guild_id}")
+        else:
+            # Generate new API key
+            api_key = secrets.token_urlsafe(32)
+            
+            # Store in database
+            cur.execute("""
+                INSERT INTO api_keys (discord_user_id, guild_id, key_hash, is_active, created_at, request_count, notes)
+                VALUES (%s, %s, %s, true, NOW(), 0, %s)
+            """, (discord_id, guild_id, api_key, f"Generated for {interaction.user.name} in {interaction.guild.name}"))
+            
+            conn.commit()
+            print(f"[CMD] Generated new API key for user {discord_id} in guild {guild_id}")
+        
+        # Create subscription string: guild_id:api_key
+        subscription_data = f"{guild_id}:{api_key}"
+        
+        # Base64 encode for easier copying (optional, makes it look cleaner)
+        subscription_string = base64.b64encode(subscription_data.encode()).decode()
+        
+        # Create embed with instructions
+        embed = discord.Embed(
+            title="✅ Subscription String Generated",
+            description=(
+                f"Your personalized subscription for **{interaction.guild.name}** is ready!\n\n"
+                "**Your Subscription String:**\n"
+                f"```{subscription_string}```\n"
+                "⚠️ **Keep this private!** This string is unique to you and this server.\n\n"
+                "📋 **Setup Instructions:**\n"
+                "1. Copy the string above\n"
+                "2. Open WoW and type `/lb` to open the addon\n"
+                "3. Go to the **Settings** tab\n"
+                "4. Paste your subscription string in the input field\n"
+                "5. Click **Save & Sync**\n\n"
+                "🔄 All raid events from this server will automatically appear in your addon!"
+            ),
+            color=0x00ff00
+        )
+        embed.set_footer(text=f"Luminisbot • {interaction.guild.name}")
+        embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
+        
+        await interaction.edit_original_response(embed=embed)
+        print(f"[CMD] Provided subscription string to user {interaction.user.name} for guild {guild_id}")
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to generate subscription: {e}")
+        await interaction.edit_original_response(content=f"❌ **Error:** {e}")
+    finally:
+        conn.close()
+
 @tree.command(name="mycharacters", description="View your linked World of Warcraft characters")
 async def mycharacters_command(interaction: discord.Interaction):
     """Display user's linked WoW characters."""
