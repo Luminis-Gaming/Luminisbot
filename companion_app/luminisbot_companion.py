@@ -27,7 +27,7 @@ except ImportError:
     print("Warning: updater.py not found - auto-update disabled")
 
 # Version
-VERSION = "1.0.2.7"
+VERSION = "1.0.2.8"
 
 # Luminis Colors
 LUMINIS_BG = "#1a1a1a"
@@ -1109,6 +1109,10 @@ class CompanionGUI:
     def show_window(self):
         """Show window from tray"""
         self.root.deiconify()
+        self.root.lift()  # Bring window to front
+        self.root.focus_force()  # Force focus on the window
+        self.root.attributes('-topmost', True)  # Temporarily set topmost
+        self.root.after(100, lambda: self.root.attributes('-topmost', False))  # Remove topmost after 100ms
     
     def quit_app(self):
         """Quit application"""
