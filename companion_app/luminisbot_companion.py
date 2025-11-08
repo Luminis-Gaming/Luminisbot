@@ -1009,8 +1009,14 @@ class CompanionGUI:
     def start_sync(self):
         """Start syncing"""
         try:
-            # Apply current config
-            self.apply_subscription()
+            # Only validate/save config if we're in the settings window
+            if hasattr(self, 'sub_entry'):
+                self.apply_subscription()
+            
+            # Verify we have the required configuration
+            if not self.companion.api_key or not self.companion.wow_path:
+                messagebox.showerror("Error", "Configuration incomplete. Please check settings.")
+                return
             
             # Start sync
             self.companion.start_sync()

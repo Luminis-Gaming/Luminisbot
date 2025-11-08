@@ -682,6 +682,27 @@ local function RegisterSlashCommands()
     elseif command == "clear" then
         addon:ClearOldEvents()
         
+    elseif command == "status" or command == "debug" then
+        -- Debug companion status
+        addon:Print("=== Companion Status Debug ===")
+        if LuminisbotCompanionData then
+            addon:Print("CompanionData exists: YES")
+            if LuminisbotCompanionData.companionHeartbeat then
+                local heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+                addon:Print(string.format("Heartbeat age: %d seconds", heartbeatAge))
+                addon:Print(string.format("Is active: %s", heartbeatAge < 120 and "YES" or "NO"))
+            else
+                addon:Print("Heartbeat: NOT SET")
+            end
+            if LuminisbotCompanionData.lastUpdate then
+                addon:Print(string.format("Last update: %d", LuminisbotCompanionData.lastUpdate))
+            else
+                addon:Print("Last update: NOT SET")
+            end
+        else
+            addon:Print("CompanionData exists: NO - /reload to load")
+        end
+        
     elseif command == "reset" then
         -- Complete reset - wipe all saved data
         LuminisbotEventsDB = {

@@ -531,10 +531,30 @@ function addon:ShowEventDetails(event)
     
     local scrollChild = frame.scrollChild
     
-    -- Clear existing content
-    for _, child in pairs({scrollChild:GetChildren()}) do
+    -- Clear existing content (all children and font strings)
+    local children = {scrollChild:GetChildren()}
+    for _, child in pairs(children) do
+        if child.expandedFrame then
+            -- Clear expanded frame children first
+            local expandedChildren = {child.expandedFrame:GetChildren()}
+            for _, expChild in pairs(expandedChildren) do
+                expChild:Hide()
+                expChild:SetParent(nil)
+            end
+            child.expandedFrame:Hide()
+            child.expandedFrame:SetParent(nil)
+        end
         child:Hide()
         child:SetParent(nil)
+    end
+    
+    -- Clear all font strings too
+    local regions = {scrollChild:GetRegions()}
+    for _, region in pairs(regions) do
+        if region:GetObjectType() == "FontString" then
+            region:SetText("")
+            region:Hide()
+        end
     end
     
     -- Title (handle both old and new template structures)
@@ -545,8 +565,8 @@ function addon:ShowEventDetails(event)
         frame.TitleContainer.TitleText:SetText(title)
     end
     
-    -- Create header
-    local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    -- Create header (use scrollChild so it gets cleared on refresh)
+    local header = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     header:SetPoint("TOP", scrollChild, "TOP", 0, -10)
     
     -- Convert date from YYYY-MM-DD to DD/MM/YYYY
@@ -683,47 +703,93 @@ function addon:ShowEventDetails(event)
                 end)
                 
                 -- Expanded content frame (show if expanded)
+                -- Position it BELOW the first row (player name line)
                 local expandedFrame = CreateFrame("Frame", nil, playerBox)
-                expandedFrame:SetPoint("TOPLEFT", playerBox, "TOPLEFT", 5, -22)
+                expandedFrame:SetPoint("TOPLEFT", playerBox, "TOPLEFT", 5, -24)  -- Start below the 22px header
                 expandedFrame:SetSize(460, 60)
                 if not isExpanded then
                     expandedFrame:Hide()
                 end
                 playerBox.expandedFrame = expandedFrame
                 
-                -- Owner controls (only shown if player is event owner)
-                if addon:IsEventOwner(event) and addon:IsCompanionActive() then
-                    local ownerLabel = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                    ownerLabel:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -5)
-                    ownerLabel:SetText("Event Owner Controls:")
-                    ownerLabel:SetTextColor(1, 0.82, 0)
+                -- Check if this is the current player
+                local currentPlayer = UnitName("player")
+                local isOwnCharacter = (currentPlayer == characterName)
+                local isOwner = addon:IsEventOwner(event)
+                local companionActive = addon:IsCompanionActive()
+                
+                -- Determine what controls to show
+                local showStatusButtons = (isOwnCharacter or isOwner) and companionActive
+                
+                if showStatusButtons then
+                    -- Label
+                    local label = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    label:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -5)
+                    if isOwner and not isOwnCharacter then
+                        label:SetText("Owner Controls - Change " .. characterName .. "'s status:")
+                        label:SetTextColor(1, 0.82, 0)
+                    else
+                        label:SetText("Change your status:")
+                        label:SetTextColor(0.7, 0.7, 0.7)
+                    end
                     
-                    -- Status change buttons for owner
-                    local ownerStatuses = {
-                        {text = "Sign", status = "signed", color = {0, 1, 0}},
-                        {text = "Late", status = "late", color = {1, 0.8, 0}},
-                        {text = "Tent.", status = "tentative", color = {0.8, 0.8, 0}},
-                        {text = "Bench", status = "benched", color = {0.5, 0.5, 0.5}},
-                        {text = "Absent", status = "absent", color = {1, 0, 0}}
+                    -- Status change buttons
+                    local statuses = {
+                        {text = "Signed", status = "signed"},
+                        {text = "Late", status = "late"},
+                        {text = "Tentative", status = "tentative"},
+                        {text = "Benched", status = "benched"},
+                        {text = "Absent", status = "absent"}
                     }
                     
                     local btnWidth = 55
                     local btnSpacing = 3
-                    for i, statusInfo in ipairs(ownerStatuses) do
+                    for i, statusInfo in ipairs(statuses) do
                         local btn = CreateFrame("Button", nil, expandedFrame, "UIPanelButtonTemplate")
                         btn:SetSize(btnWidth, 20)
                         btn:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", (i - 1) * (btnWidth + btnSpacing), -25)
                         btn:SetText(statusInfo.text)
+                        
+                        -- Disable bench button for own character
+                        if statusInfo.status == "benched" and isOwnCharacter then
+                            btn:Disable()
+                            btn:SetAlpha(0.3)
+                            btn:SetText("Benched*")
+                        end
+                        
                         btn:SetScript("OnClick", function()
-                            -- Owner changes another player's status
                             addon:QueueCommand("change_status", event.id, {
                                 character = characterName,
                                 realm = signup.realm or GetRealmName(),
                                 status = statusInfo.status
                             })
-                            addon:Print(string.format("Changed %s to %s", characterName, statusInfo.status))
+                            if isOwnCharacter then
+                                addon:Print(string.format("Changed your status to %s", statusInfo.status))
+                            else
+                                addon:Print(string.format("Changed %s to %s", characterName, statusInfo.status))
+                            end
                         end)
                     end
+                    
+                    -- Note for own character about benching
+                    if isOwnCharacter then
+                        local note = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalTiny")
+                        note:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -50)
+                        note:SetText("* You cannot bench yourself")
+                        note:SetTextColor(0.5, 0.5, 0.5)
+                    end
+                elseif not companionActive then
+                    -- Show message that companion is required
+                    local msg = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    msg:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -15)
+                    msg:SetText("Companion App required to change status")
+                    msg:SetTextColor(1, 0.5, 0)
+                elseif not isOwnCharacter and not isOwner then
+                    -- Not owner, can't change others
+                    local msg = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    msg:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -15)
+                    msg:SetText("Only owner can change other players' status")
+                    msg:SetTextColor(0.7, 0.7, 0.7)
                 end
                 
                 -- Expand/Collapse functionality
@@ -752,28 +818,6 @@ function addon:ShowEventDetails(event)
     end
     
     scrollChild:SetHeight(math.abs(yOffset) + 20)
-    
-    -- Update status button states based on companion status
-    local companionActive = addon:IsCompanionActive()
-    if frame.statusButtons then
-        local statuses = {"signed", "late", "tentative", "benched", "absent"}
-        for i, btn in ipairs(frame.statusButtons) do
-            local status = statuses[i]
-            
-            -- Disable benched button (players can't bench themselves)
-            if status == "benched" then
-                btn:Disable()
-                btn:SetAlpha(0.3)
-                btn:SetText("Benched*")  -- Add asterisk to indicate it's special
-            elseif companionActive then
-                btn:Enable()
-                btn:SetAlpha(1.0)
-            else
-                btn:Disable()
-                btn:SetAlpha(0.5)
-            end
-        end
-    end
     
     frame:Show()
 end
@@ -808,43 +852,6 @@ function addon:CreateDetailsFrame()
     
     frame.scrollFrame = scrollFrame
     frame.scrollChild = scrollChild
-    
-    -- Status change buttons
-    local buttonY = 40
-    local buttonWidth = 90
-    local buttonSpacing = 5
-    
-    local statuses = {
-        {text = "Signed", status = "signed", color = {0, 1, 0}},
-        {text = "Late", status = "late", color = {1, 0.8, 0}},
-        {text = "Tentative", status = "tentative", color = {0.8, 0.8, 0}},
-        {text = "Benched", status = "benched", color = {0.5, 0.5, 0.5}},
-        {text = "Absent", status = "absent", color = {1, 0, 0}}
-    }
-    
-    local totalWidth = (#statuses * buttonWidth) + ((#statuses - 1) * buttonSpacing)
-    local startX = -(totalWidth / 2) + (buttonWidth / 2)
-    
-    frame.statusButtons = {}
-    for i, statusInfo in ipairs(statuses) do
-        local btn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-        btn:SetSize(buttonWidth, 22)
-        btn:SetPoint("BOTTOM", frame, "BOTTOM", startX + ((i - 1) * (buttonWidth + buttonSpacing)), buttonY)
-        btn:SetText(statusInfo.text)
-        btn:SetScript("OnClick", function()
-            if frame.currentEvent then
-                addon:ChangeSignupStatus(frame.currentEvent.id, statusInfo.status)
-            end
-        end)
-        frame.statusButtons[i] = btn
-    end
-    
-    -- Note about benched status
-    local benchNote = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    benchNote:SetPoint("BOTTOM", frame, "BOTTOM", 0, 68)
-    benchNote:SetText("* Players cannot bench themselves")
-    benchNote:SetTextColor(0.7, 0.7, 0.7)
-    frame.benchNote = benchNote
     
     -- Close button
     local closeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
