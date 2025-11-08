@@ -11,6 +11,7 @@ TASKBAR_ICON_EXPLAINED.md
 CHANGES_DRAGGING_AND_ICON.md
 LOGO_COMPLETE.md
 LOGO_QUICK_REF.md
+LOGO_INTEGRATION.md
 
 # Python
 __pycache__/
@@ -40,3 +41,4 @@ ENV/
 .DS_Store
 Thumbs.db
 desktop.ini
+AUTO_RELEASE_SIMPLE.md

@@ -1,0 +1,107 @@
+name: Build and Release Companion App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'companion_app/luminisbot_companion.py'  # Triggers when VERSION is changed
+  tags:
+    - 'v*.*.*'  # Also triggers on version tags like v1.0.0, v1.2.3, etc.
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      
+      - name: Check if VERSION changed
+        id: check
+        run: |
+          # If triggered by tag, always release
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            VERSION="${{ github.ref_name }}"
+            echo "version=${VERSION#v}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Check if VERSION line changed in the push
+          if git diff HEAD^ HEAD -- companion_app/luminisbot_companion.py | grep -q "^+VERSION = "; then
+            VERSION=$(grep -oP 'VERSION = "\K[^"]+' companion_app/luminisbot_companion.py)
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Version changed to: $VERSION"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "VERSION not changed, skipping release"
+          fi
+
+  build-and-release:
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      
+      - name: Install dependencies
+        run: |
+          cd companion_app
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build executable
+        run: |
+          cd companion_app
+          python build_exe.py
+      
+      - name: Get version
+        id: get_version
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $tag = "v$version"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+      
+      - name: Create or update tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f v${{ steps.get_version.outputs.VERSION }} -m "Release version ${{ steps.get_version.outputs.VERSION }}"
+          git push -f origin v${{ steps.get_version.outputs.VERSION }}
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: companion_app/dist/LuminisbotCompanion.exe
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: Luminisbot Companion v${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## Luminisbot Companion v${{ steps.get_version.outputs.VERSION }}
+            
+            ### Installation
+            Download `LuminisbotCompanion.exe` and run it - no installation required!
+            
+            ### Auto-Updates
+            This version includes auto-update functionality. Future updates will be automatically detected.
+            
+            ### Changes
+            See the commit history for details on what's new in this release.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
