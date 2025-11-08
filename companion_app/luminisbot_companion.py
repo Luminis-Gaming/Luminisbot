@@ -27,7 +27,7 @@ except ImportError:
     print("Warning: updater.py not found - auto-update disabled")
 
 # Version
-VERSION = "1.0.2.8"
+VERSION = "1.0.2.9"
 
 # Luminis Colors
 LUMINIS_BG = "#1a1a1a"
@@ -240,11 +240,24 @@ LuminisbotCompanionData = {{
             return False
     
     def get_commands_path(self):
-        """Get path to Commands.lua file"""
+        """Get path to SavedVariables file containing commands"""
         if not self.wow_path:
             return None
         
-        return Path(self.wow_path) / "Interface" / "AddOns" / "LuminisbotEvents" / "Commands.lua"
+        # Commands are stored as SavedVariables in WTF/Account/<account>/SavedVariables/
+        # We need to find the account folder
+        wtf_path = Path(self.wow_path) / "WTF" / "Account"
+        if not wtf_path.exists():
+            return None
+        
+        # Get the first account folder (user typically has one)
+        account_folders = [d for d in wtf_path.iterdir() if d.is_dir()]
+        if not account_folders:
+            return None
+        
+        # Use the first account folder
+        saved_vars_path = account_folders[0] / "SavedVariables" / "LuminisbotEvents.lua"
+        return saved_vars_path
     
     def read_commands(self):
         """Read and parse commands from Commands.lua"""
@@ -309,23 +322,30 @@ LuminisbotCompanionData = {{
             return []
     
     def clear_commands(self):
-        """Clear the command queue"""
+        """Clear the command queue in SavedVariables file"""
         commands_path = self.get_commands_path()
-        if not commands_path:
+        if not commands_path or not commands_path.exists():
             return
         
         try:
+            # Read the entire SavedVariables file
+            with open(commands_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Replace the LuminisbotCommands table with empty queue
+            # Keep everything else (LuminisbotEventsDB, etc.)
+            import re
+            
+            # Find and replace the LuminisbotCommands table
+            pattern = r'LuminisbotCommands\s*=\s*\{[^}]*\}'
+            replacement = 'LuminisbotCommands = {\n\tqueue = { },\n\tlastCommandId = 0,\n}'
+            
+            # Do the replacement
+            new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+            
+            # Write back
             with open(commands_path, 'w', encoding='utf-8') as f:
-                f.write("""-- Commands.lua
--- Queue of commands to be processed by the companion app
--- This file is written by the addon and read by the companion app
--- Commands are processed once and then cleared
-
-LuminisbotCommands = LuminisbotCommands or {
-    queue = {},
-    lastCommandId = 0
-}
-""")
+                f.write(new_content)
         except Exception as e:
             print(f"[CMD] Error clearing commands: {e}")
     
@@ -425,6 +445,42 @@ LuminisbotCommands = LuminisbotCommands or {
         
         return "{\n" + ",\n".join(lua_entries) + "\n}"
     
+    def deduplicate_commands(self, commands):
+        """Keep only the latest command for each character per event"""
+        if not commands:
+            return []
+        
+        # Group by (eventId, character) and keep only the latest
+        latest_commands = {}
+        
+        for command in commands:
+            cmd_type = command.get('type')
+            event_id = command.get('eventId')
+            data = command.get('data', {})
+            
+            # Only deduplicate status change commands
+            if cmd_type == "change_status":
+                character = data.get('character', '')
+                realm = data.get('realm', '')
+                
+                # Create key: event_id + character + realm
+                key = f"{event_id}:{character}:{realm}"
+                
+                # Keep the command with the highest ID (latest)
+                if key not in latest_commands or command.get('id', 0) > latest_commands[key].get('id', 0):
+                    latest_commands[key] = command
+            else:
+                # For other command types, keep all
+                key = f"other:{command.get('id', 0)}"
+                latest_commands[key] = command
+        
+        deduplicated = list(latest_commands.values())
+        
+        if len(deduplicated) < len(commands):
+            print(f"[CMD] Deduplicated {len(commands)} → {len(deduplicated)} commands")
+        
+        return deduplicated
+    
     def sync_loop(self):
         """Main sync loop"""
         print(f"[SYNC] Loop started (syncing every {SYNC_INTERVAL} seconds)")
@@ -435,6 +491,8 @@ LuminisbotCommands = LuminisbotCommands or {
                 commands = self.read_commands()
                 if commands:
                     print(f"[CMD] Found {len(commands)} command(s) to process")
+                    # Deduplicate - keep only latest command per character per event
+                    commands = self.deduplicate_commands(commands)
                     for command in commands:
                         self.process_command(command)
                     # Clear commands after processing

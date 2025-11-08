@@ -162,15 +162,15 @@ if not errorlevel 1 (
     goto waitloop
 )
 
-REM Extra wait to ensure DLLs are released
-timeout /t 2 /nobreak > nul
+REM Extra wait to ensure DLLs and temp files are released
+timeout /t 5 /nobreak > nul
 
 REM Delete old executable
 :retrydelete
 if exist "{current_exe}" (
     del "{current_exe}" 2>nul
     if exist "{current_exe}" (
-        timeout /t 1 /nobreak > nul
+        timeout /t 2 /nobreak > nul
         goto retrydelete
     )
 )

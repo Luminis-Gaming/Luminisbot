@@ -488,7 +488,7 @@ async def handle_get_events(request):
         
         # Get all future events for this guild
         cursor.execute("""
-            SELECT 
+            SELECT DISTINCT ON (e.id)
                 e.id,
                 e.title,
                 e.event_date,
@@ -497,10 +497,15 @@ async def handle_get_events(request):
                 e.created_at,
                 wc.character_name as owner_character
             FROM raid_events e
-            LEFT JOIN wow_characters wc ON e.created_by::text = wc.discord_id
+            LEFT JOIN LATERAL (
+                SELECT character_name
+                FROM wow_characters
+                WHERE discord_id = e.created_by::text
+                LIMIT 1
+            ) wc ON true
             WHERE e.guild_id = %s
                 AND e.event_date >= CURRENT_DATE
-            ORDER BY e.event_date, e.event_time
+            ORDER BY e.id, e.event_date, e.event_time
         """, (guild_id,))
         
         events = cursor.fetchall()
@@ -608,7 +613,12 @@ async def handle_get_single_event(request):
                 e.created_by,
                 wc.character_name as owner_character
             FROM raid_events e
-            LEFT JOIN wow_characters wc ON e.created_by::text = wc.discord_id
+            LEFT JOIN LATERAL (
+                SELECT character_name
+                FROM wow_characters
+                WHERE discord_id = e.created_by::text
+                LIMIT 1
+            ) wc ON true
             WHERE e.id = %s AND e.guild_id = %s
         """, (event_id, guild_id))
         

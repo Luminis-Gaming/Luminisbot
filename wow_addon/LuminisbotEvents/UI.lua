@@ -666,10 +666,10 @@ function addon:ShowEventDetails(event)
                 local boxHeight = isExpanded and 84 or 22
                 playerBox:SetSize(470, boxHeight)
                 
-                -- Expand/Collapse arrow button
+                -- Expand/Collapse arrow button (always at top)
                 local expandBtn = CreateFrame("Button", nil, playerBox)
                 expandBtn:SetSize(16, 16)
-                expandBtn:SetPoint("LEFT", playerBox, "LEFT", 5, 0)
+                expandBtn:SetPoint("TOPLEFT", playerBox, "TOPLEFT", 5, -3)
                 if isExpanded then
                     expandBtn:SetNormalTexture("Interface/Buttons/UI-MinusButton-Up")
                 else
@@ -677,9 +677,9 @@ function addon:ShowEventDetails(event)
                 end
                 expandBtn:SetHighlightTexture("Interface/Buttons/UI-PlusButton-Hilight")
                 
-                -- Player info text
+                -- Player info text (always at top)
                 local playerText = playerBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                playerText:SetPoint("LEFT", expandBtn, "RIGHT", 5, 0)
+                playerText:SetPoint("TOPLEFT", expandBtn, "TOPRIGHT", 5, 0)
                 
                 local roleIcon = ROLE_ICONS[signup.role] or ""
                 local specText = signup.spec and signup.spec ~= "" and signup.spec or signup.class
@@ -687,10 +687,10 @@ function addon:ShowEventDetails(event)
                 playerText:SetText(string.format("%s %s (%s)", roleIcon, characterName, specText))
                 playerText:SetTextColor(classColor.r, classColor.g, classColor.b)
                 
-                -- Invite button (always visible)
+                -- Invite button (always at top right)
                 local inviteBtn = CreateFrame("Button", nil, playerBox, "UIPanelButtonTemplate")
                 inviteBtn:SetSize(50, 18)
-                inviteBtn:SetPoint("RIGHT", playerBox, "RIGHT", -5, 0)
+                inviteBtn:SetPoint("TOPRIGHT", playerBox, "TOPRIGHT", -5, -2)
                 inviteBtn:SetText("Invite")
                 inviteBtn:SetScript("OnClick", function()
                     local charName = signup.character or signup.name or "Unknown"
@@ -781,15 +781,21 @@ function addon:ShowEventDetails(event)
                 elseif not companionActive then
                     -- Show message that companion is required
                     local msg = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                    msg:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -15)
+                    msg:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -5)
                     msg:SetText("Companion App required to change status")
                     msg:SetTextColor(1, 0.5, 0)
+                    msg:SetJustifyH("LEFT")
+                    msg:SetWordWrap(true)
+                    msg:SetWidth(450)
                 elseif not isOwnCharacter and not isOwner then
                     -- Not owner, can't change others
                     local msg = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                    msg:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -15)
+                    msg:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -5)
                     msg:SetText("Only owner can change other players' status")
                     msg:SetTextColor(0.7, 0.7, 0.7)
+                    msg:SetJustifyH("LEFT")
+                    msg:SetWordWrap(true)
+                    msg:SetWidth(450)
                 end
                 
                 -- Expand/Collapse functionality
