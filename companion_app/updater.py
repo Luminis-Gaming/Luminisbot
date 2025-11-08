@@ -140,21 +140,41 @@ class AutoUpdater:
             # Windows batch script
             script_path = Path(tempfile.gettempdir()) / "luminisbot_updater.bat"
             
+            # Use process name to wait for full exit
+            exe_name = Path(current_exe).name
+            
             script_content = f"""@echo off
 echo Updating Luminisbot Companion...
-timeout /t 2 /nobreak > nul
 
-:retry
-del "{current_exe}" 2>nul
-if exist "{current_exe}" (
+REM Wait for the process to fully exit
+:waitloop
+tasklist /FI "IMAGENAME eq {exe_name}" 2>NUL | find /I "{exe_name}">NUL
+if not errorlevel 1 (
     timeout /t 1 /nobreak > nul
-    goto retry
+    goto waitloop
 )
 
+REM Extra wait to ensure DLLs are released
+timeout /t 2 /nobreak > nul
+
+REM Delete old executable
+:retrydelete
+if exist "{current_exe}" (
+    del "{current_exe}" 2>nul
+    if exist "{current_exe}" (
+        timeout /t 1 /nobreak > nul
+        goto retrydelete
+    )
+)
+
+REM Move new executable into place
 move /y "{new_exe}" "{current_exe}"
+
+REM Start new version
 start "" "{current_exe}"
 
-del "%~f0"
+REM Clean up this script
+(goto) 2>nul & del "%~f0"
 """
             
             with open(script_path, 'w') as f:

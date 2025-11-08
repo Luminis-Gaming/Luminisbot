@@ -363,8 +363,17 @@ function addon:RefreshCompanionTab()
     
     local statusText = ""
     
-    -- Check if companion app is syncing (lastUpdate is a Unix timestamp)
-    if LuminisbotEventsDB.lastUpdate and type(LuminisbotEventsDB.lastUpdate) == "number" and LuminisbotEventsDB.lastUpdate > 0 then
+    -- Check if companion app is running by checking heartbeat age
+    local companionActive = false
+    local heartbeatAge = 999999
+    
+    if LuminisbotCompanionData and LuminisbotCompanionData.companionHeartbeat then
+        heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+        -- Consider active if heartbeat is less than 2 minutes old
+        companionActive = heartbeatAge < 120
+    end
+    
+    if companionActive and LuminisbotEventsDB.lastUpdate and LuminisbotEventsDB.lastUpdate > 0 then
         local eventCount = 0
         for _ in pairs(LuminisbotEventsDB.events or {}) do
             eventCount = eventCount + 1
@@ -374,10 +383,27 @@ function addon:RefreshCompanionTab()
         local timeAgo = LuminisbotEvents:FormatTimeAgo(LuminisbotEventsDB.lastUpdate)
         
         statusText = string.format(
-            "|cff00ff00[Active]|r Companion App Active\n\n" ..
+            "|cff00ff00[Active]|r Companion App Running\n\n" ..
             "Events synced: %d\n" ..
             "Last sync: %s\n\n" ..
-            "Companion app is running and syncing automatically!",
+            "Click Refresh button below to load new events!",
+            eventCount,
+            timeAgo
+        )
+    elseif LuminisbotEventsDB.lastUpdate and LuminisbotEventsDB.lastUpdate > 0 then
+        -- Has data but companion not running
+        local eventCount = 0
+        for _ in pairs(LuminisbotEventsDB.events or {}) do
+            eventCount = eventCount + 1
+        end
+        
+        local timeAgo = LuminisbotEvents:FormatTimeAgo(LuminisbotEventsDB.lastUpdate)
+        
+        statusText = string.format(
+            "|cffff9900[Not Running]|r Companion App Stopped\n\n" ..
+            "Events synced: %d\n" ..
+            "Last sync: %s\n\n" ..
+            "Start the companion app to sync new events.",
             eventCount,
             timeAgo
         )
@@ -506,6 +532,9 @@ end
 -- ============================================================================
 
 function addon:RefreshUI()
+    -- First, try to reload data from companion app
+    addon:LoadCompanionData()
+    
     if not self.mainFrame then
         self:CreateMainFrame()
     end
@@ -776,7 +805,13 @@ function addon:ShowEventDetails(event)
                 local roleIcon = ROLE_ICONS[signup.role] or ""
                 local specText = signup.spec and signup.spec ~= "" and signup.spec or signup.class
                 
-                playerText:SetText(string.format("%s %s", roleIcon, signup.name))
+                -- Get character name (handle both 'character' and 'name' fields, and empty strings)
+                local characterName = signup.character or signup.name or ""
+                if characterName == "" then
+                    characterName = "Unknown"
+                end
+                
+                playerText:SetText(string.format("%s %s", roleIcon, characterName))
                 playerText:SetTextColor(classColor.r, classColor.g, classColor.b)
                 
                 -- Spec/Class
@@ -792,7 +827,7 @@ function addon:ShowEventDetails(event)
                 inviteBtn:SetText("Invite")
                 inviteBtn:SetScript("OnClick", function()
                     -- Format character name with realm
-                    local characterName = signup.name
+                    local characterName = signup.character or signup.name or "Unknown"
                     if signup.realm then
                         -- Convert realm to in-game format (remove spaces/hyphens)
                         local realmFormatted = signup.realm:gsub("%-", ""):gsub(" ", "")
@@ -800,7 +835,7 @@ function addon:ShowEventDetails(event)
                     end
                     
                     C_PartyInfo.InviteUnit(characterName)
-                    addon:Print("Invited " .. signup.name)
+                    addon:Print("Invited " .. characterName)
                 end)
                 
                 yOffset = yOffset - 18

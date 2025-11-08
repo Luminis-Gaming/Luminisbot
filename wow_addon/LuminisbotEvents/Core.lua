@@ -24,6 +24,9 @@ LuminisbotEventsDB = LuminisbotEventsDB or {
 local importBuffer = ""
 local importPartCount = 0
 
+-- Track last known update time for auto-refresh
+local lastKnownUpdate = 0
+
 -- ============================================================================
 -- TIME FORMATTING UTILITIES
 -- ============================================================================
@@ -412,7 +415,7 @@ function addon:ParseSubscriptionString(subString)
     LuminisbotEventsDB.guildId = guildId
     LuminisbotEventsDB.apiKey = apiKey
     
-    self:Print("✅ Subscription saved successfully!")
+    self:Print("[OK] Subscription saved successfully!")
     self:Print("Server ID: " .. guildId)
     self:Print("Syncing events...")
     
@@ -475,7 +478,7 @@ function addon:ImportFromAPI(jsonData)
         LuminisbotEventsDB.events = events
         LuminisbotEventsDB.lastUpdate = date("%Y-%m-%d %H:%M:%S")
         
-        self:Print(string.format("|cff00ff00✅ Auto-synced %d event(s)|r", #events))
+        self:Print(string.format("|cff00ff00[OK] Auto-synced %d event(s)|r", #events))
         
         -- Refresh UI if it's open
         if self.mainFrame and self.mainFrame:IsShown() then
@@ -738,25 +741,70 @@ end)
 -- Track last known update time
 addon.lastKnownUpdate = LuminisbotEventsDB.lastUpdate or 0
 
+function addon:LoadCompanionData()
+    -- WoW can't reload .lua files at runtime, so this just checks the already-loaded data
+    -- Users need to /reload to see updates from the companion app
+    -- However, when they click Refresh, we can update the UI from SavedVariables
+    
+    -- Check if SavedVariables has newer data than we're currently showing
+    if LuminisbotEventsDB.lastUpdate and 
+       LuminisbotEventsDB.lastUpdate > (self.lastKnownUpdate or 0) then
+        
+        self.lastKnownUpdate = LuminisbotEventsDB.lastUpdate
+        
+        local eventCount = 0
+        for _ in pairs(LuminisbotEventsDB.events or {}) do
+            eventCount = eventCount + 1
+        end
+        
+        if eventCount > 0 then
+            addon:Print(string.format("|cff00ff00[OK] Loaded %d event(s)|r", eventCount))
+        end
+        
+        return true
+    end
+    
+    -- Also inform user if they need to /reload to see new data
+    if LuminisbotCompanionData and LuminisbotCompanionData.companionHeartbeat then
+        local heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+        if heartbeatAge < 120 then
+            -- Companion is active
+            addon:Print("|cffff9900[!] Companion app is running. Type |r|cff00ff00/reload|r|cffff9900 to load new events.|r")
+        end
+    end
+    
+    return false
+end
+
 function addon:StartCompanionDetection()
-    -- Check for companion app updates every 5 seconds
-    C_Timer.NewTicker(5, function()
-        if LuminisbotEventsDB.lastUpdate and LuminisbotEventsDB.lastUpdate ~= self.lastKnownUpdate then
-            -- SavedVariables updated by companion app!
-            self.lastKnownUpdate = LuminisbotEventsDB.lastUpdate
+    -- On addon load/reload, check if CompanionData has newer data
+    if LuminisbotCompanionData and LuminisbotCompanionData.lastUpdate then
+        local companionUpdate = LuminisbotCompanionData.lastUpdate
+        local dbUpdate = LuminisbotEventsDB.lastUpdate or 0
+        
+        -- Debug output
+        addon:Print(string.format("|cffcccccc[DEBUG] CompanionData timestamp: %s|r", tostring(companionUpdate)))
+        addon:Print(string.format("|cffcccccc[DEBUG] SavedVariables timestamp: %s|r", tostring(dbUpdate)))
+        
+        -- If CompanionData is newer, update our SavedVariables
+        if companionUpdate > dbUpdate then
+            LuminisbotEventsDB.events = LuminisbotCompanionData.events
+            LuminisbotEventsDB.lastUpdate = LuminisbotCompanionData.lastUpdate
             
-            -- Refresh UI if it's open
-            if self.mainFrame and self.mainFrame:IsShown() then
-                self:RefreshUI()
-            end
-            
-            -- Show notification
             local eventCount = 0
             for _ in pairs(LuminisbotEventsDB.events or {}) do
                 eventCount = eventCount + 1
             end
             
-            self:Print(string.format("|cff00ff00✅ Auto-synced %d event(s)|r from companion app", eventCount))
+            if eventCount > 0 then
+                addon:Print(string.format("|cff00ff00[OK] Loaded %d event(s) from companion app|r", eventCount))
+            end
+        else
+            addon:Print("|cffffff00[DEBUG] CompanionData is not newer than SavedVariables|r")
         end
-    end)
+    else
+        addon:Print("|cffff0000[DEBUG] CompanionData not found or has no lastUpdate|r")
+    end
+    
+    self.lastKnownUpdate = LuminisbotEventsDB.lastUpdate or 0
 end

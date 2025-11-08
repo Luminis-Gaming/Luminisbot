@@ -508,7 +508,7 @@ async def handle_get_events(request):
         for event in events:
             cursor.execute("""
                 SELECT 
-                    rs.character_name as name,
+                    rs.character_name as character,
                     wc.realm_slug as realm,
                     rs.character_class as class,
                     rs.role,
@@ -610,7 +610,7 @@ async def handle_get_single_event(request):
         # Get signups
         cursor.execute("""
             SELECT 
-                rs.character_name as name,
+                rs.character_name as character,
                 wc.realm_slug as realm,
                 rs.character_class as class,
                 rs.role,

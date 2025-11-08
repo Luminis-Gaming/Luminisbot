@@ -6,5 +6,6 @@
 ## SavedVariables: LuminisbotEventsDB
 ## IconTexture: Interface\Icons\Achievement_Boss_Algalon_01
 
+CompanionData.lua
 Core.lua
 UI.lua

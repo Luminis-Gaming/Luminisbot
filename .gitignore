@@ -25,6 +25,12 @@ companion_app/build/
 companion_app/dist/
 companion_app/*.spec
 
+# Inno Setup
+companion_app/installer/
+companion_app/Output/
+*.cer
+*.pfx
+
 # Virtual environments
 venv/
 env/
