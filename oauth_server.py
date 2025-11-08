@@ -497,7 +497,7 @@ async def handle_get_events(request):
                 e.created_at,
                 wc.character_name as owner_character
             FROM raid_events e
-            LEFT JOIN wow_characters wc ON e.created_by = wc.discord_id
+            LEFT JOIN wow_characters wc ON e.created_by::text = wc.discord_id
             WHERE e.guild_id = %s
                 AND e.event_date >= CURRENT_DATE
             ORDER BY e.event_date, e.event_time
@@ -608,7 +608,7 @@ async def handle_get_single_event(request):
                 e.created_by,
                 wc.character_name as owner_character
             FROM raid_events e
-            LEFT JOIN wow_characters wc ON e.created_by = wc.discord_id
+            LEFT JOIN wow_characters wc ON e.created_by::text = wc.discord_id
             WHERE e.id = %s AND e.guild_id = %s
         """, (event_id, guild_id))
         
@@ -847,7 +847,7 @@ async def handle_update_signup(request):
         # 1. Change their own character's status (character belongs to their account)
         # 2. Change anyone's status if they're the event owner
         is_own_character = character in requester_characters
-        is_event_owner = event['created_by'] == requester_discord_id
+        is_event_owner = str(event['created_by']) == requester_discord_id
         
         if not is_own_character and not is_event_owner:
             cursor.close()

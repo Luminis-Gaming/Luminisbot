@@ -76,7 +76,8 @@ jobs:
       - name: Build installer
         run: |
           cd companion_app
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          $version = "${{ needs.check-version.outputs.version }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version installer.iss
         shell: pwsh
       
       - name: Self-sign executable and installer

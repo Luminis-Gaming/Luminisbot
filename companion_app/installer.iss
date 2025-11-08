@@ -2,7 +2,10 @@
 ; Download Inno Setup from: https://jrsoftware.org/isdl.php
 
 #define MyAppName "Luminisbot Companion"
-#define MyAppVersion "1.0.0"
+; MyAppVersion can be passed via command line: /DMyAppVersion=1.2.3
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "Luminis Gaming"
 #define MyAppURL "https://github.com/Luminis-Gaming/Luminisbot"
 #define MyAppExeName "LuminisbotCompanion.exe"

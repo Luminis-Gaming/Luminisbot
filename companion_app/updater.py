@@ -45,9 +45,17 @@ class AutoUpdater:
             release_notes = data.get('body', 'No release notes available')
             
             # Find the companion app executable in assets
+            # Look for the portable .exe, NOT the installer
             download_url = None
             for asset in data.get('assets', []):
-                if 'Companion' in asset['name'] and asset['name'].endswith('.exe'):
+                asset_name = asset['name']
+                # Match: LuminisbotCompanion.exe or LuminisbotCompanion_v1.0.0.exe
+                # Exclude: installers (contain "Setup" or "Installer" or "Install")
+                if ('Companion' in asset_name and 
+                    asset_name.endswith('.exe') and 
+                    'Setup' not in asset_name and 
+                    'Installer' not in asset_name and
+                    'Install' not in asset_name):
                     download_url = asset['browser_download_url']
                     break
             
