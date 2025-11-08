@@ -88,8 +88,15 @@ jobs:
           $pwd = ConvertTo-SecureString -String "temp" -Force -AsPlainText
           Export-PfxCertificate -Cert $cert -FilePath LuminisGaming.pfx -Password $pwd
           
-          # Find signtool (can be in different locations)
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1 -ExpandProperty FullName
+          # Find signtool x64 version specifically
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match "\\x64\\" } | Select-Object -First 1 -ExpandProperty FullName
+          
+          if (-not $signtool) {
+            Write-Host "Warning: signtool not found, skipping signing"
+            exit 0
+          }
+          
+          Write-Host "Using signtool: $signtool"
           
           # Sign the executable
           & $signtool sign /f LuminisGaming.pfx /p temp /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 companion_app\dist\LuminisbotCompanion.exe
