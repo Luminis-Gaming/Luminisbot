@@ -6,8 +6,8 @@ on:
       - main
     paths:
       - 'companion_app/luminisbot_companion.py'  # Triggers when VERSION is changed
-  tags:
-    - 'v*.*.*'  # Also triggers on version tags like v1.0.0, v1.2.3, etc.
+    tags:
+      - 'v*.*.*'  # Also triggers on version tags like v1.0.0, v1.2.3, etc.
 
 jobs:
   check-version:
