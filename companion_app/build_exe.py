@@ -35,8 +35,8 @@ print()
 # Run PyInstaller
 try:
     PyInstaller.__main__.run(pyinstaller_args)
-    print("\n✓ Build complete!")
+    print("\n[SUCCESS] Build complete!")
     print(f"  Executable: {script_dir / 'dist' / 'LuminisbotCompanion.exe'}")
 except Exception as e:
-    print(f"\n✗ Build failed: {e}")
+    print(f"\n[ERROR] Build failed: {e}")
     sys.exit(1)

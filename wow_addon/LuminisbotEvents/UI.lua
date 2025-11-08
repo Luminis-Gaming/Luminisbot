@@ -34,12 +34,15 @@ local CLASS_COLORS = {
 function addon:CreateMainFrame()
     if self.mainFrame then return end
     
-    -- Create main frame using BasicFrameTemplate (no portrait)
-    local frame = CreateFrame("Frame", "LuminisbotEventsFrame", UIParent, "BasicFrameTemplate")
+    -- Create main frame with portrait using PortraitFrameTemplate
+    local frame = CreateFrame("Frame", "LuminisbotEventsFrame", UIParent, "PortraitFrameTemplate")
     frame:SetSize(550, 650)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("HIGH")
     frame:Hide()
+    
+    -- Set title text
+    frame:SetTitle("Luminisbot Events")
     
     -- Make the frame draggable
     frame:SetMovable(true)
@@ -63,27 +66,18 @@ function addon:CreateMainFrame()
         }
     end)
     
-    -- Add logo if available
+    -- Set the portrait to the Luminis logo
     local logoPath = "Interface\\AddOns\\LuminisbotEvents\\assets\\luminis_logo"
-    local logo = frame:CreateTexture(nil, "ARTWORK")
-    logo:SetTexture(logoPath)
-    logo:SetSize(128, 64)  -- Half of 256x128 for better fit
-    logo:SetPoint("TOP", frame, "TOP", 0, -8)
-    
-    -- If logo fails to load, fall back to text title
-    if not logo:GetTexture() then
-        -- Set title text
-        if frame.TitleText then
-            frame.TitleText:SetText("Luminisbot Events")
-        elseif frame.TitleContainer and frame.TitleContainer.TitleText then
-            frame.TitleContainer.TitleText:SetText("Luminisbot Events")
+    if frame.portrait then
+        frame.portrait:SetTexture(logoPath)
+        -- If logo fails to load, use a default icon
+        if not frame.portrait:GetTexture() then
+            frame.portrait:SetTexture("Interface\\Icons\\INV_Misc_Note_06")
         end
-    else
-        -- Hide title text since we have logo
-        if frame.TitleText then
-            frame.TitleText:SetText("")
-        elseif frame.TitleContainer and frame.TitleContainer.TitleText then
-            frame.TitleContainer.TitleText:SetText("")
+    elseif frame.Portrait then
+        frame.Portrait:SetTexture(logoPath)
+        if not frame.Portrait:GetTexture() then
+            frame.Portrait:SetTexture("Interface\\Icons\\INV_Misc_Note_06")
         end
     end
     
@@ -912,8 +906,9 @@ function addon:CreateMinimapButton()
     button:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("Luminisbot", 1, 1, 1, 1, true)
-        GameTooltip:AddLine("Click to open event list", 1, 1, 1, true)
+        GameTooltip:AddLine("Raid event manager for Luminis Gaming", 0.8, 0.8, 0.8, true)
         GameTooltip:AddLine(" ", 1, 1, 1, true)
+        GameTooltip:AddLine("Click to open event list", 1, 1, 1, true)
         GameTooltip:AddLine("Right-click to drag", 0.5, 0.5, 0.5, true)
         GameTooltip:Show()
     end)

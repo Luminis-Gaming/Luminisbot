@@ -27,7 +27,7 @@ except ImportError:
     print("Warning: updater.py not found - auto-update disabled")
 
 # Version
-VERSION = "1.0.1.1"
+VERSION = "1.0.1.2"
 
 # Luminis Colors
 LUMINIS_BG = "#1a1a1a"
@@ -172,6 +172,7 @@ class LuminisbotCompanion:
         """Write events to SavedVariables file"""
         path = self.get_savedvariables_path()
         if not path:
+            print("Error: SavedVariables path not configured")
             return False
         
         try:
@@ -201,10 +202,13 @@ class LuminisbotCompanion:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(lua_content)
             
+            print(f"[WRITE] Wrote {len(events_data.get('events', []))} events to: {path}")
             return True
             
         except Exception as e:
             print(f"Error writing SavedVariables: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def events_to_lua(self, events_data):
@@ -250,11 +254,12 @@ class LuminisbotCompanion:
     
     def sync_loop(self):
         """Main sync loop"""
-        print(f"Sync loop started (every {SYNC_INTERVAL} seconds)")
+        print(f"[SYNC] Loop started (syncing every {SYNC_INTERVAL} seconds)")
         
         while self.running:
             try:
                 # Fetch events from API
+                print(f"[SYNC] Fetching events from API...")
                 events_data = self.fetch_events()
                 
                 if events_data:
@@ -262,22 +267,25 @@ class LuminisbotCompanion:
                     if self.write_savedvariables(events_data):
                         self.event_count = len(events_data.get('events', []))
                         self.last_sync = datetime.now()
-                        print(f"Synced {self.event_count} events at {self.last_sync.strftime('%H:%M:%S')}")
+                        print(f"[SYNC] ✓ Success! Synced {self.event_count} events at {self.last_sync.strftime('%H:%M:%S')}")
                     else:
-                        print("Failed to write SavedVariables")
+                        print("[SYNC] ✗ Failed to write SavedVariables")
                 else:
-                    print("No events data received")
+                    print("[SYNC] ✗ No events data received from API")
                 
             except Exception as e:
-                print(f"Error in sync loop: {e}")
+                print(f"[SYNC] ✗ Error: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Wait for next sync
+            print(f"[SYNC] Waiting {SYNC_INTERVAL} seconds until next sync...")
             for _ in range(SYNC_INTERVAL):
                 if not self.running:
                     break
                 time.sleep(1)
         
-        print("Sync loop stopped")
+        print("[SYNC] Loop stopped")
     
     def start_sync(self):
         """Start syncing"""
@@ -585,9 +593,10 @@ class CompanionGUI:
     
     def update_status(self):
         """Update status display"""
-        if self.companion.running:
-            if self.companion.last_sync:
-                elapsed = (datetime.now() - self.companion.last_sync).seconds
+        if self.companion.running and self.companion.last_sync:
+            elapsed = (datetime.now() - self.companion.last_sync).seconds
+            # Only log if status changed significantly (every 60 seconds)
+            if elapsed % 60 < 5:  # Log around each minute mark
                 self.log_status(f"📊 {self.companion.event_count} events | Last sync: {elapsed}s ago")
         
         self.root.after(5000, self.update_status)
