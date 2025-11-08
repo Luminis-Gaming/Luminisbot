@@ -7,6 +7,9 @@ local ADDON_NAME, addon = ...
 addon.version = "1.0.0"
 addon.events = {}
 
+-- Make addon globally accessible
+_G.LuminisbotEvents = addon
+
 -- Saved variables (persisted between sessions)
 LuminisbotEventsDB = LuminisbotEventsDB or {
     events = {},
@@ -20,6 +23,41 @@ LuminisbotEventsDB = LuminisbotEventsDB or {
 -- Import buffer for multi-part imports
 local importBuffer = ""
 local importPartCount = 0
+
+-- ============================================================================
+-- TIME FORMATTING UTILITIES
+-- ============================================================================
+
+-- Format timestamp as "X minutes ago" or actual time
+function addon:FormatTimeAgo(timestamp)
+    if not timestamp or timestamp == 0 then
+        return "Never"
+    end
+    
+    local currentTime = time()
+    local diff = currentTime - timestamp
+    
+    if diff < 60 then
+        return "Just now"
+    elseif diff < 3600 then
+        local mins = math.floor(diff / 60)
+        return mins .. " minute" .. (mins ~= 1 and "s" or "") .. " ago"
+    elseif diff < 86400 then
+        local hours = math.floor(diff / 3600)
+        return hours .. " hour" .. (hours ~= 1 and "s" or "") .. " ago"
+    else
+        -- Show actual date/time for older timestamps
+        return date("%b %d, %H:%M", timestamp)
+    end
+end
+
+-- Format timestamp as readable date/time
+function addon:FormatDateTime(timestamp)
+    if not timestamp or timestamp == 0 then
+        return "Unknown"
+    end
+    return date("%b %d, %Y at %H:%M", timestamp)
+end
 
 -- ============================================================================
 -- BASE64 DECODER
@@ -399,12 +437,51 @@ function addon:SyncEvents()
         return
     end
     
-    -- For now, this is a placeholder until we implement the API
-    self:PrintWarning("Sync feature coming soon!")
-    self:PrintWarning("This will require a companion app to fetch events from the API")
-    self:Print("For now, use the Import String tab to manually import events")
-    self:Print("Server ID configured: " .. LuminisbotEventsDB.guildId)
-    self:Print("API Key configured: " .. string.sub(LuminisbotEventsDB.apiKey, 1, 8) .. "...")
+    -- Create sync command for Discord
+    local syncCommand = "/syncevents"
+    
+    -- Show instructions
+    self:Print("|cff00ff00=== Quick Sync Instructions ===|r")
+    self:Print("1. Type |cff00ff00/syncevents|r in any Discord channel")
+    self:Print("2. Bot will DM you an import string")
+    self:Print("3. Copy the string from Discord")
+    self:Print("4. Paste it into the Import tab here")
+    self:Print("|cff00ff00==============================|r")
+    self:Print("TIP: Create a private Discord channel for easy syncing!")
+end
+
+function addon:ImportFromAPI(jsonData)
+    -- Import events from API response (called by WeakAura)
+    local parsed
+    
+    if type(jsonData) == "string" then
+        -- Parse JSON string
+        parsed = self:ParseJSON(jsonData)
+    elseif type(jsonData) == "table" then
+        parsed = jsonData
+    else
+        self:PrintError("Invalid API data format")
+        return
+    end
+    
+    if not parsed or not parsed.events then
+        self:PrintError("Invalid API response format")
+        return
+    end
+    
+    -- Import the events
+    local events = parsed.events
+    if type(events) == "table" then
+        LuminisbotEventsDB.events = events
+        LuminisbotEventsDB.lastUpdate = date("%Y-%m-%d %H:%M:%S")
+        
+        self:Print(string.format("|cff00ff00✅ Auto-synced %d event(s)|r", #events))
+        
+        -- Refresh UI if it's open
+        if self.mainFrame and self.mainFrame:IsShown() then
+            self:RefreshUI()
+        end
+    end
 end
 
 function addon:ClearOldEvents()
@@ -618,15 +695,25 @@ frame:SetScript("OnEvent", function(self, event, arg1)
         if not LuminisbotEventsDB.autoSync then
             LuminisbotEventsDB.autoSync = false
         end
+        if not LuminisbotEventsDB.minimapAngle then
+            LuminisbotEventsDB.minimapAngle = 225  -- Default position (bottom-left)
+        end
         
         -- Addon loaded - register slash commands
         RegisterSlashCommands()
+        
+        -- Create minimap button
+        addon:CreateMinimapButton()
+        
+        -- Start companion app detection
+        addon:StartCompanionDetection()
         
         -- Print to chat so user knows addon loaded
         print(" ")
         print("|cff00ff00===========================================|r")
         print("|cff00ff00Luminisbot Events v" .. addon.version .. " loaded!|r")
         print("|cffffffffType |cff00ff00/luminisbot|r or |cff00ff00/lb|r to get started|r")
+        print("|cffffffffOr click the minimap button!|r")
         print("|cff00ff00===========================================|r")
         print(" ")
         
@@ -638,5 +725,38 @@ frame:SetScript("OnEvent", function(self, event, arg1)
         else
             addon:Print("No events yet. Import from Discord with |cff00ff00/lb import|r")
         end
+        
+        -- Start companion app sync detection
+        addon:StartCompanionDetection()
     end
 end)
+
+-- ============================================================================
+-- COMPANION APP INTEGRATION
+-- ============================================================================
+
+-- Track last known update time
+addon.lastKnownUpdate = LuminisbotEventsDB.lastUpdate or 0
+
+function addon:StartCompanionDetection()
+    -- Check for companion app updates every 5 seconds
+    C_Timer.NewTicker(5, function()
+        if LuminisbotEventsDB.lastUpdate and LuminisbotEventsDB.lastUpdate ~= self.lastKnownUpdate then
+            -- SavedVariables updated by companion app!
+            self.lastKnownUpdate = LuminisbotEventsDB.lastUpdate
+            
+            -- Refresh UI if it's open
+            if self.mainFrame and self.mainFrame:IsShown() then
+                self:RefreshUI()
+            end
+            
+            -- Show notification
+            local eventCount = 0
+            for _ in pairs(LuminisbotEventsDB.events or {}) do
+                eventCount = eventCount + 1
+            end
+            
+            self:Print(string.format("|cff00ff00✅ Auto-synced %d event(s)|r from companion app", eventCount))
+        end
+    end)
+end

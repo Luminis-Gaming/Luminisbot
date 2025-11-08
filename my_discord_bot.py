@@ -310,9 +310,9 @@ async def connectwow_command(interaction: discord.Interaction):
     await interaction.edit_original_response(embed=embed, view=view)
     print(f"[CMD] Generated WoW connection URL for Discord user {discord_id}")
 
-@tree.command(name="subscribe", description="Subscribe to raid events in WoW addon (requires Battle.net connection)")
+@tree.command(name="subscribe", description="Get subscription string for Luminisbot Companion App (optional)")
 async def subscribe_command(interaction: discord.Interaction):
-    """Generate personalized subscription string for WoW addon."""
+    """Generate personalized subscription string for Companion App."""
     if not interaction.guild:
         await interaction.response.send_message(
             "❌ This command can only be used in a server, not in DMs!",
@@ -390,17 +390,20 @@ async def subscribe_command(interaction: discord.Interaction):
         embed = discord.Embed(
             title="✅ Subscription String Generated",
             description=(
-                f"Your personalized subscription for **{interaction.guild.name}** is ready!\n\n"
+                f"Your personalized subscription for **{interaction.guild.name}**\n\n"
                 "**Your Subscription String:**\n"
                 f"```{subscription_string}```\n"
-                "⚠️ **Keep this private!** This string is unique to you and this server.\n\n"
-                "📋 **Setup Instructions:**\n"
-                "1. Copy the string above\n"
-                "2. Open WoW and type `/lb` to open the addon\n"
-                "3. Go to the **Settings** tab\n"
-                "4. Paste your subscription string in the input field\n"
-                "5. Click **Save & Sync**\n\n"
-                "🔄 All raid events from this server will automatically appear in your addon!"
+                "⚠️ **Keep this private!** This string is unique to you.\n\n"
+                "📋 **What is this for?**\n"
+                "This is for the **Luminisbot Companion App** (optional desktop app)\n"
+                "that enables automatic syncing every 60 seconds.\n\n"
+                "**Don't have the Companion App?**\n"
+                "No problem! Use `/syncevents` to manually sync anytime.\n"
+                "The Companion App is completely optional.\n\n"
+                "**Want the Companion App?**\n"
+                "1. Download from CurseForge or GitHub\n"
+                "2. Paste this string into the app\n"
+                "3. Click 'Start Syncing' - Done!"
             ),
             color=0x00ff00
         )
@@ -412,6 +415,188 @@ async def subscribe_command(interaction: discord.Interaction):
         
     except Exception as e:
         print(f"[ERROR] Failed to generate subscription: {e}")
+        await interaction.edit_original_response(content=f"❌ **Error:** {e}")
+    finally:
+        conn.close()
+
+@tree.command(name="syncevents", description="Get latest raid events as an import string for WoW addon")
+async def syncevents_command(interaction: discord.Interaction):
+    """Generate import string with latest events for the addon."""
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "❌ This command can only be used in a server, not in DMs!",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    discord_id = str(interaction.user.id)
+    guild_id = interaction.guild.id
+    
+    conn = get_db_connection()
+    if not conn:
+        await interaction.edit_original_response(content="❌ **Database Error:** Could not connect to database.")
+        return
+    
+    try:
+        import psycopg2.extras
+        import json
+        import base64
+        from datetime import datetime, date
+        
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        
+        # Check if user has subscribed
+        cur.execute("""
+            SELECT key_hash FROM api_keys 
+            WHERE discord_user_id = %s AND guild_id = %s AND is_active = true
+        """, (discord_id, guild_id))
+        
+        api_key_result = cur.fetchone()
+        
+        if not api_key_result:
+            embed = discord.Embed(
+                title="❌ Not Subscribed",
+                description=(
+                    "You haven't subscribed to events in this server yet!\n\n"
+                    "**How to subscribe:**\n"
+                    "1. Use `/connectwow` to link your Battle.net account (if not done)\n"
+                    "2. Use `/subscribe` to get your subscription string\n"
+                    "3. Paste it in the addon Settings tab\n"
+                    "4. Come back here and use `/syncevents` again"
+                ),
+                color=0xff0000
+            )
+            await interaction.edit_original_response(embed=embed)
+            return
+        
+        # Fetch all future events for this guild
+        cur.execute("""
+            SELECT 
+                re.id,
+                re.title,
+                re.event_date,
+                re.event_time,
+                re.created_by,
+                re.log_url
+            FROM raid_events re
+            WHERE re.guild_id = %s 
+                AND re.event_date >= CURRENT_DATE
+            ORDER BY re.event_date, re.event_time
+        """, (guild_id,))
+        
+        events = cur.fetchall()
+        
+        if not events:
+            await interaction.edit_original_response(
+                content="ℹ️ No upcoming events found in this server.\n\nCreate an event with `/createraid` first!"
+            )
+            return
+        
+        # Fetch signups for each event
+        event_list = []
+        for event in events:
+            cur.execute("""
+                SELECT 
+                    rs.character_name,
+                    rs.realm_slug,
+                    rs.character_class,
+                    rs.role,
+                    rs.spec,
+                    rs.status
+                FROM raid_signups rs
+                WHERE rs.event_id = %s
+                ORDER BY 
+                    CASE rs.status 
+                        WHEN 'signed' THEN 1 
+                        WHEN 'tentative' THEN 2 
+                        WHEN 'declined' THEN 3 
+                    END,
+                    CASE rs.role 
+                        WHEN 'tank' THEN 1 
+                        WHEN 'healer' THEN 2 
+                        WHEN 'dps' THEN 3 
+                    END,
+                    rs.character_name
+            """, (event['id'],))
+            
+            signups = cur.fetchall()
+            
+            event_data = {
+                'id': event['id'],
+                'title': event['title'],
+                'date': event['event_date'].strftime('%Y-%m-%d'),
+                'time': event['event_time'].strftime('%H:%M'),
+                'createdBy': str(event['created_by']),
+                'logUrl': event['log_url'],
+                'signups': []
+            }
+            
+            for signup in signups:
+                event_data['signups'].append({
+                    'character': signup['character_name'],
+                    'realm': signup['realm_slug'],
+                    'class': signup['character_class'],
+                    'role': signup['role'],
+                    'spec': signup['spec'],
+                    'status': signup['status']
+                })
+            
+            event_list.append(event_data)
+        
+        # Create import string (same format as existing import system)
+        import_data = {
+            'events': event_list,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        json_string = json.dumps(import_data, ensure_ascii=False)
+        encoded_string = base64.b64encode(json_string.encode('utf-8')).decode('utf-8')
+        
+        # Create embed with import string
+        embed = discord.Embed(
+            title="✅ Events Ready to Import",
+            description=(
+                f"Found **{len(event_list)}** upcoming event(s) in **{interaction.guild.name}**\n\n"
+                "**Import String:**\n"
+                f"```{encoded_string[:100]}{'...' if len(encoded_string) > 100 else ''}```\n"
+                f"*({len(encoded_string)} characters)*\n\n"
+                "**How to import:**\n"
+                "1. Copy the FULL string below (click to select all)\n"
+                "2. Open WoW and type `/lb`\n"
+                "3. Go to the **Import String** tab\n"
+                "4. Paste the string and click **Import Event**"
+            ),
+            color=0x00ff00
+        )
+        
+        # List events
+        event_summary = "\n".join([
+            f"• **{evt['title']}** - {evt['date']} at {evt['time']} ({len(evt['signups'])} signups)"
+            for evt in event_list[:10]
+        ])
+        if len(event_list) > 10:
+            event_summary += f"\n... and {len(event_list) - 10} more"
+        
+        embed.add_field(name="Events Included", value=event_summary, inline=False)
+        embed.set_footer(text=f"Synced at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Send embed first
+        await interaction.edit_original_response(embed=embed)
+        
+        # Send full string in a follow-up message (easier to copy)
+        await interaction.followup.send(
+            f"**Full Import String (copy everything below):**\n```{encoded_string}```",
+            ephemeral=True
+        )
+        
+        print(f"[CMD] Generated event sync for user {interaction.user.name} in guild {guild_id} ({len(event_list)} events)")
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to sync events: {e}")
+        import traceback
+        traceback.print_exc()
         await interaction.edit_original_response(content=f"❌ **Error:** {e}")
     finally:
         conn.close()

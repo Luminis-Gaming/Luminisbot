@@ -1,3 +1,42 @@
+# Environment variables
 .env
+
+# Documentation (internal/temporary)
 WOW_CHARACTER_CONNECTION_PLAN.md
 WOW_ADDON_API_INTEGRATION.md
+TESTING_GUIDE.md
+CONVERT_LOGO.md
+QUICK_FIXES_APPLIED.md
+TASKBAR_ICON_EXPLAINED.md
+CHANGES_DRAGGING_AND_ICON.md
+LOGO_COMPLETE.md
+LOGO_QUICK_REF.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# PyInstaller
+companion_app/build/
+companion_app/dist/
+companion_app/*.spec
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

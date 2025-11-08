@@ -493,7 +493,7 @@ async def handle_get_events(request):
                 e.title,
                 e.event_date,
                 e.event_time,
-                e.creator_id,
+                e.created_by,
                 e.created_at
             FROM raid_events e
             WHERE e.guild_id = %s
@@ -592,7 +592,7 @@ async def handle_get_single_event(request):
                 e.title,
                 e.event_date,
                 e.event_time,
-                e.creator_id
+                e.created_by
             FROM raid_events e
             WHERE e.id = %s AND e.guild_id = %s
         """, (event_id, guild_id))
