@@ -396,6 +396,81 @@ function addon:DeleteEvent(eventId)
     return false
 end
 
+-- ============================================================================
+-- COMMAND QUEUE (for two-way sync with companion app)
+-- ============================================================================
+
+function addon:QueueCommand(commandType, eventId, data)
+    -- Initialize if needed
+    if not LuminisbotCommands then
+        LuminisbotCommands = {queue = {}, lastCommandId = 0}
+    end
+    
+    -- Generate unique command ID
+    LuminisbotCommands.lastCommandId = (LuminisbotCommands.lastCommandId or 0) + 1
+    
+    -- Add command to queue
+    local command = {
+        id = LuminisbotCommands.lastCommandId,
+        type = commandType,
+        eventId = eventId,
+        timestamp = time(),
+        data = data or {}
+    }
+    
+    table.insert(LuminisbotCommands.queue, command)
+    
+    self:Print(string.format("|cff00ff00Command queued: %s|r", commandType))
+    self:Print("|cffffff00Companion app will process it on next sync|r")
+    
+    return command.id
+end
+
+function addon:IsCompanionActive()
+    -- Check if companion app is running by checking heartbeat age
+    if LuminisbotCompanionData and LuminisbotCompanionData.companionHeartbeat then
+        local heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+        return heartbeatAge < 120  -- Active if heartbeat less than 2 minutes old
+    end
+    return false
+end
+
+function addon:IsEventOwner(event)
+    -- Check if current player is the owner of the event
+    if not event or not event.owner_character then
+        return false
+    end
+    
+    local playerName = UnitName("player")
+    return playerName and playerName == event.owner_character
+end
+
+function addon:ChangeSignupStatus(eventId, status)
+    -- Check if companion app is active
+    if not self:IsCompanionActive() then
+        self:Print("|cffff0000Status changes require the Companion App to be running!|r")
+        self:Print("|cffffff00Download it from CurseForge or use /lb import to sync manually|r")
+        return
+    end
+    
+    -- Prevent players from benching themselves
+    if status == "benched" then
+        self:Print("|cffff0000You cannot bench yourself! Contact the event organizer if needed.|r")
+        return
+    end
+    
+    -- Get player's character name and realm
+    local playerName = UnitName("player")
+    local realmName = GetRealmName()
+    
+    -- Queue the command
+    self:QueueCommand("change_status", eventId, {
+        character = playerName,
+        realm = realmName,
+        status = status
+    })
+end
+
 function addon:ParseSubscriptionString(subString)
     -- Decode Base64
     local decoded = self:Base64Decode(subString)
@@ -513,6 +588,12 @@ end
 function addon:InviteEventSignups(event)
     if not event or not event.signups then
         self:PrintError("No signups found for this event!")
+        return
+    end
+    
+    -- Only allow event owner to invite all
+    if not self:IsEventOwner(event) then
+        self:Print("|cffff0000Only the event owner can use Invite All!|r")
         return
     end
     

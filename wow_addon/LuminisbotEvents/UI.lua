@@ -95,12 +95,6 @@ function addon:CreateMainFrame()
     importTab:SetText("Import Events")
     frame.importTab = importTab
     
-    local companionTab = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    companionTab:SetSize(120, 25)
-    companionTab:SetPoint("LEFT", importTab, "RIGHT", 5, 0)
-    companionTab:SetText("Companion App")
-    frame.companionTab = companionTab
-    
     -- Create content frames for each tab
     local eventsContent = CreateFrame("Frame", nil, frame)
     eventsContent:SetPoint("TOPLEFT", frame, "TOPLEFT", 15, -65)
@@ -113,21 +107,13 @@ function addon:CreateMainFrame()
     importContent:Hide()
     frame.importContent = importContent
     
-    local companionContent = CreateFrame("Frame", nil, frame)
-    companionContent:SetPoint("TOPLEFT", frame, "TOPLEFT", 15, -65)
-    companionContent:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -15, 45)
-    companionContent:Hide()
-    frame.companionContent = companionContent
-    
     -- Tab switching
     local function showTab(tab)
         eventsContent:Hide()
         importContent:Hide()
-        companionContent:Hide()
         
         eventsTab:Enable()
         importTab:Enable()
-        companionTab:Enable()
         
         if tab == "events" then
             eventsContent:Show()
@@ -135,16 +121,11 @@ function addon:CreateMainFrame()
         elseif tab == "import" then
             importContent:Show()
             importTab:Disable()
-        elseif tab == "companion" then
-            companionContent:Show()
-            companionTab:Disable()
-            addon:RefreshCompanionTab()
         end
     end
     
     eventsTab:SetScript("OnClick", function() showTab("events") end)
     importTab:SetScript("OnClick", function() showTab("import") end)
-    companionTab:SetScript("OnClick", function() showTab("companion") end)
     
     -- ========== EVENTS TAB ==========
     
@@ -179,10 +160,6 @@ function addon:CreateMainFrame()
     
     addon:CreateImportTab(importContent)
     
-    -- ========== COMPANION APP TAB ==========
-    
-    addon:CreateCompanionTab(companionContent)
-    
     -- ========== BOTTOM BUTTONS ==========
     
     local refreshButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -206,6 +183,12 @@ function addon:CreateMainFrame()
     end)
     frame.clearButton = clearButton
     
+    -- Companion App Status Indicator
+    local statusIndicator = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statusIndicator:SetPoint("LEFT", clearButton, "RIGHT", 15, 0)
+    statusIndicator:SetText("|cffaaaaaa[?] Checking...|r")
+    frame.statusIndicator = statusIndicator
+    
     -- Show events tab by default
     showTab("events")
     
@@ -226,202 +209,29 @@ function addon:CreateMainFrame()
 end
 
 -- ============================================================================
--- COMPANION APP TAB
+-- COMPANION STATUS UPDATE
 -- ============================================================================
 
-function addon:CreateCompanionTab(parent)
-    -- Scroll frame for content
-    local scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 5, -5)
-    scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -25, 5)
+function addon:UpdateCompanionStatus()
+    if not self.mainFrame or not self.mainFrame.statusIndicator then return end
     
-    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-    scrollChild:SetSize(480, 1000)
-    scrollFrame:SetScrollChild(scrollChild)
-    
-    local yOffset = -10
-    
-    -- Header
-    local headerLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    headerLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    headerLabel:SetText("Companion App (Optional)")
-    headerLabel:SetTextColor(1, 0.82, 0)
-    yOffset = yOffset - 30
-    
-    -- Description
-    local descLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    descLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    descLabel:SetWidth(460)
-    descLabel:SetJustifyH("LEFT")
-    descLabel:SetText("The Companion App enables automatic syncing without manual copy/paste.")
-    yOffset = yOffset - 35
-    
-    local warningLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    warningLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    warningLabel:SetWidth(460)
-    warningLabel:SetJustifyH("LEFT")
-    warningLabel:SetText("|cffffaa00[!] This is completely OPTIONAL!|r")
-    yOffset = yOffset - 25
-    
-    local altLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    altLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    altLabel:SetWidth(460)
-    altLabel:SetJustifyH("LEFT")
-    altLabel:SetText("You can use the |cff00ff00Import Events|r tab to manually sync anytime.")
-    yOffset = yOffset - 35
-    
-    -- Setup section
-    local setupHeader = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    setupHeader:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    setupHeader:SetText("|cff00ff00Companion App Setup:|r")
-    yOffset = yOffset - 25
-    
-    -- Steps
-    local steps = {
-        "1. Download the Companion App from CurseForge or GitHub",
-        "2. In Discord, type /subscribe to get your subscription string",
-        "3. Paste the subscription string into the Companion App",
-        "4. Click 'Start Syncing' in the app - Done!"
-    }
-    
-    for _, step in ipairs(steps) do
-        local stepLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        stepLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 20, yOffset)
-        stepLabel:SetWidth(450)
-        stepLabel:SetJustifyH("LEFT")
-        stepLabel:SetText(step)
-        yOffset = yOffset - 20
-    end
-    
-    yOffset = yOffset - 10
-    
-    -- Subscription string reference
-    local subLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    subLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    subLabel:SetText("Your Subscription String (for reference):")
-    subLabel:SetTextColor(0.7, 0.7, 0.7)
-    yOffset = yOffset - 20
-    
-    local subBox = CreateFrame("EditBox", nil, scrollChild, "InputBoxTemplate")
-    subBox:SetSize(380, 20)
-    subBox:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 15, yOffset)
-    subBox:SetAutoFocus(false)
-    subBox:SetMaxLetters(0)
-    subBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    parent.subBox = subBox
-    yOffset = yOffset - 35
-    
-    -- Status section
-    local statusHeader = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    statusHeader:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    statusHeader:SetText("|cff00ff00Companion App Status:|r")
-    yOffset = yOffset - 25
-    
-    local statusText = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    statusText:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    statusText:SetJustifyH("LEFT")
-    statusText:SetWidth(460)
-    parent.statusText = statusText
-    yOffset = yOffset - 60
-    
-    -- Benefits section
-    local benefitsHeader = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    benefitsHeader:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    benefitsHeader:SetText("|cff00ff00Why Use the Companion App?|r")
-    yOffset = yOffset - 25
-    
-    local benefits = {
-        "[+] Automatic syncing every 60 seconds",
-        "[+] No manual copy/paste needed",
-        "[+] Runs in background (system tray)",
-        "[+] Real-time notifications in-game"
-    }
-    
-    for _, benefit in ipairs(benefits) do
-        local benefitLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        benefitLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 20, yOffset)
-        benefitLabel:SetWidth(450)
-        benefitLabel:SetJustifyH("LEFT")
-        benefitLabel:SetText(benefit)
-        benefitLabel:SetTextColor(0.5, 1, 0.5)
-        yOffset = yOffset - 18
-    end
-    
-    yOffset = yOffset - 10
-    
-    local noteLabel = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    noteLabel:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
-    noteLabel:SetWidth(460)
-    noteLabel:SetJustifyH("LEFT")
-    noteLabel:SetText("Without the app, you can still manually sync using the Import Events tab - it works perfectly fine!")
-    noteLabel:SetTextColor(0.7, 0.7, 0.7)
-end
-
-function addon:RefreshCompanionTab()
-    if not self.mainFrame or not self.mainFrame.companionContent then return end
-    
-    local parent = self.mainFrame.companionContent
-    if not parent.statusText then return end
-    
-    local statusText = ""
+    local statusIndicator = self.mainFrame.statusIndicator
     
     -- Check if companion app is running by checking heartbeat age
     local companionActive = false
-    local heartbeatAge = 999999
     
     if LuminisbotCompanionData and LuminisbotCompanionData.companionHeartbeat then
-        heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+        local heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
         -- Consider active if heartbeat is less than 2 minutes old
         companionActive = heartbeatAge < 120
     end
     
-    if companionActive and LuminisbotEventsDB.lastUpdate and LuminisbotEventsDB.lastUpdate > 0 then
-        local eventCount = 0
-        for _ in pairs(LuminisbotEventsDB.events or {}) do
-            eventCount = eventCount + 1
-        end
-        
-        -- Format the timestamp nicely
-        local timeAgo = LuminisbotEvents:FormatTimeAgo(LuminisbotEventsDB.lastUpdate)
-        
-        statusText = string.format(
-            "|cff00ff00[Active]|r Companion App Running\n\n" ..
-            "Events synced: %d\n" ..
-            "Last sync: %s\n\n" ..
-            "Click Refresh button below to load new events!",
-            eventCount,
-            timeAgo
-        )
+    if companionActive then
+        statusIndicator:SetText("|cff00ff00[+] Companion Active|r")
     elseif LuminisbotEventsDB.lastUpdate and LuminisbotEventsDB.lastUpdate > 0 then
-        -- Has data but companion not running
-        local eventCount = 0
-        for _ in pairs(LuminisbotEventsDB.events or {}) do
-            eventCount = eventCount + 1
-        end
-        
-        local timeAgo = LuminisbotEvents:FormatTimeAgo(LuminisbotEventsDB.lastUpdate)
-        
-        statusText = string.format(
-            "|cffff9900[Not Running]|r Companion App Stopped\n\n" ..
-            "Events synced: %d\n" ..
-            "Last sync: %s\n\n" ..
-            "Start the companion app to sync new events.",
-            eventCount,
-            timeAgo
-        )
+        statusIndicator:SetText("|cffff9900[-] Companion Stopped|r")
     else
-        statusText = 
-            "|cffff9900[Not Connected]|r\n\n" ..
-            "Companion app not detected.\n\n" ..
-            "Either the app isn't running, or you haven't completed setup yet."
-    end
-    
-    parent.statusText:SetText(statusText)
-    
-    -- Update subscription string display
-    if parent.subBox and LuminisbotEventsDB.guildId and LuminisbotEventsDB.apiKey then
-        local sub_string = self:Base64Encode(LuminisbotEventsDB.guildId .. ":" .. LuminisbotEventsDB.apiKey)
-        parent.subBox:SetText(sub_string)
+        statusIndicator:SetText("|cffaaaaaa[?] No Data|r")
     end
 end
 
@@ -541,6 +351,9 @@ function addon:RefreshUI()
         self:CreateMainFrame()
     end
     
+    -- Update companion status indicator
+    self:UpdateCompanionStatus()
+    
     local scrollChild = self.mainFrame.scrollChild
     
     -- Clear existing content
@@ -610,7 +423,7 @@ function addon:CreateEventFrame(event)
     end
     
     local timeStr = (event.time or "00:00:00"):sub(1, 5)  -- HH:MM
-    dateTime:SetText(string.format("📅 %s  🕐 %s", dateStr, timeStr))
+    dateTime:SetText(string.format("%s @ %s", dateStr, timeStr))
     dateTime:SetTextColor(0.8, 0.8, 0.8)
     
     -- Count signups by status
@@ -665,9 +478,12 @@ function addon:CreateEventFrame(event)
         addon:InviteEventSignups(event)
     end)
     
-    -- Disable invite if no signups
-    if signed == 0 then
+    -- Disable invite if no signups or not event owner
+    if signed == 0 or not addon:IsEventOwner(event) then
         inviteButton:Disable()
+        if not addon:IsEventOwner(event) then
+            inviteButton:SetAlpha(0.5)
+        end
     end
     
     local detailsButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -700,6 +516,12 @@ function addon:ShowEventDetails(event)
     end
     
     local frame = self.detailsFrame
+    frame.currentEvent = event  -- Store for status buttons
+    
+    -- Store expansion states before recreating (keyed by character name)
+    if not frame.expansionStates then
+        frame.expansionStates = {}
+    end
     
     -- Re-position next to main frame if shown
     if self.mainFrame and self.mainFrame:IsShown() then
@@ -760,10 +582,10 @@ function addon:ShowEventDetails(event)
     
     -- Display each status group
     local statusLabels = {
-        signed = {label = "✓ Signed Up", color = {0, 1, 0}},
-        late = {label = "🕐 Late", color = {1, 0.8, 0}},
-        tentative = {label = "⚖ Tentative", color = {0.8, 0.8, 0}},
-        benched = {label = "🪑 Benched", color = {0.5, 0.5, 0.5}},
+        signed = {label = "[+] Signed Up", color = {0, 1, 0}},
+        late = {label = "[~] Late", color = {1, 0.8, 0}},
+        tentative = {label = "[?] Tentative", color = {0.8, 0.8, 0}},
+        benched = {label = "[-] Benched", color = {0.5, 0.5, 0.5}},
         absent = {label = "[X] Absent", color = {1, 0, 0}}
     }
     
@@ -792,55 +614,128 @@ function addon:ShowEventDetails(event)
             
             -- List signups
             for _, signup in ipairs(signups) do
-                -- Create a container frame for this player
-                local playerFrame = CreateFrame("Frame", nil, scrollChild)
-                playerFrame:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 20, yOffset)
-                playerFrame:SetSize(400, 18)
-                
-                local playerText = playerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                playerText:SetPoint("LEFT", playerFrame, "LEFT", 0, 0)
-                
-                -- Get class color
-                local classColor = CLASS_COLORS[signup.class] or {r=1, g=1, b=1}
-                
-                -- Format: [Role Icon] Name (Spec Class)
-                local roleIcon = ROLE_ICONS[signup.role] or ""
-                local specText = signup.spec and signup.spec ~= "" and signup.spec or signup.class
-                
-                -- Get character name (handle both 'character' and 'name' fields, and empty strings)
+                -- Get character name for this signup
                 local characterName = signup.character or signup.name or ""
                 if characterName == "" then
                     characterName = "Unknown"
                 end
                 
-                playerText:SetText(string.format("%s %s", roleIcon, characterName))
+                -- Create a container frame for this player (expandable box)
+                local playerBox = CreateFrame("Frame", nil, scrollChild, "BackdropTemplate")
+                playerBox:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 10, yOffset)
+                playerBox.signup = signup
+                playerBox.characterName = characterName
+                
+                -- Check if this box should start expanded
+                local isExpanded = frame.expansionStates[characterName] or false
+                playerBox.isExpanded = isExpanded
+                
+                -- Get class color for border
+                local classColor = CLASS_COLORS[signup.class] or {r=1, g=1, b=1}
+                
+                playerBox:SetBackdrop({
+                    bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+                    edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+                    tile = true, tileSize = 16, edgeSize = 12,
+                    insets = { left = 2, right = 2, top = 2, bottom = 2 }
+                })
+                playerBox:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+                playerBox:SetBackdropBorderColor(classColor.r, classColor.g, classColor.b, 0.8)
+                
+                -- Set initial height based on expansion state
+                local boxHeight = isExpanded and 84 or 22
+                playerBox:SetSize(470, boxHeight)
+                
+                -- Expand/Collapse arrow button
+                local expandBtn = CreateFrame("Button", nil, playerBox)
+                expandBtn:SetSize(16, 16)
+                expandBtn:SetPoint("LEFT", playerBox, "LEFT", 5, 0)
+                if isExpanded then
+                    expandBtn:SetNormalTexture("Interface/Buttons/UI-MinusButton-Up")
+                else
+                    expandBtn:SetNormalTexture("Interface/Buttons/UI-PlusButton-Up")
+                end
+                expandBtn:SetHighlightTexture("Interface/Buttons/UI-PlusButton-Hilight")
+                
+                -- Player info text
+                local playerText = playerBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                playerText:SetPoint("LEFT", expandBtn, "RIGHT", 5, 0)
+                
+                local roleIcon = ROLE_ICONS[signup.role] or ""
+                local specText = signup.spec and signup.spec ~= "" and signup.spec or signup.class
+                
+                playerText:SetText(string.format("%s %s (%s)", roleIcon, characterName, specText))
                 playerText:SetTextColor(classColor.r, classColor.g, classColor.b)
                 
-                -- Spec/Class
-                local specLabel = playerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                specLabel:SetPoint("LEFT", playerText, "RIGHT", 5, 0)
-                specLabel:SetText(string.format("(%s)", specText))
-                specLabel:SetTextColor(0.6, 0.6, 0.6)
-                
-                -- Individual invite button
-                local inviteBtn = CreateFrame("Button", nil, playerFrame, "UIPanelButtonTemplate")
+                -- Invite button (always visible)
+                local inviteBtn = CreateFrame("Button", nil, playerBox, "UIPanelButtonTemplate")
                 inviteBtn:SetSize(50, 18)
-                inviteBtn:SetPoint("RIGHT", playerFrame, "RIGHT", 0, 0)
+                inviteBtn:SetPoint("RIGHT", playerBox, "RIGHT", -5, 0)
                 inviteBtn:SetText("Invite")
                 inviteBtn:SetScript("OnClick", function()
-                    -- Format character name with realm
-                    local characterName = signup.character or signup.name or "Unknown"
+                    local charName = signup.character or signup.name or "Unknown"
                     if signup.realm then
-                        -- Convert realm to in-game format (remove spaces/hyphens)
                         local realmFormatted = signup.realm:gsub("%-", ""):gsub(" ", "")
-                        characterName = characterName .. "-" .. realmFormatted
+                        charName = charName .. "-" .. realmFormatted
                     end
-                    
-                    C_PartyInfo.InviteUnit(characterName)
-                    addon:Print("Invited " .. characterName)
+                    C_PartyInfo.InviteUnit(charName)
+                    addon:Print("Invited " .. charName)
                 end)
                 
-                yOffset = yOffset - 18
+                -- Expanded content frame (show if expanded)
+                local expandedFrame = CreateFrame("Frame", nil, playerBox)
+                expandedFrame:SetPoint("TOPLEFT", playerBox, "TOPLEFT", 5, -22)
+                expandedFrame:SetSize(460, 60)
+                if not isExpanded then
+                    expandedFrame:Hide()
+                end
+                playerBox.expandedFrame = expandedFrame
+                
+                -- Owner controls (only shown if player is event owner)
+                if addon:IsEventOwner(event) and addon:IsCompanionActive() then
+                    local ownerLabel = expandedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    ownerLabel:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", 0, -5)
+                    ownerLabel:SetText("Event Owner Controls:")
+                    ownerLabel:SetTextColor(1, 0.82, 0)
+                    
+                    -- Status change buttons for owner
+                    local ownerStatuses = {
+                        {text = "Sign", status = "signed", color = {0, 1, 0}},
+                        {text = "Late", status = "late", color = {1, 0.8, 0}},
+                        {text = "Tent.", status = "tentative", color = {0.8, 0.8, 0}},
+                        {text = "Bench", status = "benched", color = {0.5, 0.5, 0.5}},
+                        {text = "Absent", status = "absent", color = {1, 0, 0}}
+                    }
+                    
+                    local btnWidth = 55
+                    local btnSpacing = 3
+                    for i, statusInfo in ipairs(ownerStatuses) do
+                        local btn = CreateFrame("Button", nil, expandedFrame, "UIPanelButtonTemplate")
+                        btn:SetSize(btnWidth, 20)
+                        btn:SetPoint("TOPLEFT", expandedFrame, "TOPLEFT", (i - 1) * (btnWidth + btnSpacing), -25)
+                        btn:SetText(statusInfo.text)
+                        btn:SetScript("OnClick", function()
+                            -- Owner changes another player's status
+                            addon:QueueCommand("change_status", event.id, {
+                                character = characterName,
+                                realm = signup.realm or GetRealmName(),
+                                status = statusInfo.status
+                            })
+                            addon:Print(string.format("Changed %s to %s", characterName, statusInfo.status))
+                        end)
+                    end
+                end
+                
+                -- Expand/Collapse functionality
+                expandBtn:SetScript("OnClick", function()
+                    -- Toggle expansion state
+                    frame.expansionStates[characterName] = not playerBox.isExpanded
+                    -- Refresh the entire view to recalculate layout
+                    addon:ShowEventDetails(event)
+                end)
+                
+                -- Update yOffset based on current box height
+                yOffset = yOffset - (boxHeight + 2)
             end
             
             yOffset = yOffset - 10  -- Extra spacing between groups
@@ -857,6 +752,29 @@ function addon:ShowEventDetails(event)
     end
     
     scrollChild:SetHeight(math.abs(yOffset) + 20)
+    
+    -- Update status button states based on companion status
+    local companionActive = addon:IsCompanionActive()
+    if frame.statusButtons then
+        local statuses = {"signed", "late", "tentative", "benched", "absent"}
+        for i, btn in ipairs(frame.statusButtons) do
+            local status = statuses[i]
+            
+            -- Disable benched button (players can't bench themselves)
+            if status == "benched" then
+                btn:Disable()
+                btn:SetAlpha(0.3)
+                btn:SetText("Benched*")  -- Add asterisk to indicate it's special
+            elseif companionActive then
+                btn:Enable()
+                btn:SetAlpha(1.0)
+            else
+                btn:Disable()
+                btn:SetAlpha(0.5)
+            end
+        end
+    end
+    
     frame:Show()
 end
 
@@ -890,6 +808,43 @@ function addon:CreateDetailsFrame()
     
     frame.scrollFrame = scrollFrame
     frame.scrollChild = scrollChild
+    
+    -- Status change buttons
+    local buttonY = 40
+    local buttonWidth = 90
+    local buttonSpacing = 5
+    
+    local statuses = {
+        {text = "Signed", status = "signed", color = {0, 1, 0}},
+        {text = "Late", status = "late", color = {1, 0.8, 0}},
+        {text = "Tentative", status = "tentative", color = {0.8, 0.8, 0}},
+        {text = "Benched", status = "benched", color = {0.5, 0.5, 0.5}},
+        {text = "Absent", status = "absent", color = {1, 0, 0}}
+    }
+    
+    local totalWidth = (#statuses * buttonWidth) + ((#statuses - 1) * buttonSpacing)
+    local startX = -(totalWidth / 2) + (buttonWidth / 2)
+    
+    frame.statusButtons = {}
+    for i, statusInfo in ipairs(statuses) do
+        local btn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        btn:SetSize(buttonWidth, 22)
+        btn:SetPoint("BOTTOM", frame, "BOTTOM", startX + ((i - 1) * (buttonWidth + buttonSpacing)), buttonY)
+        btn:SetText(statusInfo.text)
+        btn:SetScript("OnClick", function()
+            if frame.currentEvent then
+                addon:ChangeSignupStatus(frame.currentEvent.id, statusInfo.status)
+            end
+        end)
+        frame.statusButtons[i] = btn
+    end
+    
+    -- Note about benched status
+    local benchNote = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    benchNote:SetPoint("BOTTOM", frame, "BOTTOM", 0, 68)
+    benchNote:SetText("* Players cannot bench themselves")
+    benchNote:SetTextColor(0.7, 0.7, 0.7)
+    frame.benchNote = benchNote
     
     -- Close button
     local closeButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")

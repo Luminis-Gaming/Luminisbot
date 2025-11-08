@@ -494,8 +494,10 @@ async def handle_get_events(request):
                 e.event_date,
                 e.event_time,
                 e.created_by,
-                e.created_at
+                e.created_at,
+                wc.character_name as owner_character
             FROM raid_events e
+            LEFT JOIN wow_characters wc ON e.created_by = wc.discord_id
             WHERE e.guild_id = %s
                 AND e.event_date >= CURRENT_DATE
             ORDER BY e.event_date, e.event_time
@@ -546,6 +548,8 @@ async def handle_get_events(request):
                 'title': event['title'],
                 'date': event['event_date'].isoformat(),
                 'time': event['event_time'].strftime('%H:%M:%S'),
+                'created_by': event['created_by'],
+                'owner_character': event.get('owner_character'),
                 'signups': unique_signups
             })
         
@@ -601,8 +605,10 @@ async def handle_get_single_event(request):
                 e.title,
                 e.event_date,
                 e.event_time,
-                e.created_by
+                e.created_by,
+                wc.character_name as owner_character
             FROM raid_events e
+            LEFT JOIN wow_characters wc ON e.created_by = wc.discord_id
             WHERE e.id = %s AND e.guild_id = %s
         """, (event_id, guild_id))
         
@@ -652,6 +658,8 @@ async def handle_get_single_event(request):
             'title': event['title'],
             'date': event['event_date'].isoformat(),
             'time': event['event_time'].strftime('%H:%M:%S'),
+            'created_by': event['created_by'],
+            'owner_character': event.get('owner_character'),
             'signups': unique_signups
         }
         
@@ -763,6 +771,145 @@ async def cors_middleware(request, handler):
     return await handler(request)
 
 
+async def handle_update_signup(request):
+    """
+    POST /api/v1/events/{event_id}/signup
+    Update or create a signup for an event
+    """
+    # Verify API key
+    auth_error = await verify_api_key(request)
+    if auth_error:
+        return auth_error
+    
+    guild_id = request['guild_id']
+    event_id = request.match_info.get('event_id')
+    
+    try:
+        event_id = int(event_id)
+    except (ValueError, TypeError):
+        return web.json_response(
+            {'success': False, 'error': 'Invalid event ID'},
+            status=400
+        )
+    
+    # Get request body
+    try:
+        data = await request.json()
+    except Exception as e:
+        return web.json_response(
+            {'success': False, 'error': 'Invalid JSON'},
+            status=400
+        )
+    
+    character = data.get('character')
+    realm = data.get('realm')
+    status = data.get('status', 'signed')
+    
+    if not character:
+        return web.json_response(
+            {'success': False, 'error': 'Character name required'},
+            status=400
+        )
+    
+    # Get the discord_user_id from the API key (set by verify_api_key middleware)
+    requester_discord_id = request.get('discord_user_id')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Verify event exists and belongs to this guild
+        cursor.execute("""
+            SELECT e.id, e.created_by
+            FROM raid_events e
+            WHERE e.id = %s AND e.guild_id = %s
+        """, (event_id, guild_id))
+        
+        event = cursor.fetchone()
+        if not event:
+            cursor.close()
+            conn.close()
+            return web.json_response(
+                {'success': False, 'error': 'Event not found or unauthorized'},
+                status=404
+            )
+        
+        # Get the requester's characters to determine who is making the change
+        cursor.execute("""
+            SELECT character_name 
+            FROM wow_characters 
+            WHERE discord_id = %s
+        """, (requester_discord_id,))
+        
+        requester_characters = [row['character_name'] for row in cursor.fetchall()]
+        
+        # Authorization check: user can either:
+        # 1. Change their own character's status (character belongs to their account)
+        # 2. Change anyone's status if they're the event owner
+        is_own_character = character in requester_characters
+        is_event_owner = event['created_by'] == requester_discord_id
+        
+        if not is_own_character and not is_event_owner:
+            cursor.close()
+            conn.close()
+            logger.warning(f"API: Unauthorized status change attempt by Discord user {requester_discord_id} for {character}")
+            return web.json_response(
+                {'success': False, 'error': 'You can only change your own character status or, if you created the event, manage other players'},
+                status=403
+            )
+        
+        # Find the signup by character name (since we don't have discord_id from addon)
+        cursor.execute("""
+            SELECT discord_id, character_class, role, spec
+            FROM raid_signups
+            WHERE event_id = %s AND LOWER(character_name) = LOWER(%s)
+            LIMIT 1
+        """, (event_id, character))
+        
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing signup status
+            cursor.execute("""
+                UPDATE raid_signups
+                SET status = %s
+                WHERE event_id = %s AND discord_id = %s
+            """, (status, event_id, existing['discord_id']))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.info(f"API: Updated signup for {character} to {status} on event {event_id}")
+            
+            # Trigger Discord bot to update event message
+            if discord_bot:
+                try:
+                    from raid_system import refresh_event_embed
+                    asyncio.create_task(refresh_event_embed(discord_bot, event_id))
+                except Exception as e:
+                    logger.error(f"Failed to refresh event embed: {e}")
+            
+            return web.json_response({
+                'success': True,
+                'message': f'Updated {character} status to {status}'
+            })
+        else:
+            cursor.close()
+            conn.close()
+            return web.json_response(
+                {'success': False, 'error': f'Character {character} not found in signups'},
+                status=404
+            )
+            
+    except Exception as e:
+        logger.error(f"Error updating signup: {e}")
+        return web.json_response(
+            {'success': False, 'error': 'Internal server error'},
+            status=500
+        )
+
+
 def create_app(bot=None):
     """Create and configure the web application"""
     global discord_bot
@@ -779,6 +926,7 @@ def create_app(bot=None):
     # API routes (v1)
     app.router.add_get('/api/v1/events', handle_get_events)
     app.router.add_get('/api/v1/events/{event_id}', handle_get_single_event)
+    app.router.add_post('/api/v1/events/{event_id}/signup', handle_update_signup)
     app.router.add_post('/api/v1/keys/generate', handle_generate_api_key)
     
     return app

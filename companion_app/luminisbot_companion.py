@@ -27,7 +27,7 @@ except ImportError:
     print("Warning: updater.py not found - auto-update disabled")
 
 # Version
-VERSION = "1.0.2.4"
+VERSION = "1.0.2.5"
 
 # Luminis Colors
 LUMINIS_BG = "#1a1a1a"
@@ -239,6 +239,151 @@ LuminisbotCompanionData = {{
             traceback.print_exc()
             return False
     
+    def get_commands_path(self):
+        """Get path to Commands.lua file"""
+        if not self.wow_path:
+            return None
+        
+        return Path(self.wow_path) / "Interface" / "AddOns" / "LuminisbotEvents" / "Commands.lua"
+    
+    def read_commands(self):
+        """Read and parse commands from Commands.lua"""
+        commands_path = self.get_commands_path()
+        if not commands_path or not commands_path.exists():
+            return []
+        
+        try:
+            with open(commands_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Simple Lua table parser for command queue
+            commands = []
+            
+            # Look for queue entries like: {id=1, type="change_status", ...}
+            import re
+            queue_pattern = r'\{[^}]+\}'
+            matches = re.findall(queue_pattern, content)
+            
+            for match in matches:
+                try:
+                    # Extract fields
+                    cmd = {}
+                    
+                    id_match = re.search(r'id\s*=\s*(\d+)', match)
+                    if id_match:
+                        cmd['id'] = int(id_match.group(1))
+                    
+                    type_match = re.search(r'type\s*=\s*"([^"]+)"', match)
+                    if type_match:
+                        cmd['type'] = type_match.group(1)
+                    
+                    event_id_match = re.search(r'eventId\s*=\s*(\d+)', match)
+                    if event_id_match:
+                        cmd['eventId'] = int(event_id_match.group(1))
+                    
+                    # Extract data table fields
+                    character_match = re.search(r'character\s*=\s*"([^"]*)"', match)
+                    realm_match = re.search(r'realm\s*=\s*"([^"]*)"', match)
+                    status_match = re.search(r'status\s*=\s*"([^"]+)"', match)
+                    
+                    if character_match or realm_match or status_match:
+                        cmd['data'] = {}
+                        if character_match:
+                            cmd['data']['character'] = character_match.group(1)
+                        if realm_match:
+                            cmd['data']['realm'] = realm_match.group(1)
+                        if status_match:
+                            cmd['data']['status'] = status_match.group(1)
+                    
+                    if 'id' in cmd and 'type' in cmd:
+                        commands.append(cmd)
+                        
+                except Exception as e:
+                    print(f"[CMD] Warning: Failed to parse command: {e}")
+                    continue
+            
+            return commands
+            
+        except Exception as e:
+            print(f"[CMD] Error reading commands: {e}")
+            return []
+    
+    def clear_commands(self):
+        """Clear the command queue"""
+        commands_path = self.get_commands_path()
+        if not commands_path:
+            return
+        
+        try:
+            with open(commands_path, 'w', encoding='utf-8') as f:
+                f.write("""-- Commands.lua
+-- Queue of commands to be processed by the companion app
+-- This file is written by the addon and read by the companion app
+-- Commands are processed once and then cleared
+
+LuminisbotCommands = LuminisbotCommands or {
+    queue = {},
+    lastCommandId = 0
+}
+""")
+        except Exception as e:
+            print(f"[CMD] Error clearing commands: {e}")
+    
+    def process_command(self, command):
+        """Process a single command"""
+        cmd_type = command.get('type')
+        event_id = command.get('eventId')
+        data = command.get('data', {})
+        
+        print(f"[CMD] Processing: {cmd_type} for event {event_id}")
+        
+        if cmd_type == "change_status":
+            character = data.get('character')
+            realm = data.get('realm')
+            status = data.get('status')
+            
+            if not all([character, status]):
+                print(f"[CMD] ✗ Missing required fields")
+                return False
+            
+            # Call API to update signup status
+            try:
+                headers = {
+                    'X-API-Key': self.api_key,
+                    'Content-Type': 'application/json'
+                }
+                
+                # Convert realm name to slug (lowercase, spaces to hyphens)
+                realm_slug = realm.lower().replace(' ', '-').replace("'", '') if realm else ''
+                
+                payload = {
+                    'character': character,
+                    'realm': realm_slug,
+                    'status': status
+                }
+                
+                response = requests.post(
+                    f"{API_BASE_URL}/events/{event_id}/signup",
+                    headers=headers,
+                    json=payload,
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    print(f"[CMD] ✓ Updated {character} to {status}")
+                    return True
+                else:
+                    print(f"[CMD] ✗ API error: {response.status_code}")
+                    return False
+                    
+            except Exception as e:
+                print(f"[CMD] ✗ Error calling API: {e}")
+                return False
+        
+        else:
+            print(f"[CMD] ✗ Unknown command type: {cmd_type}")
+            return False
+    
     def events_to_lua(self, events_data):
         """Convert JSON events to Lua table format"""
         if not events_data or 'events' not in events_data:
@@ -286,6 +431,15 @@ LuminisbotCompanionData = {{
         
         while self.running:
             try:
+                # Process any pending commands from addon first
+                commands = self.read_commands()
+                if commands:
+                    print(f"[CMD] Found {len(commands)} command(s) to process")
+                    for command in commands:
+                        self.process_command(command)
+                    # Clear commands after processing
+                    self.clear_commands()
+                
                 # Fetch events from API
                 print(f"[SYNC] Fetching events from API...")
                 events_data = self.fetch_events()

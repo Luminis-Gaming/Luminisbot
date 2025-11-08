@@ -3,9 +3,10 @@
 ## Notes: Display Discord raid events in-game with one-click invites
 ## Author: Luminis Gaming
 ## Version: 1.0.0
-## SavedVariables: LuminisbotEventsDB
+## SavedVariables: LuminisbotEventsDB, LuminisbotCommands
 ## IconTexture: Interface\Icons\Achievement_Boss_Algalon_01
 
 CompanionData.lua
+Commands.lua
 Core.lua
 UI.lua

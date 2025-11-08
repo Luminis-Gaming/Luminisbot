@@ -995,6 +995,14 @@ def generate_raid_embed(event_id: int):
     if class_fields:
         for field in class_fields:
             embed.add_field(name=field['name'], value=field['value'], inline=field['inline'])
+        
+        # Add empty fields to complete the last row (Discord uses 3-column layout for inline fields)
+        # This ensures proper alignment when number of classes isn't a multiple of 3
+        remainder = len(class_fields) % 3
+        if remainder != 0:
+            empty_fields_needed = 3 - remainder
+            for _ in range(empty_fields_needed):
+                embed.add_field(name="\u200b", value="\u200b", inline=True)
     else:
         embed.add_field(name="📋 Roster", value="_No signups yet_", inline=False)
     
@@ -1114,6 +1122,51 @@ def generate_raid_embed(event_id: int):
     view = create_raid_buttons_view(event.get('log_url'))
     
     return embed, view
+
+async def refresh_event_embed(bot, event_id: int):
+    """Refresh the Discord event message after changes from API"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get event with message info
+        cursor.execute("""
+            SELECT message_id, channel_id, guild_id 
+            FROM raid_events 
+            WHERE id = %s
+        """, (event_id,))
+        
+        event = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not event or not event['message_id'] or not event['channel_id']:
+            print(f"[REFRESH] Event {event_id} has no message to update")
+            return
+        
+        # Get the channel and message
+        channel = bot.get_channel(int(event['channel_id']))
+        if not channel:
+            print(f"[REFRESH] Channel {event['channel_id']} not found")
+            return
+        
+        try:
+            message = await channel.fetch_message(int(event['message_id']))
+        except discord.NotFound:
+            print(f"[REFRESH] Message {event['message_id']} not found")
+            return
+        
+        # Generate new embed
+        embed, view = generate_raid_embed(event_id)
+        
+        # Update the message
+        await message.edit(embed=embed, view=view)
+        print(f"[REFRESH] ✓ Updated Discord message for event {event_id}")
+        
+    except Exception as e:
+        print(f"[REFRESH] ✗ Error refreshing event {event_id}: {e}")
+        import traceback
+        traceback.print_exc()
 
 # ============================================================================
 # DISCORD UI COMPONENTS
