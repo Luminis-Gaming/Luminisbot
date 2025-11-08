@@ -731,6 +731,15 @@ frame:SetScript("OnEvent", function(self, event, arg1)
         
         -- Start companion app sync detection
         addon:StartCompanionDetection()
+        
+        -- Reopen window if it was open before reload
+        if LuminisbotEventsDB.wasOpen then
+            LuminisbotEventsDB.wasOpen = false
+            -- Use C_Timer to delay slightly so UI is fully loaded
+            C_Timer.After(0.1, function()
+                addon:ShowUI()
+            end)
+        end
     end
 end)
 

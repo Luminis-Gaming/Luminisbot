@@ -532,12 +532,21 @@ async def handle_get_events(request):
             
             signups = cursor.fetchall()
             
+            # Deduplicate signups by character name (keep first occurrence)
+            seen_characters = set()
+            unique_signups = []
+            for signup in signups:
+                char_key = signup['character'].lower() if signup['character'] else ''
+                if char_key and char_key not in seen_characters:
+                    seen_characters.add(char_key)
+                    unique_signups.append(dict(signup))
+            
             result.append({
                 'id': event['id'],
                 'title': event['title'],
                 'date': event['event_date'].isoformat(),
                 'time': event['event_time'].strftime('%H:%M:%S'),
-                'signups': [dict(s) for s in signups]
+                'signups': unique_signups
             })
         
         cursor.close()
@@ -626,6 +635,15 @@ async def handle_get_single_event(request):
         
         signups = cursor.fetchall()
         
+        # Deduplicate signups by character name (keep first occurrence)
+        seen_characters = set()
+        unique_signups = []
+        for signup in signups:
+            char_key = signup['character'].lower() if signup['character'] else ''
+            if char_key and char_key not in seen_characters:
+                seen_characters.add(char_key)
+                unique_signups.append(dict(signup))
+        
         cursor.close()
         conn.close()
         
@@ -634,7 +652,7 @@ async def handle_get_single_event(request):
             'title': event['title'],
             'date': event['event_date'].isoformat(),
             'time': event['event_time'].strftime('%H:%M:%S'),
-            'signups': [dict(s) for s in signups]
+            'signups': unique_signups
         }
         
         logger.info(f"API: Returned event {event_id} for guild {guild_id}")

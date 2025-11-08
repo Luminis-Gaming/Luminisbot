@@ -188,9 +188,11 @@ function addon:CreateMainFrame()
     local refreshButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     refreshButton:SetSize(100, 22)
     refreshButton:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 15, 12)
-    refreshButton:SetText("Refresh")
+    refreshButton:SetText("Reload")
     refreshButton:SetScript("OnClick", function()
-        addon:RefreshUI()
+        -- Save that window was open before reload
+        LuminisbotEventsDB.wasOpen = true
+        ReloadUI()
     end)
     frame.refreshButton = refreshButton
     
