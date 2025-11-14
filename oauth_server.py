@@ -39,6 +39,11 @@ BLIZZARD_API_BASE = "https://eu.api.blizzard.com"
 discord_bot = None
 
 
+class BattleNetAuthError(Exception):
+    """Raised when Battle.net API returns an authorization error (403)"""
+    pass
+
+
 def get_db_connection():
     """Create database connection"""
     return psycopg2.connect(
@@ -228,6 +233,53 @@ async def handle_callback(request):
             """,
             content_type='text/html'
         )
+    
+    except BattleNetAuthError as e:
+        logger.error(f"Battle.net authorization error for Discord user {discord_id}: {e}")
+        
+        # Clean up any existing connection for this user so they can retry
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Delete any existing connection and characters
+            cursor.execute("DELETE FROM wow_characters WHERE discord_id = %s", (discord_id,))
+            cursor.execute("DELETE FROM wow_connections WHERE discord_id = %s", (discord_id,))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            logger.info(f"Cleaned up failed connection for Discord user {discord_id}")
+        except Exception as cleanup_error:
+            logger.error(f"Error cleaning up failed connection: {cleanup_error}")
+        
+        # Return user-friendly error message
+        return web.Response(
+            text="""
+            <html>
+            <head><title>Authorization Failed</title></head>
+            <body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h1>⚠️ Authorization Failed</h1>
+                <p>Battle.net rejected the authorization (Error 403).</p>
+                <p>This usually happens when:</p>
+                <ul style="text-align: left; max-width: 500px; margin: 20px auto;">
+                    <li>Your Battle.net account doesn't have active WoW game time</li>
+                    <li>The authorization has expired or been revoked</li>
+                    <li>There's a temporary issue with Battle.net services</li>
+                </ul>
+                <p><strong>Please try the following:</strong></p>
+                <ol style="text-align: left; max-width: 500px; margin: 20px auto;">
+                    <li>Make sure you have an active WoW subscription</li>
+                    <li>Return to Discord and use <code>/connectwow</code> again</li>
+                    <li>If the problem persists, contact a server administrator</li>
+                </ol>
+                <p>You can close this window.</p>
+            </body>
+            </html>
+            """,
+            content_type='text/html',
+            status=403
+        )
         
     except Exception as e:
         logger.error(f"Error fetching/storing characters: {e}")
@@ -251,6 +303,10 @@ async def fetch_wow_characters(access_token):
                 headers=headers,
                 params={'namespace': 'profile-eu', 'locale': 'en_US'}
             ) as resp:
+                
+                if resp.status == 403:
+                    logger.error(f"Failed to fetch WoW profile: 403 Forbidden")
+                    raise BattleNetAuthError("Battle.net API returned 403 - Authorization invalid or expired")
                 
                 if resp.status != 200:
                     logger.error(f"Failed to fetch WoW profile: {resp.status}")

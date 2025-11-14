@@ -494,6 +494,28 @@ function addon:CreateEventFrame(event)
         addon:ShowEventDetails(event)
     end)
     
+    -- Check if current player is signed up
+    local playerName = UnitName("player")
+    local isSignedUp = false
+    for _, signup in ipairs(event.signups) do
+        if signup.character == playerName then
+            isSignedUp = true
+            break
+        end
+    end
+    
+    -- Sign Up button (only show if not signed up and companion is active)
+    local signupButton
+    if not isSignedUp and addon:IsCompanionActive() then
+        signupButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        signupButton:SetSize(80, 24)
+        signupButton:SetPoint("RIGHT", detailsButton, "LEFT", -5, 0)
+        signupButton:SetText("Sign Up")
+        signupButton:SetScript("OnClick", function()
+            addon:SignUpForEvent(event)
+        end)
+    end
+    
     local deleteButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     deleteButton:SetSize(70, 24)
     deleteButton:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 8)
@@ -666,10 +688,17 @@ function addon:ShowEventDetails(event)
                 local boxHeight = isExpanded and 84 or 22
                 playerBox:SetSize(470, boxHeight)
                 
-                -- Expand/Collapse arrow button (always at top)
-                local expandBtn = CreateFrame("Button", nil, playerBox)
+                -- Create a header frame to hold the always-visible elements
+                local headerFrame = CreateFrame("Frame", nil, playerBox)
+                headerFrame:SetPoint("TOPLEFT", playerBox, "TOPLEFT")
+                headerFrame:SetPoint("TOPRIGHT", playerBox, "TOPRIGHT")
+                headerFrame:SetHeight(22)
+                headerFrame:SetFrameLevel(playerBox:GetFrameLevel() + 2)  -- Above everything else
+                
+                -- Expand/Collapse arrow button (in header)
+                local expandBtn = CreateFrame("Button", nil, headerFrame)
                 expandBtn:SetSize(16, 16)
-                expandBtn:SetPoint("TOPLEFT", playerBox, "TOPLEFT", 5, -3)
+                expandBtn:SetPoint("LEFT", headerFrame, "LEFT", 5, 0)
                 if isExpanded then
                     expandBtn:SetNormalTexture("Interface/Buttons/UI-MinusButton-Up")
                 else
@@ -677,9 +706,9 @@ function addon:ShowEventDetails(event)
                 end
                 expandBtn:SetHighlightTexture("Interface/Buttons/UI-PlusButton-Hilight")
                 
-                -- Player info text (always at top)
-                local playerText = playerBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                playerText:SetPoint("TOPLEFT", expandBtn, "TOPRIGHT", 5, 0)
+                -- Player info text (in header)
+                local playerText = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                playerText:SetPoint("LEFT", expandBtn, "RIGHT", 5, 0)
                 
                 local roleIcon = ROLE_ICONS[signup.role] or ""
                 local specText = signup.spec and signup.spec ~= "" and signup.spec or signup.class
@@ -687,10 +716,10 @@ function addon:ShowEventDetails(event)
                 playerText:SetText(string.format("%s %s (%s)", roleIcon, characterName, specText))
                 playerText:SetTextColor(classColor.r, classColor.g, classColor.b)
                 
-                -- Invite button (always at top right)
-                local inviteBtn = CreateFrame("Button", nil, playerBox, "UIPanelButtonTemplate")
+                -- Invite button (in header)
+                local inviteBtn = CreateFrame("Button", nil, headerFrame, "UIPanelButtonTemplate")
                 inviteBtn:SetSize(50, 18)
-                inviteBtn:SetPoint("TOPRIGHT", playerBox, "TOPRIGHT", -5, -2)
+                inviteBtn:SetPoint("RIGHT", headerFrame, "RIGHT", -5, 0)
                 inviteBtn:SetText("Invite")
                 inviteBtn:SetScript("OnClick", function()
                     local charName = signup.character or signup.name or "Unknown"
@@ -706,7 +735,8 @@ function addon:ShowEventDetails(event)
                 -- Position it BELOW the first row (player name line)
                 local expandedFrame = CreateFrame("Frame", nil, playerBox)
                 expandedFrame:SetPoint("TOPLEFT", playerBox, "TOPLEFT", 5, -24)  -- Start below the 22px header
-                expandedFrame:SetSize(460, 60)
+                expandedFrame:SetPoint("BOTTOMRIGHT", playerBox, "BOTTOMRIGHT", -5, 2)
+                expandedFrame:SetFrameLevel(playerBox:GetFrameLevel() + 1)  -- Ensure it's above the backdrop
                 if not isExpanded then
                     expandedFrame:Hide()
                 end

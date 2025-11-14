@@ -400,8 +400,173 @@ end
 -- COMMAND QUEUE (for two-way sync with companion app)
 -- ============================================================================
 
+function addon:ShowPendingCommandsDialog()
+    -- Create or show the pending commands dialog
+    if not self.pendingCommandsFrame then
+        self:CreatePendingCommandsFrame()
+    end
+    
+    self:UpdatePendingCommandsList()
+    self.pendingCommandsFrame:Show()
+end
+
+function addon:CreatePendingCommandsFrame()
+    local frame = CreateFrame("Frame", "LuminisbotPendingCommandsFrame", UIParent, "BasicFrameTemplate")
+    frame:SetSize(400, 250)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame:SetFrameLevel(1000)  -- Very high level to ensure it's on top
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:Hide()
+    
+    -- Title
+    if frame.TitleText then
+        frame.TitleText:SetText("Pending Commands")
+    elseif frame.TitleContainer and frame.TitleContainer.TitleText then
+        frame.TitleContainer.TitleText:SetText("Pending Commands")
+    end
+    
+    -- Info text
+    local infoText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    infoText:SetPoint("TOP", frame, "TOP", 0, -30)
+    infoText:SetText("The following changes will be sent to the companion app:")
+    infoText:SetTextColor(1, 1, 1)
+    frame.infoText = infoText
+    
+    -- Scroll frame for commands
+    local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -55)
+    scrollFrame:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -30, 80)
+    
+    local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+    scrollChild:SetSize(350, 100)
+    scrollFrame:SetScrollChild(scrollChild)
+    frame.scrollChild = scrollChild
+    
+    -- Confirm button
+    local confirmBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    confirmBtn:SetSize(150, 25)
+    confirmBtn:SetPoint("BOTTOM", frame, "BOTTOM", 0, 45)
+    confirmBtn:SetText("Confirm & Reload")
+    confirmBtn:SetScript("OnClick", function()
+        -- Reload directly without additional confirmation
+        ReloadUI()
+    end)
+    frame.confirmBtn = confirmBtn
+    
+    -- Cancel button (just closes dialog, keeps commands queued)
+    local cancelBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    cancelBtn:SetSize(100, 25)
+    cancelBtn:SetPoint("BOTTOM", frame, "BOTTOM", 0, 15)
+    cancelBtn:SetText("Close")
+    cancelBtn:SetScript("OnClick", function()
+        -- Just hide the dialog, keep commands in queue
+        frame:Hide()
+    end)
+    frame.cancelBtn = cancelBtn
+    
+    self.pendingCommandsFrame = frame
+    
+    -- Create reload prompt popup (for /lb refresh command)
+    StaticPopupDialogs["LUMINISBOT_RELOAD_PROMPT"] = {
+        text = "New data is available from the companion app. Reload UI to load it?",
+        button1 = "Reload Now",
+        button2 = "Later",
+        OnAccept = function()
+            ReloadUI()
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+        preferredIndex = 3,
+    }
+end
+
+function addon:UpdatePendingCommandsList()
+    if not self.pendingCommandsFrame or not self.pendingCommandsFrame.scrollChild then
+        return
+    end
+    
+    local scrollChild = self.pendingCommandsFrame.scrollChild
+    
+    -- Clear existing children
+    for i = 1, scrollChild:GetNumChildren() do
+        local child = select(i, scrollChild:GetChildren())
+        child:Hide()
+        child:SetParent(nil)
+    end
+    
+    -- Check if we have commands
+    if not LuminisbotCommands or not LuminisbotCommands.queue or #LuminisbotCommands.queue == 0 then
+        local noCommands = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        noCommands:SetPoint("TOP", scrollChild, "TOP", 0, -10)
+        noCommands:SetText("No pending commands")
+        noCommands:SetTextColor(0.7, 0.7, 0.7)
+        return
+    end
+    
+    -- Display each command
+    local yOffset = -5
+    for i, command in ipairs(LuminisbotCommands.queue) do
+        local commandText = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        commandText:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 5, yOffset)
+        commandText:SetWidth(340)
+        commandText:SetJustifyH("LEFT")
+        
+        -- Format command description
+        local description = ""
+        if command.type == "change_status" then
+            local character = command.data.character or "Unknown"
+            local status = command.data.status or "unknown"
+            description = string.format("%d. Change %s to |cff%s%s|r", 
+                i, 
+                character, 
+                self:GetStatusColor(status),
+                status:upper()
+            )
+        elseif command.type == "signup" then
+            local character = command.data.character or "Unknown"
+            description = string.format("%d. |cff00ff00Sign up %s|r", i, character)
+        else
+            description = string.format("%d. %s", i, command.type)
+        end
+        
+        commandText:SetText(description)
+        yOffset = yOffset - 20
+    end
+    
+    scrollChild:SetHeight(math.max(100, math.abs(yOffset)))
+end
+
+function addon:GetStatusColor(status)
+    local colors = {
+        signed = "00ff00",
+        late = "ffff00",
+        tentative = "ff8800",
+        benched = "888888",
+        absent = "ff0000"
+    }
+    return colors[status] or "ffffff"
+end
+
+function addon:SignUpForEvent(event)
+    -- Get current player info
+    local playerName = UnitName("player")
+    local realm = GetRealmName()
+    
+    -- Queue a signup command
+    self:QueueCommand("signup", event.id, {
+        character = playerName,
+        realm = realm
+    })
+end
+
 function addon:QueueCommand(commandType, eventId, data)
-    -- Initialize if needed
+    -- Initialize commands SavedVariable if needed
     if not LuminisbotCommands then
         LuminisbotCommands = {queue = {}, lastCommandId = 0}
     end
@@ -420,8 +585,8 @@ function addon:QueueCommand(commandType, eventId, data)
     
     table.insert(LuminisbotCommands.queue, command)
     
-    self:Print(string.format("|cff00ff00Command queued: %s|r", commandType))
-    self:Print("|cffffff00Companion app will process it on next sync|r")
+    -- Show the pending commands dialog
+    self:ShowPendingCommandsDialog()
     
     return command.id
 end
@@ -682,6 +847,36 @@ local function RegisterSlashCommands()
     elseif command == "clear" then
         addon:ClearOldEvents()
         
+    elseif command == "refresh" or command == "sync" then
+        -- Check if companion has new data and prompt for reload
+        addon:Print("=== Checking for updates ===")
+        if LuminisbotCompanionData then
+            if LuminisbotCompanionData.companionHeartbeat then
+                local heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+                if heartbeatAge < 120 then
+                    addon:Print("|cff00ff00Companion app is active|r")
+                    
+                    -- Check if there's new data
+                    local companionUpdate = LuminisbotCompanionData.lastUpdate or 0
+                    local dbUpdate = LuminisbotEventsDB.lastUpdate or 0
+                    
+                    if companionUpdate > dbUpdate then
+                        addon:Print("|cffff9900New data available! Type |r|cff00ff00/reload|r|cffff9900 to load updates.|r")
+                        StaticPopup_Show("LUMINISBOT_RELOAD_PROMPT")
+                    else
+                        addon:Print("|cff888888No new updates available|r")
+                    end
+                else
+                    addon:Print("|cffff0000Companion app is not responding (last seen " .. heartbeatAge .. " seconds ago)|r")
+                    addon:Print("|cffffff00Make sure the companion app is running, then try again.|r")
+                end
+            else
+                addon:Print("|cffff0000Companion app status unknown - no heartbeat data|r")
+            end
+        else
+            addon:Print("|cffff0000Companion data not found - type |r|cff00ff00/reload|r|cffff0000 to load it|r")
+        end
+    
     elseif command == "status" or command == "debug" then
         -- Debug companion status
         addon:Print("=== Companion Status Debug ===")
@@ -734,6 +929,7 @@ local function RegisterSlashCommands()
         addon:Print("Available commands:")
         addon:Print("  /luminisbot (or /lb) - Open event window")
         addon:Print("  /luminisbot show - Open event window")
+        addon:Print("  /luminisbot refresh - Check for companion app updates")
         addon:Print("  /luminisbot import <string> - Import event (for small events)")
         addon:Print("  /luminisbot list - List all imported events")
         addon:Print("  /luminisbot clear - Remove past events")
@@ -831,6 +1027,17 @@ frame:SetScript("OnEvent", function(self, event, arg1)
             addon:Print("No events yet. Import from Discord with |cff00ff00/lb import|r")
         end
         
+        -- Clear old commands on login to prevent accumulation
+        -- The companion app clears them from the file, but WoW loads them into memory
+        -- before that happens. We need to clear them after a delay to let companion read them.
+        C_Timer.After(2, function()
+            if LuminisbotCommands and LuminisbotCommands.queue and #LuminisbotCommands.queue > 0 then
+                local numCleared = #LuminisbotCommands.queue
+                LuminisbotCommands = {queue = {}, lastCommandId = 0}
+                addon:Print("|cff888888Cleared " .. numCleared .. " processed command(s) from memory|r")
+            end
+        end)
+        
         -- Start companion app sync detection
         addon:StartCompanionDetection()
         
@@ -893,9 +1100,12 @@ function addon:StartCompanionDetection()
         local companionUpdate = LuminisbotCompanionData.lastUpdate
         local dbUpdate = LuminisbotEventsDB.lastUpdate or 0
         
-        -- Debug output
-        addon:Print(string.format("|cffcccccc[DEBUG] CompanionData timestamp: %s|r", tostring(companionUpdate)))
-        addon:Print(string.format("|cffcccccc[DEBUG] SavedVariables timestamp: %s|r", tostring(dbUpdate)))
+        -- Check companion status
+        local companionActive = false
+        if LuminisbotCompanionData.companionHeartbeat then
+            local heartbeatAge = time() - LuminisbotCompanionData.companionHeartbeat
+            companionActive = heartbeatAge < 120
+        end
         
         -- If CompanionData is newer, update our SavedVariables
         if companionUpdate > dbUpdate then
@@ -908,13 +1118,21 @@ function addon:StartCompanionDetection()
             end
             
             if eventCount > 0 then
-                addon:Print(string.format("|cff00ff00[OK] Loaded %d event(s) from companion app|r", eventCount))
+                addon:Print(string.format("|cff00ff00✓ Loaded %d event(s) from companion app|r", eventCount))
             end
+        end
+        
+        -- Show companion status
+        if companionActive then
+            addon:Print("|cff00ff00✓ Companion app is active|r")
         else
-            addon:Print("|cffffff00[DEBUG] CompanionData is not newer than SavedVariables|r")
+            -- Heartbeat is old - companion might be running but we can't see it yet
+            addon:Print("|cffffff00⚠ Companion status unknown (data from previous session)|r")
+            addon:Print("|cffffff00  Type |r|cff00ff00/lb refresh|r|cffffff00 to check if companion is running|r")
         end
     else
-        addon:Print("|cffff0000[DEBUG] CompanionData not found or has no lastUpdate|r")
+        addon:Print("|cffff0000✗ No companion data found|r")
+        addon:Print("|cffffff00  Make sure the companion app is configured and running|r")
     end
     
     self.lastKnownUpdate = LuminisbotEventsDB.lastUpdate or 0

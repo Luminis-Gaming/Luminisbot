@@ -5,5 +5,9 @@
 LuminisbotCompanionData = {
     events = {},
     lastUpdate = 0,
-    timestamp = 0
+    timestamp = 0,
+    companionRunning = false,
+    companionHeartbeat = 0,
+    pendingCommands = {},
+    lastCommandId = 0
 }
