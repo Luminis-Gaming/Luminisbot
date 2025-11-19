@@ -193,7 +193,11 @@ async def handle_callback(request):
                 token_response = await resp.json()
                 access_token = token_response['access_token']
                 
+        # Log token details for debugging (without exposing the actual token)
         logger.info(f"Successfully obtained access token for Discord user {discord_id}")
+        logger.debug(f"Token response keys: {list(token_response.keys())}")
+        if 'scope' in token_response:
+            logger.info(f"Token scope for user {discord_id}: {token_response['scope']}")
         
     except Exception as e:
         logger.error(f"Error exchanging code for token: {e}")
@@ -290,29 +294,77 @@ async def handle_callback(request):
 
 
 async def fetch_wow_characters(access_token):
-    """Fetch WoW characters from Battle.net API"""
+    """Fetch WoW characters from Battle.net API (supports all regions)"""
     characters = []
     
     try:
         async with aiohttp.ClientSession() as session:
-            # Get account profile (lists all characters)
             headers = {'Authorization': f'Bearer {access_token}'}
             
-            async with session.get(
-                f"{BLIZZARD_API_BASE}/profile/user/wow",
-                headers=headers,
-                params={'namespace': 'profile-eu', 'locale': 'en_US'}
-            ) as resp:
+            # First, get user info to determine their region
+            region = 'eu'  # Default to EU
+            try:
+                async with session.get(
+                    'https://eu.battle.net/oauth/userinfo',
+                    headers=headers
+                ) as userinfo_resp:
+                    if userinfo_resp.status == 200:
+                        userinfo = await userinfo_resp.json()
+                        # Battle.net userinfo doesn't directly provide region, so we'll try all regions
+                        logger.debug(f"User info: {userinfo}")
+            except Exception as e:
+                logger.warning(f"Could not fetch userinfo: {e}")
+            
+            # Try all regions to find where the user has WoW characters
+            regions = ['eu', 'us', 'kr', 'tw', 'cn']
+            api_endpoints = {
+                'eu': 'https://eu.api.blizzard.com',
+                'us': 'https://us.api.blizzard.com',
+                'kr': 'https://kr.api.blizzard.com',
+                'tw': 'https://tw.api.blizzard.com',
+                'cn': 'https://gateway.battlenet.com.cn'
+            }
+            
+            profile_data = None
+            found_region = None
+            
+            for region in regions:
+                api_base = api_endpoints.get(region, api_endpoints['eu'])
+                namespace = f'profile-{region}'
                 
-                if resp.status == 403:
-                    logger.error(f"Failed to fetch WoW profile: 403 Forbidden")
-                    raise BattleNetAuthError("Battle.net API returned 403 - Authorization invalid or expired")
-                
-                if resp.status != 200:
-                    logger.error(f"Failed to fetch WoW profile: {resp.status}")
-                    return []
-                
-                profile_data = await resp.json()
+                try:
+                    async with session.get(
+                        f"{api_base}/profile/user/wow",
+                        headers=headers,
+                        params={'namespace': namespace, 'locale': 'en_US'},
+                        timeout=aiohttp.ClientTimeout(total=5)
+                    ) as resp:
+                        
+                        if resp.status == 200:
+                            profile_data = await resp.json()
+                            # Check if there are actually characters in this region
+                            if profile_data.get('wow_accounts'):
+                                found_region = region
+                                logger.info(f"Found WoW profile in region: {region}")
+                                break
+                        elif resp.status == 403:
+                            error_body = await resp.text()
+                            logger.debug(f"Region {region}: 403 Forbidden - {error_body}")
+                        elif resp.status == 404:
+                            logger.debug(f"Region {region}: No WoW profile found (404)")
+                        else:
+                            logger.debug(f"Region {region}: Status {resp.status}")
+                except asyncio.TimeoutError:
+                    logger.debug(f"Region {region}: Request timeout")
+                except Exception as e:
+                    logger.debug(f"Region {region}: Error - {e}")
+            
+            # If we didn't find any profile in any region, raise an error
+            if not profile_data or not found_region:
+                logger.error("Failed to fetch WoW profile: No characters found in any region or 403 in all regions")
+                raise BattleNetAuthError("Could not access WoW profile - please ensure you have an active WoW subscription and game time")
+            
+            # Process the profile data we found
                 
                 # Extract character info from wow_accounts
                 for wow_account in profile_data.get('wow_accounts', []):
@@ -325,11 +377,12 @@ async def fetch_wow_characters(access_token):
                             'playable_class': character.get('playable_class', {}).get('name'),
                             'playable_race': character.get('playable_race', {}).get('name'),
                             'faction': character.get('faction', {}).get('type'),
-                            'character_id': character.get('id')
+                            'character_id': character.get('id'),
+                            'region': found_region
                         }
                         characters.append(char_info)
         
-        logger.info(f"Fetched {len(characters)} characters from Battle.net API")
+        logger.info(f"Fetched {len(characters)} characters from Battle.net API (region: {found_region})")
         return characters
         
     except Exception as e:
@@ -361,8 +414,8 @@ async def store_characters(discord_id, characters, access_token):
             cursor.execute("""
                 INSERT INTO wow_characters (
                     discord_id, character_name, realm_name, realm_slug,
-                    character_class, character_race, faction, level, character_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    character_class, character_race, faction, level, character_id, region
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 discord_id,
                 char['name'],
@@ -372,7 +425,8 @@ async def store_characters(discord_id, characters, access_token):
                 char['playable_race'],
                 char['faction'],
                 char['level'],
-                char['character_id']
+                char['character_id'],
+                char.get('region', 'eu')
             ))
         
         conn.commit()

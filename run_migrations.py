@@ -90,6 +90,23 @@ def run_migrations():
             CREATE INDEX IF NOT EXISTS idx_wow_characters_realm ON wow_characters(realm_slug);
         """)
         
+        # Add region column if it doesn't exist (for multi-region support)
+        cursor.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'region'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN region VARCHAR(5) DEFAULT 'eu';
+                END IF;
+            END $$;
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wow_characters_region ON wow_characters(region);
+        """)
+        
         logger.info("[MIGRATIONS] ✓ wow_characters table ready")
         
         # ============================================================================
