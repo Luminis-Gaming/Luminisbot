@@ -383,9 +383,10 @@ async def fetch_wow_characters(access_token):
                 'cn': 'https://gateway.battlenet.com.cn'
             }
             
-            profile_data = None
-            found_region = None
+            regions_with_characters = []
+            all_403_errors = True  # Track if ALL regions returned 403
             
+            # Check ALL regions and collect characters from each
             for region in regions:
                 api_base = api_endpoints.get(region, api_endpoints['eu'])
                 namespace = f'profile-{region}'
@@ -402,12 +403,15 @@ async def fetch_wow_characters(access_token):
                         resp_text = await resp.text()
                         logger.info(f"[BlizzOAuth] Region {region} status: {resp.status}")
                         logger.debug(f"[BlizzOAuth] Region {region} response body: {resp_text}")
+                        
                         if resp.status == 200:
+                            all_403_errors = False  # At least one region didn't return 403
                             try:
                                 profile_data = await resp.json()
                             except Exception as e:
                                 logger.error(f"[BlizzOAuth] Failed to parse JSON for region {region}: {e}")
                                 continue
+                            
                             wow_accounts = profile_data.get('wow_accounts')
                             if wow_accounts is None:
                                 logger.warning(f"[BlizzOAuth] Region {region}: 'wow_accounts' missing in response!")
@@ -419,49 +423,62 @@ async def fetch_wow_characters(access_token):
                                 if total_chars == 0:
                                     logger.info(f"[BlizzOAuth] Region {region}: All wow_accounts have 0 characters.")
                                 else:
-                                    found_region = region
                                     logger.info(f"[BlizzOAuth] Found WoW profile in region: {region} with {total_chars} characters.")
-                                    break
+                                    regions_with_characters.append({'region': region, 'data': profile_data})
                         elif resp.status == 403:
                             logger.warning(f"[BlizzOAuth] Region {region}: 403 Forbidden - {resp_text}")
                         elif resp.status == 404:
+                            all_403_errors = False  # 404 is different from 403
                             logger.info(f"[BlizzOAuth] Region {region}: No WoW profile found (404)")
                         else:
+                            all_403_errors = False
                             logger.info(f"[BlizzOAuth] Region {region}: Status {resp.status} - {resp_text}")
                 except asyncio.TimeoutError:
+                    all_403_errors = False
                     logger.warning(f"[BlizzOAuth] Region {region}: Request timeout")
                 except Exception as e:
+                    all_403_errors = False
                     logger.error(f"[BlizzOAuth] Region {region}: Error - {e}")
             
-            # If we didn't find any profile in any region, raise an error
-            if not profile_data or not found_region:
-                logger.error("[BlizzOAuth] Failed to fetch WoW profile: No characters found in any region or 403 in all regions")
-                raise BattleNetAuthError("Could not access WoW profile - please ensure you have an active WoW subscription and game time")
+            # If we didn't find any characters in any region, raise an error
+            if not regions_with_characters:
+                if all_403_errors:
+                    logger.error("[BlizzOAuth] Failed to fetch WoW profile: 403 in all regions")
+                    raise BattleNetAuthError("Could not access WoW profile - please ensure you have an active WoW subscription and game time")
+                else:
+                    logger.error("[BlizzOAuth] Failed to fetch WoW profile: No characters found in any region")
+                    raise BattleNetAuthError("No WoW characters found in any region")
 
-            # Process the profile data we found
+            # Process characters from ALL regions that had them
             char_count = 0
-            for wow_account in profile_data.get('wow_accounts', []):
-                chars = wow_account.get('characters', [])
-                if not chars:
-                    logger.info(f"[BlizzOAuth] Account in region {found_region} has 0 characters: {wow_account}")
-                for character in chars:
-                    char_info = {
-                        'name': character.get('name'),
-                        'realm': character.get('realm', {}).get('name'),
-                        'realm_slug': character.get('realm', {}).get('slug'),
-                        'level': character.get('level'),
-                        'playable_class': character.get('playable_class', {}).get('name'),
-                        'playable_race': character.get('playable_race', {}).get('name'),
-                        'faction': character.get('faction', {}).get('type'),
-                        'character_id': character.get('id'),
-                        'region': found_region
-                    }
-                    characters.append(char_info)
-                    char_count += 1
+            for region_info in regions_with_characters:
+                region = region_info['region']
+                profile_data = region_info['data']
+                
+                for wow_account in profile_data.get('wow_accounts', []):
+                    chars = wow_account.get('characters', [])
+                    if not chars:
+                        logger.info(f"[BlizzOAuth] Account in region {region} has 0 characters: {wow_account}")
+                    for character in chars:
+                        char_info = {
+                            'name': character.get('name'),
+                            'realm': character.get('realm', {}).get('name'),
+                            'realm_slug': character.get('realm', {}).get('slug'),
+                            'level': character.get('level'),
+                            'playable_class': character.get('playable_class', {}).get('name'),
+                            'playable_race': character.get('playable_race', {}).get('name'),
+                            'faction': character.get('faction', {}).get('type'),
+                            'character_id': character.get('id'),
+                            'region': region
+                        }
+                        characters.append(char_info)
+                        char_count += 1
+            
+            regions_found = [r['region'] for r in regions_with_characters]
             if char_count == 0:
-                logger.warning(f"[BlizzOAuth] Fetched 0 characters from Battle.net API (region: {found_region}). This means the API returned no characters in the response.")
+                logger.warning(f"[BlizzOAuth] Fetched 0 characters from Battle.net API (regions checked: {regions_found}). This means the API returned no characters in the response.")
             else:
-                logger.info(f"[BlizzOAuth] Fetched {char_count} characters from Battle.net API (region: {found_region})")
+                logger.info(f"[BlizzOAuth] Fetched {char_count} characters from Battle.net API across {len(regions_with_characters)} region(s): {regions_found}")
             return characters
 
     except Exception as e:
