@@ -1,3 +1,4 @@
+# --- Unlink Command ---
 @tree.command(name="unlinkwow", description="Unlink your Battle.net account and delete all WoW data")
 async def unlinkwow_command(interaction: discord.Interaction):
     """Unlink and delete all WoW data for the user."""
