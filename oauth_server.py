@@ -163,6 +163,7 @@ async def handle_authorize(request):
         f"&response_type=code"
         f"&scope=wow.profile"
         f"&state={state}"
+        f"&prompt=consent"  # Force re-authorization even if previously authorized
     )
     
     # Redirect user to Battle.net authorization page
