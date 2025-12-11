@@ -1,3 +1,60 @@
+async def handle_unlink(request):
+    """
+    /unlink endpoint - allows a user to unlink and delete all their WoW data
+    Query params: discord_id (required), confirm (optional, must be 'yes' to actually delete)
+    """
+    discord_id = request.query.get('discord_id')
+    confirm = request.query.get('confirm')
+    if not discord_id:
+        return web.Response(text="Error: Missing discord_id parameter", status=400)
+
+    if confirm != 'yes':
+        # Show confirmation page
+        return web.Response(
+            text=f"""
+            <html>
+            <head><title>Unlink & Delete Data</title></head>
+            <body style='font-family: Arial; text-align: center; padding: 50px;'>
+                <h1>⚠️ Unlink & Delete Data</h1>
+                <p>This will <b>permanently delete</b> your Battle.net connection and all stored WoW character data for Discord user <code>{discord_id}</code>.</p>
+                <form method='get' action='/unlink'>
+                    <input type='hidden' name='discord_id' value='{discord_id}' />
+                    <input type='hidden' name='confirm' value='yes' />
+                    <button type='submit' style='padding: 10px 30px; font-size: 1.2em; background: #c00; color: #fff; border: none; border-radius: 5px;'>Yes, delete everything</button>
+                </form>
+                <p style='margin-top: 30px;'><a href='/'>Cancel</a></p>
+            </body>
+            </html>
+            """,
+            content_type='text/html'
+        )
+
+    # Actually delete data
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM wow_characters WHERE discord_id = %s", (discord_id,))
+        cursor.execute("DELETE FROM wow_connections WHERE discord_id = %s", (discord_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"[Unlink] Deleted all data for Discord user {discord_id}")
+        return web.Response(
+            text=f"""
+            <html>
+            <head><title>Data Deleted</title></head>
+            <body style='font-family: Arial; text-align: center; padding: 50px;'>
+                <h1>✅ Data Deleted</h1>
+                <p>Your Battle.net connection and all WoW character data have been deleted.</p>
+                <p>You can now close this window or return to Discord.</p>
+            </body>
+            </html>
+            """,
+            content_type='text/html'
+        )
+    except Exception as e:
+        logger.error(f"[Unlink] Error deleting data for {discord_id}: {e}")
+        return web.Response(text="Error deleting data", status=500)
 """
 OAuth Web Server for Battle.net Integration
 Handles OAuth2 authorization flow for linking Discord users to WoW characters
@@ -331,62 +388,83 @@ async def fetch_wow_characters(access_token):
             for region in regions:
                 api_base = api_endpoints.get(region, api_endpoints['eu'])
                 namespace = f'profile-{region}'
-                
+                url = f"{api_base}/profile/user/wow"
+                masked_token = access_token[:6] + "..." + access_token[-4:] if len(access_token) > 10 else "***"
+                logger.info(f"[BlizzOAuth] Trying region '{region}' URL: {url} with token: {masked_token}")
                 try:
                     async with session.get(
-                        f"{api_base}/profile/user/wow",
+                        url,
                         headers=headers,
                         params={'namespace': namespace, 'locale': 'en_US'},
                         timeout=aiohttp.ClientTimeout(total=5)
                     ) as resp:
-                        
+                        resp_text = await resp.text()
+                        logger.info(f"[BlizzOAuth] Region {region} status: {resp.status}")
+                        logger.debug(f"[BlizzOAuth] Region {region} response body: {resp_text}")
                         if resp.status == 200:
-                            profile_data = await resp.json()
-                            # Check if there are actually characters in this region
-                            if profile_data.get('wow_accounts'):
-                                found_region = region
-                                logger.info(f"Found WoW profile in region: {region}")
-                                break
+                            try:
+                                profile_data = await resp.json()
+                            except Exception as e:
+                                logger.error(f"[BlizzOAuth] Failed to parse JSON for region {region}: {e}")
+                                continue
+                            wow_accounts = profile_data.get('wow_accounts')
+                            if wow_accounts is None:
+                                logger.warning(f"[BlizzOAuth] Region {region}: 'wow_accounts' missing in response!")
+                            elif not wow_accounts:
+                                logger.info(f"[BlizzOAuth] Region {region}: 'wow_accounts' is an empty list.")
+                            else:
+                                # Check if any account has characters
+                                total_chars = sum(len(acc.get('characters', [])) for acc in wow_accounts)
+                                if total_chars == 0:
+                                    logger.info(f"[BlizzOAuth] Region {region}: All wow_accounts have 0 characters.")
+                                else:
+                                    found_region = region
+                                    logger.info(f"[BlizzOAuth] Found WoW profile in region: {region} with {total_chars} characters.")
+                                    break
                         elif resp.status == 403:
-                            error_body = await resp.text()
-                            logger.debug(f"Region {region}: 403 Forbidden - {error_body}")
+                            logger.warning(f"[BlizzOAuth] Region {region}: 403 Forbidden - {resp_text}")
                         elif resp.status == 404:
-                            logger.debug(f"Region {region}: No WoW profile found (404)")
+                            logger.info(f"[BlizzOAuth] Region {region}: No WoW profile found (404)")
                         else:
-                            logger.debug(f"Region {region}: Status {resp.status}")
+                            logger.info(f"[BlizzOAuth] Region {region}: Status {resp.status} - {resp_text}")
                 except asyncio.TimeoutError:
-                    logger.debug(f"Region {region}: Request timeout")
+                    logger.warning(f"[BlizzOAuth] Region {region}: Request timeout")
                 except Exception as e:
-                    logger.debug(f"Region {region}: Error - {e}")
+                    logger.error(f"[BlizzOAuth] Region {region}: Error - {e}")
             
             # If we didn't find any profile in any region, raise an error
             if not profile_data or not found_region:
-                logger.error("Failed to fetch WoW profile: No characters found in any region or 403 in all regions")
+                logger.error("[BlizzOAuth] Failed to fetch WoW profile: No characters found in any region or 403 in all regions")
                 raise BattleNetAuthError("Could not access WoW profile - please ensure you have an active WoW subscription and game time")
-            
+
             # Process the profile data we found
-                
-                # Extract character info from wow_accounts
-                for wow_account in profile_data.get('wow_accounts', []):
-                    for character in wow_account.get('characters', []):
-                        char_info = {
-                            'name': character.get('name'),
-                            'realm': character.get('realm', {}).get('name'),
-                            'realm_slug': character.get('realm', {}).get('slug'),
-                            'level': character.get('level'),
-                            'playable_class': character.get('playable_class', {}).get('name'),
-                            'playable_race': character.get('playable_race', {}).get('name'),
-                            'faction': character.get('faction', {}).get('type'),
-                            'character_id': character.get('id'),
-                            'region': found_region
-                        }
-                        characters.append(char_info)
-        
-        logger.info(f"Fetched {len(characters)} characters from Battle.net API (region: {found_region})")
-        return characters
-        
+            char_count = 0
+            for wow_account in profile_data.get('wow_accounts', []):
+                chars = wow_account.get('characters', [])
+                if not chars:
+                    logger.info(f"[BlizzOAuth] Account in region {found_region} has 0 characters: {wow_account}")
+                for character in chars:
+                    char_info = {
+                        'name': character.get('name'),
+                        'realm': character.get('realm', {}).get('name'),
+                        'realm_slug': character.get('realm', {}).get('slug'),
+                        'level': character.get('level'),
+                        'playable_class': character.get('playable_class', {}).get('name'),
+                        'playable_race': character.get('playable_race', {}).get('name'),
+                        'faction': character.get('faction', {}).get('type'),
+                        'character_id': character.get('id'),
+                        'region': found_region
+                    }
+                    characters.append(char_info)
+                    char_count += 1
+            if char_count == 0:
+                logger.warning(f"[BlizzOAuth] Fetched 0 characters from Battle.net API (region: {found_region}). This means the API returned no characters in the response.")
+            else:
+                logger.info(f"[BlizzOAuth] Fetched {char_count} characters from Battle.net API (region: {found_region})")
+            return characters
+
     except Exception as e:
-        logger.error(f"Error in fetch_wow_characters: {e}")
+        logger.error(f"[BlizzOAuth] Error in fetch_wow_characters: {e}")
         raise
 
 
@@ -1042,6 +1120,7 @@ def create_app(bot=None):
     app.router.add_get('/authorize', handle_authorize)
     app.router.add_get('/callback', handle_callback)
     app.router.add_get('/health', handle_health)
+    app.router.add_get('/unlink', handle_unlink)
     
     # API routes (v1)
     app.router.add_get('/api/v1/events', handle_get_events)

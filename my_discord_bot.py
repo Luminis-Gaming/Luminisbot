@@ -1,3 +1,24 @@
+@tree.command(name="unlinkwow", description="Unlink your Battle.net account and delete all WoW data")
+async def unlinkwow_command(interaction: discord.Interaction):
+    """Unlink and delete all WoW data for the user."""
+    await interaction.response.defer(ephemeral=True)
+    discord_id = str(interaction.user.id)
+    conn = get_db_connection()
+    if not conn:
+        await interaction.edit_original_response(content="❌ **Database Error:** Could not connect to database.")
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM wow_characters WHERE discord_id = %s", (discord_id,))
+        cur.execute("DELETE FROM wow_connections WHERE discord_id = %s", (discord_id,))
+        conn.commit()
+        await interaction.edit_original_response(content="✅ Your Battle.net account and all WoW character data have been deleted. You can use /connectwow to link again at any time.")
+        print(f"[CMD] Unlinked and deleted all WoW data for Discord user {discord_id}")
+    except Exception as e:
+        print(f"[ERROR] Failed to unlink data: {e}")
+        await interaction.edit_original_response(content=f"❌ **Error deleting data:** {e}")
+    finally:
+        conn.close()
 # my_discord_bot.py
 
 # --- Core Discord and Helper Imports ---
