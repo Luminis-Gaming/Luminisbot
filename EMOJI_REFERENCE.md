@@ -33,6 +33,7 @@ This document lists all custom emojis needed for the raid signup system.
 ### Demon Hunter (2 specs)
 - `:havoc:1422570642699714693` - Havoc (Melee DPS)
 - `:vengeance:1422570584037920908` - Vengeance (Tank)
+- `:devourer:1454912285054210160` - Devourer (Ranged DPS)
 
 ### Druid (4 specs)
 - `:balance:1422562897975971912` - Balance (Ranged DPS)

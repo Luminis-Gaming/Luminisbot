@@ -70,6 +70,7 @@ SPEC_EMOJIS = {
     # Demon Hunter
     'Demon Hunter-Havoc': '<:havoc:1422570642699714693>',
     'Demon Hunter-Vengeance': '<:vengeance:1422570584037920908>',
+    'Demon Hunter-Devourer': '<:devourer:1454912285054210160>',
     # Druid
     'Druid-Balance': '<:balance:1425009588293341264>',
     'Druid-Feral': '<:feral:1422570561980076174>',
@@ -162,6 +163,7 @@ MELEE_SPECS = {
 }
 
 RANGED_SPECS = {
+    'Demon Hunter': ['Devourer'],
     'Druid': ['Balance'],
     'Evoker': ['Devastation'],
     'Hunter': ['Beast Mastery', 'Marksmanship'],
@@ -179,7 +181,7 @@ CLASS_SPECS = {
     },
     'Demon Hunter': {
         'tank': ['Vengeance'],
-        'dps': ['Havoc']
+        'dps': ['Havoc', 'Devourer']
     },
     'Druid': {
         'tank': ['Guardian'],
