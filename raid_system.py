@@ -1084,7 +1084,7 @@ def generate_raid_embed(event_id: int):
             inline=False
         )
 
-    return embed, view
+    # Continue building embed (late/tentative/benched/absence sections added below)
 
 def _is_check_mark_emoji(emoji) -> bool:
     """Return True if the emoji represents a white check mark (✅)."""
