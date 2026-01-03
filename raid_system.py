@@ -968,6 +968,8 @@ def generate_raid_embed(event_id: int):
     signed_signups = get_raid_signups(event_id, 'signed')
     late_signups = get_raid_signups(event_id, 'late')
     tentative_signups = get_raid_signups(event_id, 'tentative')
+    benched_signups = get_raid_signups(event_id, 'benched')
+    absent_signups = get_raid_signups(event_id, 'absent')
     reservations = get_raid_reservations(event_id)
     
     # Calculate signup summary: "20(+4)" format where +4 is late+tentative
@@ -1047,8 +1049,21 @@ def generate_raid_embed(event_id: int):
     if class_fields:
         for field in class_fields:
             embed.add_field(name=field['name'], value=field['value'], inline=field['inline'])
-        
-        # Note: Avoid adding filler empty fields to stay under Discord's 25-field limit
+
+        # Optionally add filler empty fields for alignment if within field limit
+        remainder = len(class_fields) % 3
+        empties_needed = (3 - remainder) % 3
+
+        # Estimate total fields to avoid exceeding 25
+        base_fields = 4 + (1 if is_past and timestamp_display else 0)  # date, owner, role, spacing (+timestamp if past)
+        reserve_sections = 1 if reservations else 0
+        status_sections = (1 if late_signups else 0) + (1 if tentative_signups else 0) + (1 if benched_signups else 0) + (1 if absent_signups else 0)
+        projected_total = base_fields + len(class_fields) + empties_needed + 1 + reserve_sections + status_sections
+        # +1 for spacing after roster
+
+        if empties_needed and projected_total <= 25:
+            for _ in range(empties_needed):
+                embed.add_field(name="\u200b", value="\u200b", inline=True)
     else:
         embed.add_field(name="📋 Roster", value="_No signups yet_", inline=False)
     
@@ -1078,7 +1093,77 @@ def generate_raid_embed(event_id: int):
             inline=False
         )
 
-    # Continue building embed (late/tentative/benched/absence sections added below)
+    # Late section
+    if late_signups:
+        late_names = []
+        for signup in late_signups:
+            char_class = signup.get('character_class', '')
+            spec = signup.get('spec', '')
+            spec_emoji = get_spec_emoji(char_class, spec)
+            late_names.append(f"{spec_emoji} {signup['character_name']}")
+        late_text = "\n".join(late_names)
+        if len(late_text) > 1024:
+            truncated_names = []
+            char_count = 0
+            for name in late_names:
+                if char_count + len(name) + 1 > 1000:
+                    break
+                truncated_names.append(name)
+                char_count += len(name) + 1
+            late_text = "\n".join(truncated_names) + f"\n_...and {len(late_signups) - len(truncated_names)} more_"
+        embed.add_field(name=f"🕐 Late ({len(late_signups)})", value=late_text, inline=False)
+
+    # Tentative section
+    if tentative_signups:
+        tentative_names = []
+        for signup in tentative_signups:
+            char_class = signup.get('character_class', '')
+            spec = signup.get('spec', '')
+            spec_emoji = get_spec_emoji(char_class, spec)
+            tentative_names.append(f"{spec_emoji} {signup['character_name']}")
+        tentative_text = "\n".join(tentative_names)
+        if len(tentative_text) > 1024:
+            truncated_names = []
+            char_count = 0
+            for name in tentative_names:
+                if char_count + len(name) + 1 > 1000:
+                    break
+                truncated_names.append(name)
+                char_count += len(name) + 1
+            tentative_text = "\n".join(truncated_names) + f"\n_...and {len(tentative_signups) - len(truncated_names)} more_"
+        embed.add_field(name=f"⚖️ Tentative ({len(tentative_signups)})", value=tentative_text, inline=False)
+
+    # Benched section
+    if benched_signups:
+        benched_names = []
+        for signup in benched_signups:
+            char_class = signup.get('character_class', '')
+            spec = signup.get('spec', '')
+            spec_emoji = get_spec_emoji(char_class, spec)
+            benched_names.append(f"{spec_emoji} {signup['character_name']}")
+        benched_text = "\n".join(benched_names)
+        if len(benched_text) > 1024:
+            truncated_names = []
+            char_count = 0
+            for name in benched_names:
+                if char_count + len(name) + 1 > 1000:
+                    break
+                truncated_names.append(name)
+                char_count += len(name) + 1
+            benched_text = "\n".join(truncated_names) + f"\n_...and {len(benched_signups) - len(truncated_names)} more_"
+        embed.add_field(name=f"🪑 Benched ({len(benched_signups)})", value=benched_text, inline=False)
+
+    # Absence section (comma-separated to save space)
+    if absent_signups:
+        absence_names = [s['character_name'] for s in absent_signups]
+        absence_text = ", ".join(absence_names) if absence_names else "_None_"
+        if len(absence_text) > 1024:
+            absence_text = absence_text[:1000] + f"... +{len(absent_signups) - absence_text[:1000].count(',') - 1} more"
+        embed.add_field(name=f"❌ Absence ({len(absent_signups)})", value=absence_text, inline=False)
+
+    embed.set_footer(text="Click a button below to sign up or change your status")
+    view = create_raid_buttons_view(event.get('log_url'))
+    return embed, view
 
 def _is_check_mark_emoji(emoji) -> bool:
     """Return True if the emoji represents a white check mark (✅)."""
