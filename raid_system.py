@@ -968,15 +968,18 @@ def generate_raid_embed(event_id: int):
     signed_signups = get_raid_signups(event_id, 'signed')
     late_signups = get_raid_signups(event_id, 'late')
     tentative_signups = get_raid_signups(event_id, 'tentative')
+    reservations = get_raid_reservations(event_id)
     
     # Calculate signup summary: "20(+4)" format where +4 is late+tentative
     signed_count = len(signed_signups)
+    reserve_count = len(reservations)
     additional_count = len(late_signups) + len(tentative_signups)
     
+    base_count = signed_count + reserve_count
     if additional_count > 0:
-        signup_summary = f"**{signed_count}(+{additional_count})**"
+        signup_summary = f"**{base_count}(+{additional_count})**"
     else:
-        signup_summary = f"**{signed_count}**"
+        signup_summary = f"**{base_count}**"
     
     # Add owner and signup count field
     owner_mention = f"<@{event['created_by']}>"
@@ -1059,7 +1062,6 @@ def generate_raid_embed(event_id: int):
     embed.add_field(name="\u200b", value="\u200b", inline=False)
 
     # Reserve section (users who reacted with ✅)
-    reservations = get_raid_reservations(event_id)
     if reservations:
         # Display Discord mentions to reflect current names without extra intents
         reserve_mentions = [f"<@{r['discord_id']}>" for r in reservations]
@@ -1077,10 +1079,79 @@ def generate_raid_embed(event_id: int):
             reserve_text = "\n".join(truncated) + f"\n_...and {len(reservations) - len(truncated)} more_"
 
         embed.add_field(
-            name=f"📝 Reserve ({len(reservations)})",
+            name=f"🤓 Reserve ({len(reservations)})",
             value=reserve_text or "_None_",
             inline=False
         )
+
+    return embed, view
+
+def _is_check_mark_emoji(emoji) -> bool:
+    """Return True if the emoji represents a white check mark (✅)."""
+    try:
+        name = getattr(emoji, 'name', None)
+        if name == '✅':
+            return True
+    except Exception:
+        pass
+    # For unicode emojis, reaction.emoji may be a string
+    return str(emoji) == '✅'
+
+async def backfill_reservations_for_existing_events(bot):
+    """Scan upcoming raid events and backfill reservations from existing ✅ reactions."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT id, guild_id, channel_id, message_id
+            FROM raid_events
+            WHERE event_date >= CURRENT_DATE
+        """)
+        events = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        for event in events:
+            try:
+                guild = bot.get_guild(int(event['guild_id']))
+                if not guild:
+                    continue
+                channel = guild.get_channel(int(event['channel_id']))
+                if not channel:
+                    continue
+                try:
+                    message = await channel.fetch_message(int(event['message_id']))
+                except discord.NotFound:
+                    continue
+
+                # Find white check mark reactions
+                has_changes = False
+                for reaction in message.reactions:
+                    if _is_check_mark_emoji(reaction.emoji):
+                        try:
+                            async for user in reaction.users():
+                                if user.bot:
+                                    continue
+                                discord_id = str(user.id)
+                                # Skip if user already officially signed
+                                if get_user_signup(event['id'], discord_id):
+                                    continue
+                                add_raid_reservation(event['id'], discord_id)
+                                has_changes = True
+                        except Exception:
+                            # Continue even if unable to fetch some users
+                            pass
+
+                if has_changes:
+                    try:
+                        embed, view = generate_raid_embed(event['id'])
+                        await message.edit(embed=embed, view=view)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+    except Exception as e:
+        logger.error(f"[RESERVE] Backfill failed: {e}")
     
     # Late section
     late_signups = get_raid_signups(event_id, 'late')

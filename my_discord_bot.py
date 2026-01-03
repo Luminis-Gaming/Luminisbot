@@ -30,7 +30,7 @@ from run_migrations import run_migrations
 from raid_system import (
     RaidButtonsView, generate_raid_embed, create_raid_event,
     get_raid_event, add_raid_reservation, remove_raid_reservation,
-    get_user_signup, refresh_event_embed
+    get_user_signup, refresh_event_embed, backfill_reservations_for_existing_events
 )
 
 # --- Load All Secrets from Environment ---
@@ -211,6 +211,15 @@ async def on_ready():
         
     # Debug info
     print(f'--- BOT READY --- Logged in as {client.user}')
+
+    # One-time backfill of reservations from existing ✅ reactions
+    if not hasattr(client, 'reservations_backfilled'):
+        try:
+            await backfill_reservations_for_existing_events(client)
+            client.reservations_backfilled = True
+            print("[RESERVE] Backfill completed for upcoming events.")
+        except Exception as e:
+            print(f"[RESERVE] Backfill error: {e}")
 
 # --- Emoji Reaction Handlers for Reserve ---
 @client.event
