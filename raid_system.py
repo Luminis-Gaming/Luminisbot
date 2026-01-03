@@ -1111,43 +1111,64 @@ async def backfill_reservations_for_existing_events(bot):
         cursor.close()
         conn.close()
 
+        print(f"[RESERVE] Backfill scanning {len(events)} upcoming events...")
         for event in events:
             try:
                 guild = bot.get_guild(int(event['guild_id']))
                 if not guild:
+                    print(f"[RESERVE] Skipping event {event['id']} - guild not found")
                     continue
                 channel = guild.get_channel(int(event['channel_id']))
                 if not channel:
+                    print(f"[RESERVE] Skipping event {event['id']} - channel not found")
                     continue
                 try:
                     message = await channel.fetch_message(int(event['message_id']))
                 except discord.NotFound:
+                    print(f"[RESERVE] Skipping event {event['id']} - message not found")
                     continue
 
                 # Find white check mark reactions
                 has_changes = False
+                reaction_user_ids = set()
                 for reaction in message.reactions:
                     if _is_check_mark_emoji(reaction.emoji):
                         try:
                             async for user in reaction.users():
                                 if user.bot:
                                     continue
-                                discord_id = str(user.id)
-                                # Skip if user already officially signed
-                                if get_user_signup(event['id'], discord_id):
-                                    continue
-                                add_raid_reservation(event['id'], discord_id)
-                                has_changes = True
+                                reaction_user_ids.add(str(user.id))
                         except Exception:
                             # Continue even if unable to fetch some users
                             pass
 
-                if has_changes:
+                # Compare with existing reservations and add missing ones
+                existing = {str(r['discord_id']) for r in get_raid_reservations(event['id'])}
+                to_add = []
+                for uid in reaction_user_ids:
+                    # Skip if user already officially signed
+                    if get_user_signup(event['id'], uid):
+                        continue
+                    if uid not in existing:
+                        to_add.append(uid)
+
+                for uid in to_add:
                     try:
-                        embed, view = generate_raid_embed(event['id'])
-                        await message.edit(embed=embed, view=view)
+                        add_raid_reservation(event['id'], uid)
+                        has_changes = True
                     except Exception:
                         pass
+
+                print(f"[RESERVE] Event {event['id']}: reactions={len(reaction_user_ids)}, added={len(to_add)}, existing={len(existing)}")
+
+                # Update embed if there are any reservations or changes
+                try:
+                    reservations_now = get_raid_reservations(event['id'])
+                    if has_changes or len(reservations_now) > 0 or len(reaction_user_ids) > 0:
+                        embed, view = generate_raid_embed(event['id'])
+                        await message.edit(embed=embed, view=view)
+                except Exception:
+                    pass
             except Exception:
                 continue
     except Exception as e:
@@ -1356,6 +1377,12 @@ class CharacterSelectDropdown(Select):
                 role,
                 spec
             )
+
+            # Remove any existing emoji-based reservation for this user
+            try:
+                remove_raid_reservation(self.event_id, discord_id)
+            except Exception:
+                pass
             
             # Fetch and update the raid event message
             conn = get_db_connection()
@@ -2610,6 +2637,12 @@ async def finalize_signup(interaction: discord.Interaction, event_id: int, chara
     
     # Add signup
     add_raid_signup(event_id, discord_id, character_name, realm_slug, character_class, role, spec)
+
+    # Remove any existing emoji-based reservation for this user
+    try:
+        remove_raid_reservation(event_id, discord_id)
+    except Exception:
+        pass
     
     # Get the original message
     event = get_raid_event(None)  # We need to find by event_id
