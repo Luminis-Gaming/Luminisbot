@@ -1048,13 +1048,7 @@ def generate_raid_embed(event_id: int):
         for field in class_fields:
             embed.add_field(name=field['name'], value=field['value'], inline=field['inline'])
         
-        # Add empty fields to complete the last row (Discord uses 3-column layout for inline fields)
-        # This ensures proper alignment when number of classes isn't a multiple of 3
-        remainder = len(class_fields) % 3
-        if remainder != 0:
-            empty_fields_needed = 3 - remainder
-            for _ in range(empty_fields_needed):
-                embed.add_field(name="\u200b", value="\u200b", inline=True)
+        # Note: Avoid adding filler empty fields to stay under Discord's 25-field limit
     else:
         embed.add_field(name="📋 Roster", value="_No signups yet_", inline=False)
     
@@ -1167,8 +1161,8 @@ async def backfill_reservations_for_existing_events(bot):
                     if has_changes or len(reservations_now) > 0 or len(reaction_user_ids) > 0:
                         embed, view = generate_raid_embed(event['id'])
                         await message.edit(embed=embed, view=view)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[RESERVE] Backfill message edit failed for event {event['id']}: {e}")
             except Exception:
                 continue
     except Exception as e:
