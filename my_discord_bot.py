@@ -28,7 +28,9 @@ from run_migrations import run_migrations
 
 # --- Import raid system ---
 from raid_system import (
-    RaidButtonsView, generate_raid_embed, create_raid_event
+    RaidButtonsView, generate_raid_embed, create_raid_event,
+    get_raid_event, add_raid_reservation, remove_raid_reservation,
+    get_user_signup, refresh_event_embed
 )
 
 # --- Load All Secrets from Environment ---
@@ -209,6 +211,60 @@ async def on_ready():
         
     # Debug info
     print(f'--- BOT READY --- Logged in as {client.user}')
+
+# --- Emoji Reaction Handlers for Reserve ---
+@client.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    """Handle ✅ reactions on raid signup messages to add to Reserve"""
+    try:
+        # Only process white check mark unicode emoji
+        if payload.emoji is None:
+            return
+        if payload.emoji.name != '✅':
+            return
+
+        # Find raid event associated with this message
+        event = get_raid_event(int(payload.message_id))
+        if not event:
+            return
+
+        discord_id = str(payload.user_id)
+
+        # Ignore bot's own reactions
+        if client.user and payload.user_id == client.user.id:
+            return
+
+        # If user already has an official signup, skip reserving to avoid duplicates
+        existing = get_user_signup(event['id'], discord_id)
+        if existing:
+            # Optionally, could DM user that they're already signed
+            return
+
+        # Add reservation and refresh message
+        add_raid_reservation(event['id'], discord_id)
+        await refresh_event_embed(client, event['id'])
+    except Exception as e:
+        print(f"[RESERVE] Error handling reaction add: {e}")
+
+@client.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    """Handle ✅ reaction removals to remove from Reserve"""
+    try:
+        if payload.emoji is None:
+            return
+        if payload.emoji.name != '✅':
+            return
+
+        event = get_raid_event(int(payload.message_id))
+        if not event:
+            return
+
+        discord_id = str(payload.user_id)
+
+        remove_raid_reservation(event['id'], discord_id)
+        await refresh_event_embed(client, event['id'])
+    except Exception as e:
+        print(f"[RESERVE] Error handling reaction remove: {e}")
 
 # --- Discord Slash Commands ---
 @tree.command(name="set_log_channel", description="Sets this channel for automatic Warcraft Log posts.")

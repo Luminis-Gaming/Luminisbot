@@ -610,6 +610,53 @@ def get_raid_signups(event_id: int, status: str = None):
     
     return signups
 
+def get_raid_reservations(event_id: int):
+    """Get all emoji-based reservations for a raid event"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+    cursor.execute("""
+        SELECT discord_id, added_at
+        FROM raid_reservations
+        WHERE event_id = %s
+        ORDER BY added_at
+    """, (event_id,))
+
+    reservations = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    return reservations
+
+def add_raid_reservation(event_id: int, discord_id: str):
+    """Add an emoji-based reservation to a raid event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO raid_reservations (event_id, discord_id)
+        VALUES (%s, %s)
+        ON CONFLICT (event_id, discord_id) DO NOTHING
+    """, (event_id, discord_id))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def remove_raid_reservation(event_id: int, discord_id: str):
+    """Remove a reservation"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM raid_reservations
+        WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 def add_raid_signup(event_id: int, discord_id: str, character_name: str, realm_slug: str,
                    character_class: str, role: str, spec: str = None):
     """Add a signup to a raid event"""
@@ -1010,6 +1057,30 @@ def generate_raid_embed(event_id: int):
     
     # Add spacing after roster section (before late/tentative/absent)
     embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+    # Reserve section (users who reacted with ✅)
+    reservations = get_raid_reservations(event_id)
+    if reservations:
+        # Display Discord mentions to reflect current names without extra intents
+        reserve_mentions = [f"<@{r['discord_id']}>" for r in reservations]
+        reserve_text = "\n".join(reserve_mentions)
+
+        if len(reserve_text) > 1024:
+            # Truncate safely within field limits
+            truncated = []
+            total = 0
+            for mention in reserve_mentions:
+                if total + len(mention) + 1 > 1000:
+                    break
+                truncated.append(mention)
+                total += len(mention) + 1
+            reserve_text = "\n".join(truncated) + f"\n_...and {len(reservations) - len(truncated)} more_"
+
+        embed.add_field(
+            name=f"📝 Reserve ({len(reservations)})",
+            value=reserve_text or "_None_",
+            inline=False
+        )
     
     # Late section
     late_signups = get_raid_signups(event_id, 'late')

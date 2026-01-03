@@ -235,6 +235,26 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ event_assistants table ready")
         
+        # Create raid_reservations table for emoji-based interest
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS raid_reservations (
+                event_id INTEGER NOT NULL REFERENCES raid_events(id) ON DELETE CASCADE,
+                discord_id TEXT NOT NULL,
+                added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                PRIMARY KEY (event_id, discord_id)
+            );
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_raid_reservations_event ON raid_reservations(event_id);
+        """)
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_raid_reservations_discord ON raid_reservations(discord_id);
+        """)
+
+        logger.info("[MIGRATIONS] ✓ raid_reservations table ready")
+
         # ============================================================================
         # API KEYS TABLE (for WoW Addon Authentication)
         # ============================================================================
@@ -308,6 +328,11 @@ def run_migrations():
         
         cursor.execute("""
             GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO luminisbot;
+        """)
+
+        # Grant privileges for reservations table
+        cursor.execute("""
+            GRANT ALL PRIVILEGES ON TABLE raid_reservations TO luminisbot;
         """)
         
         conn.commit()
