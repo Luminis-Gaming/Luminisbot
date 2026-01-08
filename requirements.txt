@@ -2,7 +2,9 @@ discord.py
 python-dotenv
 selenium
 webdriver-manager
+undetected-chromedriver
 aiohttp
 psycopg2-binary
 beautifulsoup4
 Brotli
+Pillow

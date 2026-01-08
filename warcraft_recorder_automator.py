@@ -1,13 +1,12 @@
 # file: warcraft_recorder_automator.py
 
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 import time
+import os
 
 # Replace your entire function with this final version
 
@@ -16,52 +15,41 @@ def add_email_to_roster(login_email, login_password, new_user_email):
     Logs into warcraftrecorder.com and adds a new email to the roster.
     Returns True on success, or the error string on failure.
     """
-    options = webdriver.ChromeOptions()
-
-    options.binary_location = '/usr/bin/google-chrome'
-    
-    # Critical flags for Docker/server environments
-    options.add_argument('--headless=new')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-software-rasterizer')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-setuid-sandbox')
-    options.add_argument('--disable-web-security')
-    options.add_argument('--disable-features=VizDisplayCompositor')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument('--remote-debugging-port=9222')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--start-maximized')
-    options.add_argument('--disable-infobars')
-    options.add_argument('--disable-browser-side-navigation')
-    options.add_argument('--dns-prefetch-disable')
-    options.add_argument('--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    
-    # Set temp directory to avoid /tmp issues
-    options.add_argument('--disk-cache-dir=/tmp/chrome-cache')
-    options.add_argument('--user-data-dir=/tmp/chrome-user-data')
-    
-    options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
-    options.add_experimental_option('useAutomationExtension', False)
-    options.add_experimental_option('prefs', {
-        'profile.default_content_setting_values.notifications': 2,
-        'profile.managed_default_content_settings.images': 2  # Disable images to save memory
-    })
-
-    # Add service arguments for more stability
-    service = ChromeService(ChromeDriverManager().install())
-    service.log_path = '/tmp/chromedriver.log'
-    
     driver = None
+    
     try:
-        driver = webdriver.Chrome(service=service, options=options)
-        wait = WebDriverWait(driver, 15)  # Increased timeout
+        # Use undetected_chromedriver for better stability
+        options = uc.ChromeOptions()
+        
+        # Essential arguments for headless Docker environment
+        options.add_argument('--headless=new')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-setuid-sandbox')
+        options.add_argument('--window-size=1920,1080')
+        
+        print("Initializing Chrome browser...")
+        
+        # Initialize with undetected_chromedriver
+        driver = uc.Chrome(
+            options=options,
+            version_main=None,  # Auto-detect Chrome version
+            headless=True,
+            use_subprocess=True,
+            log_level=3
+        )
+        
+        wait = WebDriverWait(driver, 20)
+        print("✅ Chrome initialized successfully")
+        
     except Exception as e:
-        print(f"❌ Failed to initialize Chrome driver: {e}")
+        print(f"❌ Failed to initialize Chrome: {e}")
         if driver:
-            driver.quit()
+            try:
+                driver.quit()
+            except:
+                pass
         return f"Failed to start Chrome browser: {str(e)}"
 
     try:

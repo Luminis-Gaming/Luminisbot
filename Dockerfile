@@ -34,7 +34,11 @@ RUN apt-get install -y \
     libasound2 \
     libdrm2 \
     libxrandr2 \
+    libgbm1 \
+    libu2f-udev \
+    libvulkan1 \
     fonts-liberation \
+    fonts-noto-color-emoji \
     xdg-utils \
     2>/dev/null || echo "Some Chrome dependencies not available - continuing"
 
