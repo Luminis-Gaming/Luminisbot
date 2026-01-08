@@ -5,6 +5,7 @@ services:
     image: ghcr.io/luminis-gaming/luminisbot:latest
     container_name: luminisbot
     restart: unless-stopped
+    shm_size: '2gb'  # Increase shared memory for Chrome
     environment:
       # Discord Configuration
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
