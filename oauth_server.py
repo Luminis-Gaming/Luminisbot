@@ -962,6 +962,32 @@ async def handle_generate_api_key(request):
         )
 
 
+# Security: Block common probe/scan paths
+BLOCKED_PATHS = {
+    '.env', '.git', '.secrets', 'phpinfo', '.php', 'swagger', 
+    'config.json', 'server.js', '.credentials', 'backup', 
+    'admin', 'wp-admin', 'phpmyadmin', 'mysql', '.sql'
+}
+
+@web.middleware
+async def security_middleware(request, handler):
+    """Block suspicious requests and common vulnerability scans"""
+    path = request.path.lower()
+    
+    # Block requests for sensitive files/paths
+    if any(blocked in path for blocked in BLOCKED_PATHS):
+        logger.warning(f"[SECURITY] Blocked suspicious request from {request.remote}: {request.path}")
+        return web.Response(text="Forbidden", status=403)
+    
+    # Only allow specific routes
+    allowed_prefixes = ('/authorize', '/callback', '/health', '/unlink', '/api/v1/')
+    if not any(path.startswith(prefix) for prefix in allowed_prefixes):
+        logger.warning(f"[SECURITY] Invalid path from {request.remote}: {request.path}")
+        return web.Response(text="Not Found", status=404)
+    
+    return await handler(request)
+
+
 # CORS middleware for addon requests
 @web.middleware
 async def cors_middleware(request, handler):
@@ -1131,8 +1157,8 @@ def create_app(bot=None):
     global discord_bot
     discord_bot = bot
     
-    # Create app with middleware
-    app = web.Application(middlewares=[cors_middleware])
+    # Create app with security and CORS middleware (security first!)
+    app = web.Application(middlewares=[security_middleware, cors_middleware])
     
     # OAuth routes
     app.router.add_get('/authorize', handle_authorize)

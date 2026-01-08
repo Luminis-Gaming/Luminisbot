@@ -17,9 +17,6 @@ from database import get_db_connection, setup_database
 from wcl_api import get_wcl_token, get_latest_log, get_fights_from_report
 from discord_ui import LogButtonsView, send_message_with_auto_delete
 
-# --- Import for your original command ---
-from warcraft_recorder_automator import add_email_to_roster
-
 # --- Import OAuth server ---
 from oauth_server import start_oauth_server
 
@@ -36,8 +33,6 @@ from raid_system import (
 # --- Load All Secrets from Environment ---
 load_dotenv()
 BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-RECORDER_EMAIL = os.getenv('RECORDER_EMAIL')
-RECORDER_PASSWORD = os.getenv('RECORDER_PASSWORD')
 WCL_CLIENT_ID = os.getenv('WCL_CLIENT_ID')
 WCL_CLIENT_SECRET = os.getenv('WCL_CLIENT_SECRET')
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -310,36 +305,38 @@ async def set_log_channel_command(interaction: discord.Interaction):
     finally:
         conn.close()
 
-@tree.command(name="warcraftrecorder", description="Adds a user's email to the Warcraft Recorder roster.")
-async def warcraft_recorder_command(interaction: discord.Interaction, email: str):
-    """Add email to Warcraft Recorder roster."""
-    await interaction.response.defer(ephemeral=True)
+@tree.command(name="warcraftrecorder", description="Get the join code to join our Warcraft Recorder guild")
+async def warcraft_recorder_command(interaction: discord.Interaction):
+    """Display the Warcraft Recorder join code."""
+    join_code = "c64244fb9fd752702d13cc9078ea3fdd"
     
-    try:
-        print(f"[CMD] Processing warcraft recorder request for email: {email}")
-        # Run the synchronous Selenium function in a thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            add_email_to_roster,
-            RECORDER_EMAIL,
-            RECORDER_PASSWORD,
-            email
-        )
-        
-        # Check if result is True (success) or a string (error message)
-        if result is True:
-            await interaction.edit_original_response(content=f"✅ **Success!** Email {email} has been added to the Warcraft Recorder roster.")
-        else:
-            await interaction.edit_original_response(content=f"❌ **Error:** {result}")
-
-    except Exception as e:
-        print(f"An exception occurred in the command handler: {e}")
-        # Use edit_original_response if the initial message was already sent
-        if interaction.response.is_done():
-            await interaction.edit_original_response(content=f"❌ A critical error occurred: {str(e)}")
-        else:
-            await interaction.response.send_message(content=f"❌ A critical error occurred: {str(e)}", ephemeral=True)
+    embed = discord.Embed(
+        title="🎥 Warcraft Recorder - Join Our Guild",
+        description="Use the join code below to join our guild on Warcraft Recorder and automatically record your raids!",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="📋 Join Code",
+        value=f"```{join_code}```",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📖 How to Use",
+        value=(
+            "1️⃣ Go to [warcraftrecorder.com](https://warcraftrecorder.com)\n"
+            "2️⃣ Log in or create an account\n"
+            "3️⃣ Click on **'Join Guild'** or **'Enter Join Code'**\n"
+            "4️⃣ Paste the join code above\n"
+            "5️⃣ You're all set! Your raids will now be automatically recorded 🎉"
+        ),
+        inline=False
+    )
+    
+    embed.set_footer(text="Warcraft Recorder automatically records your WoW gameplay")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @tree.command(name="connectwow", description="Link your World of Warcraft characters to your Discord account")
 async def connectwow_command(interaction: discord.Interaction):

@@ -27,10 +27,6 @@ services:
       DB_NAME: luminisbot
       DB_USER: luminisbot
       DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
-      
-      # Warcraft Recorder
-      RECORDER_EMAIL: ${RECORDER_EMAIL}
-      RECORDER_PASSWORD: ${RECORDER_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
