@@ -1463,7 +1463,13 @@ class CharacterSelectDropdown(Select):
             except Exception:
                 pass
             
-            # Fetch and update the raid event message
+            # Respond to interaction FIRST to avoid timeout (must respond within 3 seconds)
+            await interaction.response.send_message(
+                f"✅ Signed up as **{char_name}** ({spec} {role.capitalize()})!",
+                ephemeral=True
+            )
+            
+            # Fetch and update the raid event message AFTER responding
             conn = get_db_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("SELECT message_id, channel_id FROM raid_events WHERE id = %s", (self.event_id,))
@@ -1479,11 +1485,6 @@ class CharacterSelectDropdown(Select):
                         await update_raid_message(message)
                     except Exception as e:
                         logger.error(f"Failed to update raid message: {e}")
-            
-            await interaction.response.send_message(
-                f"✅ Signed up as **{char_name}** ({spec} {role.capitalize()})!",
-                ephemeral=True
-            )
         else:
             # No preference - show role selection
             await show_role_selection(interaction, char_name, realm_slug, char_class, self.event_id)
