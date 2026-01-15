@@ -1795,25 +1795,13 @@ def store_discord_info(discord_id, display_name, username, avatar_url):
 
 
 async def get_discord_username(discord_id):
-    """Get Discord username - checks database first, falls back to bot and stores result"""
+    """Get Discord username from database only (use refresh button to update from bot)"""
     try:
-        # First check database
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         display_name, username, avatar_url = get_stored_discord_info(cursor, discord_id)
         cursor.close()
         conn.close()
-        
-        if username:
-            return display_name, username, avatar_url
-        
-        # Fall back to bot fetch
-        display_name, username, avatar_url = await get_discord_username_from_bot(discord_id)
-        
-        # Store for future use if we got info
-        if username:
-            store_discord_info(discord_id, display_name, username, avatar_url)
-        
         return display_name, username, avatar_url
     except Exception as e:
         logger.error(f"Error getting Discord username for {discord_id}: {e}")
@@ -1850,43 +1838,6 @@ async def handle_discord_users_page(request):
         cursor.close()
         conn.close()
         
-        # Find users without stored Discord info and fetch from bot
-        users_to_fetch = [u for u in discord_users if not u.get('discord_username')]
-        
-        if users_to_fetch:
-            try:
-                async def fetch_and_store(discord_id):
-                    display_name, username, avatar_url = await get_discord_username_from_bot(discord_id)
-                    if username:
-                        store_discord_info(discord_id, display_name, username, avatar_url)
-                    return discord_id, (display_name, username, avatar_url)
-                
-                # Fetch missing users with a 5 second overall timeout
-                tasks = [fetch_and_store(user['discord_id']) for user in users_to_fetch]
-                results = await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=5.0
-                )
-                
-                # Update the user list with fetched info
-                fetched_info = {}
-                for result in results:
-                    if isinstance(result, tuple) and len(result) == 2:
-                        discord_id, info = result
-                        fetched_info[discord_id] = info
-                
-                for user in discord_users:
-                    if user['discord_id'] in fetched_info:
-                        info = fetched_info[user['discord_id']]
-                        user['discord_display_name'] = info[0]
-                        user['discord_username'] = info[1]
-                        user['discord_avatar_url'] = info[2]
-                        
-            except asyncio.TimeoutError:
-                logger.warning("Timeout fetching Discord usernames for new users")
-            except Exception as e:
-                logger.warning(f"Error fetching Discord usernames: {e}")
-        
         rows_html = ""
         for user in discord_users:
             display_name = user.get('discord_display_name')
@@ -1907,9 +1858,12 @@ async def handle_discord_users_page(request):
             character_names = user.get('character_names', '') or ''
             
             rows_html += f"""
-            <tr onclick="window.location='/admin/discord-users/{user['discord_id']}'" style="cursor:pointer" data-characters="{character_names.lower()}">
+            <tr data-discord-id="{user['discord_id']}" onclick="window.location='/admin/discord-users/{user['discord_id']}'" style="cursor:pointer" data-characters="{character_names.lower()}">
                 <td>{avatar_html}{name_html}</td>
-                <td><code>{user['discord_id']}</code></td>
+                <td>
+                    <code>{user['discord_id']}</code>
+                    <button class="refresh-btn" onclick="event.stopPropagation(); refreshDiscordInfo('{user['discord_id']}', this)" title="Refresh Discord info">🔄</button>
+                </td>
                 <td style="text-align:center"><span class="badge" style="background:#5865F2">{user['character_count']}</span></td>
                 <td>{first_linked}</td>
                 <td>{last_updated}</td>
@@ -1955,7 +1909,73 @@ async def handle_discord_users_page(request):
                         row.style.display = (textMatch || charMatch) ? '' : 'none';
                     }});
                 }}
+                
+                async function refreshDiscordInfo(discordId, btn) {{
+                    const originalText = btn.textContent;
+                    btn.textContent = '⏳';
+                    btn.disabled = true;
+                    
+                    try {{
+                        const response = await fetch('/admin/api/refresh-discord-info/' + discordId, {{
+                            method: 'POST'
+                        }});
+                        const data = await response.json();
+                        
+                        if (data.success) {{
+                            // Update the row with new info
+                            const row = btn.closest('tr');
+                            const nameCell = row.querySelector('td:first-child');
+                            
+                            let avatarHtml = data.avatar_url 
+                                ? '<img src="' + data.avatar_url + '" style="width:32px;height:32px;border-radius:50%;margin-right:10px;vertical-align:middle">'
+                                : '<span style="display:inline-block;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.1);margin-right:10px;vertical-align:middle;text-align:center;line-height:32px">👤</span>';
+                            
+                            let nameHtml = '';
+                            if (data.display_name && data.username) {{
+                                nameHtml = '<strong>' + data.display_name + '</strong> <span style="color:rgba(255,255,255,0.5)">@' + data.username + '</span>';
+                            }} else if (data.username) {{
+                                nameHtml = '<strong>@' + data.username + '</strong>';
+                            }} else {{
+                                nameHtml = '<span style="color:rgba(255,255,255,0.5)">Unknown User</span>';
+                            }}
+                            
+                            nameCell.innerHTML = avatarHtml + nameHtml;
+                            btn.textContent = '✅';
+                            setTimeout(() => {{ btn.textContent = '🔄'; }}, 2000);
+                        }} else {{
+                            btn.textContent = '❌';
+                            setTimeout(() => {{ btn.textContent = '🔄'; }}, 2000);
+                            alert(data.error || 'Failed to refresh');
+                        }}
+                    }} catch (err) {{
+                        btn.textContent = '❌';
+                        setTimeout(() => {{ btn.textContent = '🔄'; }}, 2000);
+                        alert('Error: ' + err.message);
+                    }} finally {{
+                        btn.disabled = false;
+                    }}
+                }}
             </script>
+            <style>
+                .refresh-btn {{
+                    background: none;
+                    border: none;
+                    cursor: pointer;
+                    font-size: 14px;
+                    padding: 2px 6px;
+                    margin-left: 8px;
+                    border-radius: 4px;
+                    opacity: 0.6;
+                    transition: opacity 0.2s, background 0.2s;
+                }}
+                .refresh-btn:hover {{
+                    opacity: 1;
+                    background: rgba(255,255,255,0.1);
+                }}
+                .refresh-btn:disabled {{
+                    cursor: not-allowed;
+                }}
+            </style>
         </body>
         </html>
         """
@@ -1964,6 +1984,37 @@ async def handle_discord_users_page(request):
     except Exception as e:
         logger.error(f"Error fetching discord users: {e}")
         return web.Response(text=f"Error: {e}", status=500)
+
+
+@require_auth
+async def handle_refresh_discord_info(request):
+    """POST /admin/api/refresh-discord-info/{discord_id} - refresh Discord info from bot"""
+    discord_id = request.match_info.get('discord_id')
+    
+    try:
+        # Fetch from bot
+        display_name, username, avatar_url = await get_discord_username_from_bot(discord_id)
+        
+        if username:
+            # Store in database
+            store_discord_info(discord_id, display_name, username, avatar_url)
+            return web.json_response({
+                'success': True,
+                'display_name': display_name,
+                'username': username,
+                'avatar_url': avatar_url
+            })
+        else:
+            return web.json_response({
+                'success': False,
+                'error': 'Could not fetch user info from Discord. User may not be in the server.'
+            })
+    except Exception as e:
+        logger.error(f"Error refreshing Discord info for {discord_id}: {e}")
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        })
 
 
 @require_auth
@@ -2496,6 +2547,7 @@ def create_app(bot=None):
     app.router.add_get('/admin/characters', handle_characters_page)
     app.router.add_get('/admin/discord-users', handle_discord_users_page)
     app.router.add_get('/admin/discord-users/{discord_id}', handle_discord_user_detail)
+    app.router.add_post('/admin/api/refresh-discord-info/{discord_id}', handle_refresh_discord_info)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
     app.router.add_post('/admin/users/new', handle_new_user)
