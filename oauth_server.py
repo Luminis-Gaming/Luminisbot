@@ -1592,22 +1592,33 @@ async def handle_characters_page(request):
         cursor.execute("SELECT COUNT(DISTINCT discord_id) as user_count FROM wow_characters")
         user_count = cursor.fetchone()['user_count']
         
+        # Get unique classes for filter dropdown
+        cursor.execute("SELECT DISTINCT character_class FROM wow_characters WHERE character_class IS NOT NULL ORDER BY character_class")
+        classes = [row['character_class'] for row in cursor.fetchall()]
+        
         cursor.close()
         conn.close()
+        
+        # Build class options
+        class_options = '<option value="">All Classes</option>'
+        for cls in classes:
+            class_options += f'<option value="{cls}">{cls}</option>'
         
         rows_html = ""
         for char in characters:
             faction_emoji = "🔵" if char['faction'] == 'ALLIANCE' else "🔴" if char['faction'] == 'HORDE' else "⚪"
+            faction_val = char['faction'] or ''
             created = char['created_at'].strftime('%Y-%m-%d %H:%M') if char['created_at'] else 'N/A'
             updated = char['last_updated'].strftime('%Y-%m-%d %H:%M') if char['last_updated'] else 'N/A'
+            level = char['level'] or 0
             
             rows_html += f"""
-            <tr>
+            <tr data-level="{level}" data-faction="{faction_val}" data-class="{char['character_class'] or ''}">
                 <td>{faction_emoji} {char['character_name']}</td>
                 <td>{char['realm_name']}</td>
                 <td>{char['character_class'] or 'N/A'}</td>
                 <td>{char['character_race'] or 'N/A'}</td>
-                <td>{char['level'] or 'N/A'}</td>
+                <td>{level or 'N/A'}</td>
                 <td>{char['item_level'] or 'N/A'}</td>
                 <td><a href="/admin/discord-users/{char['discord_id']}" style="color:#5865F2">{char['discord_id']}</a></td>
                 <td>{created}</td>
@@ -1620,7 +1631,14 @@ async def handle_characters_page(request):
         <html>
         <head>
             <title>LuminisBot Admin - Characters</title>
-            <style>{ADMIN_CSS}</style>
+            <style>
+                {ADMIN_CSS}
+                .filters {{ display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }}
+                .filters select {{ padding: 10px 15px; min-width: 150px; }}
+                .filters label {{ display: flex; align-items: center; gap: 8px; cursor: pointer; }}
+                .filters input[type="checkbox"] {{ width: 18px; height: 18px; cursor: pointer; }}
+                .filter-count {{ color: rgba(255,255,255,0.6); font-size: 14px; }}
+            </style>
         </head>
         <body>
             <div class="container">
@@ -1635,11 +1653,33 @@ async def handle_characters_page(request):
                         <div class="stat-value">{user_count}</div>
                         <div class="stat-label">Linked Users</div>
                     </div>
+                    <div class="stat">
+                        <div class="stat-value" id="filteredCount">{len(characters)}</div>
+                        <div class="stat-label">Showing</div>
+                    </div>
                 </div>
                 
                 <div class="card" style="margin-top:20px">
-                    <div class="search-box">
-                        <input type="text" id="search" placeholder="Search characters, realms, classes..." onkeyup="filterTable()">
+                    <div class="filters">
+                        <input type="text" id="search" placeholder="Search..." onkeyup="applyFilters()" style="flex:1;min-width:200px;max-width:300px">
+                        <select id="filterClass" onchange="applyFilters()">
+                            {class_options}
+                        </select>
+                        <select id="filterFaction" onchange="applyFilters()">
+                            <option value="">All Factions</option>
+                            <option value="ALLIANCE">🔵 Alliance</option>
+                            <option value="HORDE">🔴 Horde</option>
+                        </select>
+                        <select id="filterLevel" onchange="applyFilters()">
+                            <option value="0">All Levels</option>
+                            <option value="80">Level 80+</option>
+                            <option value="70">Level 70+</option>
+                            <option value="60">Level 60+</option>
+                        </select>
+                        <label>
+                            <input type="checkbox" id="filterMaxLevel" onchange="applyFilters()">
+                            Max Level Only (80)
+                        </label>
                     </div>
                     <div class="table-wrapper">
                         {'<table id="charTable"><thead><tr><th>Character</th><th>Realm</th><th>Class</th><th>Race</th><th>Level</th><th>iLvl</th><th>Discord ID</th><th>Linked</th><th>Updated</th></tr></thead><tbody>' + rows_html + '</tbody></table>' if characters else '<p style="text-align:center;color:rgba(255,255,255,0.5)">No characters found. Users can link their accounts with /connectwow</p>'}
@@ -1647,12 +1687,44 @@ async def handle_characters_page(request):
                 </div>
             </div>
             <script>
-                function filterTable() {{
-                    const filter = document.getElementById('search').value.toLowerCase();
+                function applyFilters() {{
+                    const search = document.getElementById('search').value.toLowerCase();
+                    const filterClass = document.getElementById('filterClass').value;
+                    const filterFaction = document.getElementById('filterFaction').value;
+                    const filterLevel = parseInt(document.getElementById('filterLevel').value) || 0;
+                    const maxLevelOnly = document.getElementById('filterMaxLevel').checked;
+                    
                     const rows = document.querySelectorAll('#charTable tbody tr');
+                    let visibleCount = 0;
+                    
                     rows.forEach(row => {{
-                        row.style.display = row.textContent.toLowerCase().includes(filter) ? '' : 'none';
+                        const level = parseInt(row.dataset.level) || 0;
+                        const faction = row.dataset.faction || '';
+                        const charClass = row.dataset.class || '';
+                        const text = row.textContent.toLowerCase();
+                        
+                        let show = true;
+                        
+                        // Text search
+                        if (search && !text.includes(search)) show = false;
+                        
+                        // Class filter
+                        if (filterClass && charClass !== filterClass) show = false;
+                        
+                        // Faction filter
+                        if (filterFaction && faction !== filterFaction) show = false;
+                        
+                        // Level filter
+                        if (filterLevel > 0 && level < filterLevel) show = false;
+                        
+                        // Max level only
+                        if (maxLevelOnly && level < 80) show = false;
+                        
+                        row.style.display = show ? '' : 'none';
+                        if (show) visibleCount++;
                     }});
+                    
+                    document.getElementById('filteredCount').textContent = visibleCount;
                 }}
             </script>
         </body>
