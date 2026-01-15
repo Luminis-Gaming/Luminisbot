@@ -1152,6 +1152,858 @@ async def handle_update_signup(request):
         )
 
 
+# ============================================================================
+# Admin Panel - User Authentication & Management
+# ============================================================================
+
+import bcrypt
+
+# Session storage for admin logins
+admin_sessions = {}
+
+def generate_session_token():
+    """Generate a secure session token"""
+    return secrets.token_urlsafe(32)
+
+def hash_password(password):
+    """Hash a password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password, password_hash):
+    """Verify a password against its hash"""
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except Exception:
+        return False
+
+def get_session(request):
+    """Get session data from cookie, returns None if invalid/expired"""
+    session_token = request.cookies.get('admin_session')
+    if not session_token:
+        return None
+    
+    session = admin_sessions.get(session_token)
+    if not session:
+        return None
+    
+    # Check if session is expired (24 hour expiry)
+    if datetime.now() > session['expires']:
+        del admin_sessions[session_token]
+        return None
+    
+    return session
+
+def require_auth(func):
+    """Decorator to require authentication"""
+    async def wrapper(request):
+        session = get_session(request)
+        if not session:
+            raise web.HTTPFound('/admin/login')
+        
+        # Check if user must change password
+        if session.get('must_change_password') and request.path != '/admin/change-password':
+            raise web.HTTPFound('/admin/change-password')
+        
+        request['session'] = session
+        return await func(request)
+    return wrapper
+
+def require_admin(func):
+    """Decorator to require admin role"""
+    async def wrapper(request):
+        session = get_session(request)
+        if not session:
+            raise web.HTTPFound('/admin/login')
+        
+        if session.get('role') != 'admin':
+            return web.Response(text="Access denied. Admin role required.", status=403)
+        
+        request['session'] = session
+        return await func(request)
+    return wrapper
+
+
+# ============================================================================
+# Shared CSS Styles
+# ============================================================================
+
+ADMIN_CSS = """
+* { box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    min-height: 100vh;
+    margin: 0;
+    padding: 20px;
+    color: #fff;
+}
+.container { max-width: 1400px; margin: 0 auto; }
+.card {
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    padding: 30px;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+.card-center {
+    max-width: 450px;
+    margin: 80px auto;
+    text-align: center;
+}
+h1, h2 { margin: 0 0 20px 0; }
+.logo { font-size: 48px; margin-bottom: 20px; }
+input[type="text"], input[type="password"], select {
+    width: 100%;
+    padding: 14px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    font-size: 16px;
+    margin-bottom: 15px;
+}
+input:focus, select:focus { outline: none; border-color: #5865F2; }
+input::placeholder { color: rgba(255,255,255,0.5); }
+.btn {
+    padding: 14px 28px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-block;
+}
+.btn-primary { background: #5865F2; color: #fff; }
+.btn-primary:hover { background: #4752C4; }
+.btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
+.btn-secondary:hover { background: rgba(255,255,255,0.2); }
+.btn-danger { background: #dc3545; color: #fff; }
+.btn-danger:hover { background: #c82333; }
+.btn-sm { padding: 8px 16px; font-size: 14px; }
+.error { color: #ff6b6b; margin-bottom: 20px; }
+.success { color: #51cf66; margin-bottom: 20px; }
+.nav {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 30px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.nav a { color: #fff; text-decoration: none; padding: 10px 20px; border-radius: 8px; background: rgba(255,255,255,0.1); }
+.nav a:hover { background: rgba(255,255,255,0.2); }
+.nav a.active { background: #5865F2; }
+.nav .spacer { flex: 1; }
+.nav .user-info { color: rgba(255,255,255,0.7); font-size: 14px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+th { background: rgba(88,101,242,0.3); font-weight: 600; text-transform: uppercase; font-size: 12px; }
+tr:hover { background: rgba(255,255,255,0.05); }
+code { background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.badge-admin { background: #5865F2; }
+.badge-user { background: rgba(255,255,255,0.2); }
+.stats { display: flex; gap: 20px; flex-wrap: wrap; }
+.stat { background: rgba(255,255,255,0.1); padding: 20px; border-radius: 12px; text-align: center; min-width: 120px; }
+.stat-value { font-size: 32px; font-weight: 700; color: #5865F2; }
+.stat-label { font-size: 14px; color: rgba(255,255,255,0.7); margin-top: 5px; }
+.form-group { margin-bottom: 20px; }
+.form-group label { display: block; margin-bottom: 8px; font-weight: 500; }
+.actions { display: flex; gap: 10px; }
+.search-box { margin-bottom: 20px; }
+.search-box input { max-width: 400px; }
+.table-wrapper { overflow-x: auto; }
+.warning-box { background: rgba(255,193,7,0.2); border: 1px solid #ffc107; border-radius: 8px; padding: 15px; margin-bottom: 20px; }
+"""
+
+
+async def handle_admin_login_page(request):
+    """GET /admin/login - show login page"""
+    error = request.query.get('error', '')
+    error_html = f'<p class="error">{error}</p>' if error else ''
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LuminisBot Admin - Login</title>
+        <style>{ADMIN_CSS}</style>
+    </head>
+    <body>
+        <div class="card card-center">
+            <div class="logo">🔐</div>
+            <h1>Admin Login</h1>
+            {error_html}
+            <form method="POST" action="/admin/login">
+                <input type="text" name="username" placeholder="Username" required autofocus>
+                <input type="password" name="password" placeholder="Password" required>
+                <button type="submit" class="btn btn-primary" style="width:100%">Login</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
+
+
+async def handle_admin_login(request):
+    """POST /admin/login - process login"""
+    try:
+        data = await request.post()
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        
+        if not username or not password:
+            raise web.HTTPFound('/admin/login?error=Username and password required')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT * FROM admin_users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        
+        if not user or not verify_password(password, user['password_hash']):
+            cursor.close()
+            conn.close()
+            logger.warning(f"Failed login attempt for username: {username}")
+            raise web.HTTPFound('/admin/login?error=Invalid username or password')
+        
+        # Update last login
+        cursor.execute("UPDATE admin_users SET last_login = NOW() WHERE id = %s", (user['id'],))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Create session
+        session_token = generate_session_token()
+        admin_sessions[session_token] = {
+            'user_id': user['id'],
+            'username': user['username'],
+            'role': user['role'],
+            'must_change_password': user['must_change_password'],
+            'created': datetime.now(),
+            'expires': datetime.now() + timedelta(hours=24)
+        }
+        
+        logger.info(f"Successful login for user: {username}")
+        
+        # Redirect based on whether password change is required
+        redirect_url = '/admin/change-password' if user['must_change_password'] else '/admin/characters'
+        response = web.HTTPFound(redirect_url)
+        response.set_cookie('admin_session', session_token, max_age=86400, httponly=True, samesite='Lax')
+        raise response
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise web.HTTPFound('/admin/login?error=Login failed')
+
+
+async def handle_change_password_page(request):
+    """GET /admin/change-password - show password change page"""
+    session = get_session(request)
+    if not session:
+        raise web.HTTPFound('/admin/login')
+    
+    error = request.query.get('error', '')
+    success = request.query.get('success', '')
+    
+    warning_html = ''
+    if session.get('must_change_password'):
+        warning_html = '<div class="warning-box">⚠️ You must change your password before continuing.</div>'
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LuminisBot Admin - Change Password</title>
+        <style>{ADMIN_CSS}</style>
+    </head>
+    <body>
+        <div class="card card-center">
+            <div class="logo">🔑</div>
+            <h1>Change Password</h1>
+            {warning_html}
+            {'<p class="error">' + error + '</p>' if error else ''}
+            {'<p class="success">' + success + '</p>' if success else ''}
+            <form method="POST" action="/admin/change-password">
+                <input type="password" name="current_password" placeholder="Current Password" required>
+                <input type="password" name="new_password" placeholder="New Password (min 8 chars)" required minlength="8">
+                <input type="password" name="confirm_password" placeholder="Confirm New Password" required>
+                <button type="submit" class="btn btn-primary" style="width:100%">Change Password</button>
+            </form>
+            {'' if session.get('must_change_password') else '<p style="margin-top:20px"><a href="/admin/characters" class="btn btn-secondary">← Back</a></p>'}
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
+
+
+async def handle_change_password(request):
+    """POST /admin/change-password - process password change"""
+    session = get_session(request)
+    if not session:
+        raise web.HTTPFound('/admin/login')
+    
+    try:
+        data = await request.post()
+        current_password = data.get('current_password', '')
+        new_password = data.get('new_password', '')
+        confirm_password = data.get('confirm_password', '')
+        
+        if new_password != confirm_password:
+            raise web.HTTPFound('/admin/change-password?error=Passwords do not match')
+        
+        if len(new_password) < 8:
+            raise web.HTTPFound('/admin/change-password?error=Password must be at least 8 characters')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT password_hash FROM admin_users WHERE id = %s", (session['user_id'],))
+        user = cursor.fetchone()
+        
+        if not user or not verify_password(current_password, user['password_hash']):
+            cursor.close()
+            conn.close()
+            raise web.HTTPFound('/admin/change-password?error=Current password is incorrect')
+        
+        # Update password
+        new_hash = hash_password(new_password)
+        cursor.execute("""
+            UPDATE admin_users 
+            SET password_hash = %s, must_change_password = false, updated_at = NOW() 
+            WHERE id = %s
+        """, (new_hash, session['user_id']))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Update session
+        session['must_change_password'] = False
+        
+        logger.info(f"Password changed for user: {session['username']}")
+        
+        raise web.HTTPFound('/admin/characters')
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Password change error: {e}")
+        raise web.HTTPFound('/admin/change-password?error=Failed to change password')
+
+
+async def handle_admin_logout(request):
+    """GET /admin/logout - logout"""
+    session_token = request.cookies.get('admin_session')
+    if session_token and session_token in admin_sessions:
+        del admin_sessions[session_token]
+    
+    response = web.HTTPFound('/admin/login')
+    response.del_cookie('admin_session')
+    raise response
+
+
+def render_nav(session, active='characters'):
+    """Render navigation bar"""
+    is_admin = session.get('role') == 'admin'
+    return f"""
+    <nav class="nav">
+        <a href="/admin/characters" class="{'active' if active == 'characters' else ''}">🎮 Characters</a>
+        {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">👥 Users</a>' if is_admin else ''}
+        <a href="/admin/change-password" class="{'active' if active == 'password' else ''}">🔑 Password</a>
+        <div class="spacer"></div>
+        <span class="user-info">👤 {session['username']} <span class="badge badge-{session['role']}">{session['role']}</span></span>
+        <a href="/admin/logout">🚪 Logout</a>
+    </nav>
+    """
+
+
+@require_auth
+async def handle_characters_page(request):
+    """GET /admin/characters - show all characters"""
+    session = request['session']
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("""
+            SELECT 
+                wc.character_name, wc.realm_name, wc.character_class,
+                wc.character_race, wc.faction, wc.level, wc.item_level,
+                wc.discord_id, wc.created_at, wc.last_updated
+            FROM wow_characters wc
+            ORDER BY wc.last_updated DESC
+        """)
+        characters = cursor.fetchall()
+        
+        cursor.execute("SELECT COUNT(DISTINCT discord_id) as user_count FROM wow_characters")
+        user_count = cursor.fetchone()['user_count']
+        
+        cursor.close()
+        conn.close()
+        
+        rows_html = ""
+        for char in characters:
+            faction_emoji = "🔵" if char['faction'] == 'ALLIANCE' else "🔴" if char['faction'] == 'HORDE' else "⚪"
+            created = char['created_at'].strftime('%Y-%m-%d %H:%M') if char['created_at'] else 'N/A'
+            updated = char['last_updated'].strftime('%Y-%m-%d %H:%M') if char['last_updated'] else 'N/A'
+            
+            rows_html += f"""
+            <tr>
+                <td>{faction_emoji} {char['character_name']}</td>
+                <td>{char['realm_name']}</td>
+                <td>{char['character_class'] or 'N/A'}</td>
+                <td>{char['character_race'] or 'N/A'}</td>
+                <td>{char['level'] or 'N/A'}</td>
+                <td>{char['item_level'] or 'N/A'}</td>
+                <td><code>{char['discord_id']}</code></td>
+                <td>{created}</td>
+                <td>{updated}</td>
+            </tr>
+            """
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot Admin - Characters</title>
+            <style>{ADMIN_CSS}</style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'characters')}
+                
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value">{len(characters)}</div>
+                        <div class="stat-label">Total Characters</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">{user_count}</div>
+                        <div class="stat-label">Linked Users</div>
+                    </div>
+                </div>
+                
+                <div class="card" style="margin-top:20px">
+                    <div class="search-box">
+                        <input type="text" id="search" placeholder="Search characters, realms, classes..." onkeyup="filterTable()">
+                    </div>
+                    <div class="table-wrapper">
+                        {'<table id="charTable"><thead><tr><th>Character</th><th>Realm</th><th>Class</th><th>Race</th><th>Level</th><th>iLvl</th><th>Discord ID</th><th>Linked</th><th>Updated</th></tr></thead><tbody>' + rows_html + '</tbody></table>' if characters else '<p style="text-align:center;color:rgba(255,255,255,0.5)">No characters found. Users can link their accounts with /connectwow</p>'}
+                    </div>
+                </div>
+            </div>
+            <script>
+                function filterTable() {{
+                    const filter = document.getElementById('search').value.toLowerCase();
+                    const rows = document.querySelectorAll('#charTable tbody tr');
+                    rows.forEach(row => {{
+                        row.style.display = row.textContent.toLowerCase().includes(filter) ? '' : 'none';
+                    }});
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except Exception as e:
+        logger.error(f"Error fetching characters: {e}")
+        return web.Response(text=f"Error: {e}", status=500)
+
+
+@require_admin
+async def handle_users_page(request):
+    """GET /admin/users - manage users (admin only)"""
+    session = request['session']
+    message = request.query.get('message', '')
+    error = request.query.get('error', '')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT id, username, role, must_change_password, created_at, last_login, created_by FROM admin_users ORDER BY created_at")
+        users = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        rows_html = ""
+        for user in users:
+            created = user['created_at'].strftime('%Y-%m-%d %H:%M') if user['created_at'] else 'N/A'
+            last_login = user['last_login'].strftime('%Y-%m-%d %H:%M') if user['last_login'] else 'Never'
+            must_change = '⚠️' if user['must_change_password'] else ''
+            
+            # Can't delete yourself or the last admin
+            delete_btn = ''
+            if user['username'] != session['username']:
+                delete_btn = f'''
+                <form method="POST" action="/admin/users/delete" style="display:inline" 
+                      onsubmit="return confirm('Delete user {user['username']}?')">
+                    <input type="hidden" name="user_id" value="{user['id']}">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+                '''
+            
+            rows_html += f"""
+            <tr>
+                <td>{user['username']} {must_change}</td>
+                <td><span class="badge badge-{user['role']}">{user['role']}</span></td>
+                <td>{user['created_by'] or 'system'}</td>
+                <td>{created}</td>
+                <td>{last_login}</td>
+                <td class="actions">
+                    <a href="/admin/users/edit/{user['id']}" class="btn btn-secondary btn-sm">Edit</a>
+                    {delete_btn}
+                </td>
+            </tr>
+            """
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot Admin - Users</title>
+            <style>{ADMIN_CSS}</style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'users')}
+                
+                {'<div class="success" style="background:rgba(81,207,102,0.2);padding:15px;border-radius:8px;margin-bottom:20px">' + message + '</div>' if message else ''}
+                {'<div class="error" style="background:rgba(255,107,107,0.2);padding:15px;border-radius:8px;margin-bottom:20px">' + error + '</div>' if error else ''}
+                
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                        <h2 style="margin:0">👥 User Management</h2>
+                        <a href="/admin/users/new" class="btn btn-primary">+ Add User</a>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr><th>Username</th><th>Role</th><th>Created By</th><th>Created</th><th>Last Login</th><th>Actions</th></tr>
+                            </thead>
+                            <tbody>{rows_html}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except Exception as e:
+        logger.error(f"Error fetching users: {e}")
+        return web.Response(text=f"Error: {e}", status=500)
+
+
+@require_admin
+async def handle_new_user_page(request):
+    """GET /admin/users/new - add new user form"""
+    session = request['session']
+    error = request.query.get('error', '')
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LuminisBot Admin - Add User</title>
+        <style>{ADMIN_CSS}</style>
+    </head>
+    <body>
+        <div class="container">
+            {render_nav(session, 'users')}
+            
+            <div class="card" style="max-width:500px">
+                <h2>➕ Add New User</h2>
+                {'<p class="error">' + error + '</p>' if error else ''}
+                <form method="POST" action="/admin/users/new">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" name="username" required pattern="[a-zA-Z0-9_]+" title="Letters, numbers, underscores only">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" name="password" required minlength="8">
+                    </div>
+                    <div class="form-group">
+                        <label>Role</label>
+                        <select name="role">
+                            <option value="user">User (read-only)</option>
+                            <option value="admin">Admin (full access)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="must_change" checked> Require password change on first login</label>
+                    </div>
+                    <div class="actions">
+                        <button type="submit" class="btn btn-primary">Create User</button>
+                        <a href="/admin/users" class="btn btn-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
+
+
+@require_admin
+async def handle_new_user(request):
+    """POST /admin/users/new - create new user"""
+    session = request['session']
+    
+    try:
+        data = await request.post()
+        username = data.get('username', '').strip().lower()
+        password = data.get('password', '')
+        role = data.get('role', 'user')
+        must_change = 'must_change' in data
+        
+        if not username or not password:
+            raise web.HTTPFound('/admin/users/new?error=Username and password required')
+        
+        if len(password) < 8:
+            raise web.HTTPFound('/admin/users/new?error=Password must be at least 8 characters')
+        
+        if role not in ('user', 'admin'):
+            role = 'user'
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if username exists
+        cursor.execute("SELECT id FROM admin_users WHERE username = %s", (username,))
+        if cursor.fetchone():
+            cursor.close()
+            conn.close()
+            raise web.HTTPFound(f'/admin/users/new?error=Username "{username}" already exists')
+        
+        # Create user
+        password_hash = hash_password(password)
+        cursor.execute("""
+            INSERT INTO admin_users (username, password_hash, role, must_change_password, created_by)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (username, password_hash, role, must_change, session['username']))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"User '{username}' created by {session['username']}")
+        
+        raise web.HTTPFound(f'/admin/users?message=User "{username}" created successfully')
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        raise web.HTTPFound(f'/admin/users/new?error=Failed to create user')
+
+
+@require_admin
+async def handle_edit_user_page(request):
+    """GET /admin/users/edit/{id} - edit user form"""
+    session = request['session']
+    user_id = request.match_info.get('id')
+    error = request.query.get('error', '')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT * FROM admin_users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        if not user:
+            raise web.HTTPFound('/admin/users?error=User not found')
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot Admin - Edit User</title>
+            <style>{ADMIN_CSS}</style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'users')}
+                
+                <div class="card" style="max-width:500px">
+                    <h2>✏️ Edit User: {user['username']}</h2>
+                    {'<p class="error">' + error + '</p>' if error else ''}
+                    <form method="POST" action="/admin/users/edit/{user_id}">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" value="{user['username']}" disabled style="opacity:0.5">
+                        </div>
+                        <div class="form-group">
+                            <label>New Password (leave empty to keep current)</label>
+                            <input type="password" name="password" minlength="8">
+                        </div>
+                        <div class="form-group">
+                            <label>Role</label>
+                            <select name="role">
+                                <option value="user" {'selected' if user['role'] == 'user' else ''}>User (read-only)</option>
+                                <option value="admin" {'selected' if user['role'] == 'admin' else ''}>Admin (full access)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" name="must_change" {'checked' if user['must_change_password'] else ''}> Require password change on next login</label>
+                        </div>
+                        <div class="actions">
+                            <button type="submit" class="btn btn-primary">Save Changes</button>
+                            <a href="/admin/users" class="btn btn-secondary">Cancel</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Error loading user: {e}")
+        raise web.HTTPFound('/admin/users?error=Failed to load user')
+
+
+@require_admin
+async def handle_edit_user(request):
+    """POST /admin/users/edit/{id} - update user"""
+    session = request['session']
+    user_id = request.match_info.get('id')
+    
+    try:
+        data = await request.post()
+        password = data.get('password', '')
+        role = data.get('role', 'user')
+        must_change = 'must_change' in data
+        
+        if role not in ('user', 'admin'):
+            role = 'user'
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT username FROM admin_users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            cursor.close()
+            conn.close()
+            raise web.HTTPFound('/admin/users?error=User not found')
+        
+        # Update user
+        if password:
+            if len(password) < 8:
+                cursor.close()
+                conn.close()
+                raise web.HTTPFound(f'/admin/users/edit/{user_id}?error=Password must be at least 8 characters')
+            
+            password_hash = hash_password(password)
+            cursor.execute("""
+                UPDATE admin_users 
+                SET password_hash = %s, role = %s, must_change_password = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (password_hash, role, must_change, user_id))
+        else:
+            cursor.execute("""
+                UPDATE admin_users 
+                SET role = %s, must_change_password = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (role, must_change, user_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"User '{user['username']}' updated by {session['username']}")
+        
+        raise web.HTTPFound(f'/admin/users?message=User "{user["username"]}" updated')
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating user: {e}")
+        raise web.HTTPFound(f'/admin/users/edit/{user_id}?error=Failed to update user')
+
+
+@require_admin
+async def handle_delete_user(request):
+    """POST /admin/users/delete - delete user"""
+    session = request['session']
+    
+    try:
+        data = await request.post()
+        user_id = data.get('user_id')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT username FROM admin_users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            cursor.close()
+            conn.close()
+            raise web.HTTPFound('/admin/users?error=User not found')
+        
+        # Can't delete yourself
+        if user['username'] == session['username']:
+            cursor.close()
+            conn.close()
+            raise web.HTTPFound('/admin/users?error=Cannot delete your own account')
+        
+        # Check if this is the last admin
+        cursor.execute("SELECT COUNT(*) as count FROM admin_users WHERE role = 'admin'")
+        admin_count = cursor.fetchone()['count']
+        
+        cursor.execute("SELECT role FROM admin_users WHERE id = %s", (user_id,))
+        user_role = cursor.fetchone()['role']
+        
+        if user_role == 'admin' and admin_count <= 1:
+            cursor.close()
+            conn.close()
+            raise web.HTTPFound('/admin/users?error=Cannot delete the last admin user')
+        
+        cursor.execute("DELETE FROM admin_users WHERE id = %s", (user_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"User '{user['username']}' deleted by {session['username']}")
+        
+        raise web.HTTPFound(f'/admin/users?message=User "{user["username"]}" deleted')
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting user: {e}")
+        raise web.HTTPFound('/admin/users?error=Failed to delete user')
+
+
+# Legacy redirect for old /characters URL
+async def handle_characters_redirect(request):
+    """Redirect old /characters URL to new /admin/characters"""
+    raise web.HTTPFound('/admin/characters')
+
+
 def create_app(bot=None):
     """Create and configure the web application"""
     global discord_bot
@@ -1165,6 +2017,23 @@ def create_app(bot=None):
     app.router.add_get('/callback', handle_callback)
     app.router.add_get('/health', handle_health)
     app.router.add_get('/unlink', handle_unlink)
+    
+    # Admin panel routes
+    app.router.add_get('/admin/login', handle_admin_login_page)
+    app.router.add_post('/admin/login', handle_admin_login)
+    app.router.add_get('/admin/logout', handle_admin_logout)
+    app.router.add_get('/admin/change-password', handle_change_password_page)
+    app.router.add_post('/admin/change-password', handle_change_password)
+    app.router.add_get('/admin/characters', handle_characters_page)
+    app.router.add_get('/admin/users', handle_users_page)
+    app.router.add_get('/admin/users/new', handle_new_user_page)
+    app.router.add_post('/admin/users/new', handle_new_user)
+    app.router.add_get('/admin/users/edit/{id}', handle_edit_user_page)
+    app.router.add_post('/admin/users/edit/{id}', handle_edit_user)
+    app.router.add_post('/admin/users/delete', handle_delete_user)
+    
+    # Legacy redirect (old /characters URL)
+    app.router.add_get('/characters', handle_characters_redirect)
     
     # API routes (v1)
     app.router.add_get('/api/v1/events', handle_get_events)
