@@ -1559,8 +1559,9 @@ def render_nav(session, active='characters'):
     is_admin = session.get('role') == 'admin'
     return f"""
     <nav class="nav">
-        <a href="/admin/characters" class="{'active' if active == 'characters' else ''}">🎮 Characters</a>
-        {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">👥 Users</a>' if is_admin else ''}
+        <a href="/admin/characters" class="{'active' if active == 'characters' else ''}">🎮 All Characters</a>
+        <a href="/admin/discord-users" class="{'active' if active == 'discord-users' else ''}">👥 Discord Users</a>
+        {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">⚙️ Admin Users</a>' if is_admin else ''}
         <a href="/admin/change-password" class="{'active' if active == 'password' else ''}">🔑 Password</a>
         <div class="spacer"></div>
         <span class="user-info">👤 {session['username']} <span class="badge badge-{session['role']}">{session['role']}</span></span>
@@ -1608,7 +1609,7 @@ async def handle_characters_page(request):
                 <td>{char['character_race'] or 'N/A'}</td>
                 <td>{char['level'] or 'N/A'}</td>
                 <td>{char['item_level'] or 'N/A'}</td>
-                <td><code>{char['discord_id']}</code></td>
+                <td><a href="/admin/discord-users/{char['discord_id']}" style="color:#5865F2">{char['discord_id']}</a></td>
                 <td>{created}</td>
                 <td>{updated}</td>
             </tr>
@@ -1661,6 +1662,239 @@ async def handle_characters_page(request):
         
     except Exception as e:
         logger.error(f"Error fetching characters: {e}")
+        return web.Response(text=f"Error: {e}", status=500)
+
+
+async def get_discord_username(discord_id):
+    """Fetch Discord username from the bot if available"""
+    try:
+        if discord_bot and hasattr(discord_bot, 'get_user'):
+            user = discord_bot.get_user(int(discord_id))
+            if user:
+                return user.display_name, user.name, str(user.avatar.url) if user.avatar else None
+            # Try fetching if not in cache
+            try:
+                user = await discord_bot.fetch_user(int(discord_id))
+                if user:
+                    return user.display_name, user.name, str(user.avatar.url) if user.avatar else None
+            except:
+                pass
+    except Exception as e:
+        logger.debug(f"Could not fetch Discord user {discord_id}: {e}")
+    return None, None, None
+
+
+@require_auth
+async def handle_discord_users_page(request):
+    """GET /admin/discord-users - list all Discord users with linked characters"""
+    session = request['session']
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all unique Discord users with character counts
+        cursor.execute("""
+            SELECT 
+                discord_id,
+                COUNT(*) as character_count,
+                MIN(created_at) as first_linked,
+                MAX(last_updated) as last_updated
+            FROM wow_characters
+            GROUP BY discord_id
+            ORDER BY last_updated DESC
+        """)
+        discord_users = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Fetch Discord usernames for each user
+        rows_html = ""
+        for user in discord_users:
+            display_name, username, avatar_url = await get_discord_username(user['discord_id'])
+            
+            if display_name:
+                name_html = f'<strong>{display_name}</strong> <span style="color:rgba(255,255,255,0.5)">@{username}</span>'
+            else:
+                name_html = f'<span style="color:rgba(255,255,255,0.5)">Unknown User</span>'
+            
+            avatar_html = f'<img src="{avatar_url}" style="width:32px;height:32px;border-radius:50%;margin-right:10px;vertical-align:middle">' if avatar_url else '<span style="display:inline-block;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.1);margin-right:10px;vertical-align:middle;text-align:center;line-height:32px">👤</span>'
+            
+            first_linked = user['first_linked'].strftime('%Y-%m-%d') if user['first_linked'] else 'N/A'
+            last_updated = user['last_updated'].strftime('%Y-%m-%d %H:%M') if user['last_updated'] else 'N/A'
+            
+            rows_html += f"""
+            <tr onclick="window.location='/admin/discord-users/{user['discord_id']}'" style="cursor:pointer">
+                <td>{avatar_html}{name_html}</td>
+                <td><code>{user['discord_id']}</code></td>
+                <td style="text-align:center"><span class="badge" style="background:#5865F2">{user['character_count']}</span></td>
+                <td>{first_linked}</td>
+                <td>{last_updated}</td>
+            </tr>
+            """
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot Admin - Discord Users</title>
+            <style>{ADMIN_CSS}</style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'discord-users')}
+                
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value">{len(discord_users)}</div>
+                        <div class="stat-label">Linked Discord Users</div>
+                    </div>
+                </div>
+                
+                <div class="card" style="margin-top:20px">
+                    <h2 style="margin-top:0">👥 Discord Users</h2>
+                    <p style="color:rgba(255,255,255,0.6);margin-bottom:20px">Click on a user to view their linked WoW characters</p>
+                    <div class="search-box">
+                        <input type="text" id="search" placeholder="Search by name or Discord ID..." onkeyup="filterTable()">
+                    </div>
+                    <div class="table-wrapper">
+                        {'<table id="userTable"><thead><tr><th>Discord User</th><th>Discord ID</th><th>Characters</th><th>First Linked</th><th>Last Updated</th></tr></thead><tbody>' + rows_html + '</tbody></table>' if discord_users else '<p style="text-align:center;color:rgba(255,255,255,0.5)">No Discord users have linked their Battle.net accounts yet.</p>'}
+                    </div>
+                </div>
+            </div>
+            <script>
+                function filterTable() {{
+                    const filter = document.getElementById('search').value.toLowerCase();
+                    const rows = document.querySelectorAll('#userTable tbody tr');
+                    rows.forEach(row => {{
+                        row.style.display = row.textContent.toLowerCase().includes(filter) ? '' : 'none';
+                    }});
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except Exception as e:
+        logger.error(f"Error fetching discord users: {e}")
+        return web.Response(text=f"Error: {e}", status=500)
+
+
+@require_auth
+async def handle_discord_user_detail(request):
+    """GET /admin/discord-users/{discord_id} - show characters for a specific Discord user"""
+    session = request['session']
+    discord_id = request.match_info.get('discord_id')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all characters for this Discord user
+        cursor.execute("""
+            SELECT 
+                character_name, realm_name, character_class,
+                character_race, faction, level, item_level,
+                created_at, last_updated
+            FROM wow_characters
+            WHERE discord_id = %s
+            ORDER BY item_level DESC NULLS LAST, level DESC
+        """, (discord_id,))
+        characters = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        if not characters:
+            raise web.HTTPFound('/admin/discord-users')
+        
+        # Get Discord user info
+        display_name, username, avatar_url = await get_discord_username(discord_id)
+        
+        if display_name:
+            user_html = f'''
+                <div style="display:flex;align-items:center;gap:20px;margin-bottom:30px">
+                    {'<img src="' + avatar_url + '" style="width:80px;height:80px;border-radius:50%">' if avatar_url else '<div style="width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;font-size:40px">👤</div>'}
+                    <div>
+                        <h1 style="margin:0">{display_name}</h1>
+                        <p style="margin:5px 0 0 0;color:rgba(255,255,255,0.6)">@{username} · <code>{discord_id}</code></p>
+                    </div>
+                </div>
+            '''
+        else:
+            user_html = f'''
+                <div style="margin-bottom:30px">
+                    <h1 style="margin:0">Discord User</h1>
+                    <p style="margin:5px 0 0 0;color:rgba(255,255,255,0.6)"><code>{discord_id}</code></p>
+                </div>
+            '''
+        
+        # Build character cards
+        chars_html = ""
+        for char in characters:
+            faction_color = "#0078ff" if char['faction'] == 'ALLIANCE' else "#ff0000" if char['faction'] == 'HORDE' else "#888"
+            faction_emoji = "🔵" if char['faction'] == 'ALLIANCE' else "🔴" if char['faction'] == 'HORDE' else "⚪"
+            ilvl = char['item_level'] or 'N/A'
+            updated = char['last_updated'].strftime('%Y-%m-%d %H:%M') if char['last_updated'] else 'N/A'
+            
+            chars_html += f"""
+            <div class="card" style="border-left:4px solid {faction_color}">
+                <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:15px">
+                    <div>
+                        <h3 style="margin:0">{faction_emoji} {char['character_name']}</h3>
+                        <p style="margin:5px 0;color:rgba(255,255,255,0.7)">{char['realm_name']}</p>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:24px;font-weight:700;color:#5865F2">{ilvl}</div>
+                        <div style="font-size:12px;color:rgba(255,255,255,0.5)">Item Level</div>
+                    </div>
+                </div>
+                <div style="display:flex;gap:20px;margin-top:15px;flex-wrap:wrap">
+                    <div><strong>Class:</strong> {char['character_class'] or 'N/A'}</div>
+                    <div><strong>Race:</strong> {char['character_race'] or 'N/A'}</div>
+                    <div><strong>Level:</strong> {char['level'] or 'N/A'}</div>
+                </div>
+                <p style="margin:15px 0 0 0;font-size:12px;color:rgba(255,255,255,0.4)">Last updated: {updated}</p>
+            </div>
+            """
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot Admin - User Characters</title>
+            <style>{ADMIN_CSS}</style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'discord-users')}
+                
+                <a href="/admin/discord-users" class="btn btn-secondary" style="margin-bottom:20px">← Back to Users</a>
+                
+                {user_html}
+                
+                <div class="stats" style="margin-bottom:20px">
+                    <div class="stat">
+                        <div class="stat-value">{len(characters)}</div>
+                        <div class="stat-label">Characters</div>
+                    </div>
+                </div>
+                
+                <div style="display:grid;gap:15px">
+                    {chars_html}
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except web.HTTPFound:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching user characters: {e}")
         return web.Response(text=f"Error: {e}", status=500)
 
 
@@ -2076,6 +2310,8 @@ def create_app(bot=None):
     app.router.add_get('/admin/change-password', handle_change_password_page)
     app.router.add_post('/admin/change-password', handle_change_password)
     app.router.add_get('/admin/characters', handle_characters_page)
+    app.router.add_get('/admin/discord-users', handle_discord_users_page)
+    app.router.add_get('/admin/discord-users/{discord_id}', handle_discord_user_detail)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
     app.router.add_post('/admin/users/new', handle_new_user)
