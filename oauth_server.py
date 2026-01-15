@@ -966,7 +966,7 @@ async def handle_generate_api_key(request):
 BLOCKED_PATHS = {
     '.env', '.git', '.secrets', 'phpinfo', '.php', 'swagger', 
     'config.json', 'server.js', '.credentials', 'backup', 
-    'admin', 'wp-admin', 'phpmyadmin', 'mysql', '.sql'
+    'wp-admin', 'phpmyadmin', 'mysql', '.sql'
 }
 
 @web.middleware
@@ -980,7 +980,7 @@ async def security_middleware(request, handler):
         return web.Response(text="Forbidden", status=403)
     
     # Only allow specific routes
-    allowed_prefixes = ('/authorize', '/callback', '/health', '/unlink', '/api/v1/')
+    allowed_prefixes = ('/authorize', '/callback', '/health', '/unlink', '/api/v1/', '/admin', '/characters')
     if not any(path.startswith(prefix) for prefix in allowed_prefixes):
         logger.warning(f"[SECURITY] Invalid path from {request.remote}: {request.path}")
         return web.Response(text="Not Found", status=404)
@@ -2004,6 +2004,11 @@ async def handle_characters_redirect(request):
     raise web.HTTPFound('/admin/characters')
 
 
+async def handle_admin_redirect(request):
+    """Redirect /admin to /admin/login"""
+    raise web.HTTPFound('/admin/login')
+
+
 def create_app(bot=None):
     """Create and configure the web application"""
     global discord_bot
@@ -2019,6 +2024,7 @@ def create_app(bot=None):
     app.router.add_get('/unlink', handle_unlink)
     
     # Admin panel routes
+    app.router.add_get('/admin', handle_admin_redirect)
     app.router.add_get('/admin/login', handle_admin_login_page)
     app.router.add_post('/admin/login', handle_admin_login)
     app.router.add_get('/admin/logout', handle_admin_logout)
