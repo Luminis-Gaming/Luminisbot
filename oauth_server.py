@@ -1161,6 +1161,51 @@ import bcrypt
 # Session storage for admin logins
 admin_sessions = {}
 
+
+def ensure_default_admin_exists():
+    """Create default admin user if no users exist in the database"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if admin_users table exists and has any users
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'admin_users'
+            );
+        """)
+        table_exists = cursor.fetchone()[0]
+        
+        if not table_exists:
+            logger.info("[ADMIN] admin_users table doesn't exist yet, skipping default user creation")
+            cursor.close()
+            conn.close()
+            return
+        
+        cursor.execute("SELECT COUNT(*) FROM admin_users")
+        user_count = cursor.fetchone()[0]
+        
+        if user_count == 0:
+            # Generate fresh bcrypt hash for 'admin'
+            default_password = 'admin'
+            password_hash = bcrypt.hashpw(default_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            
+            cursor.execute("""
+                INSERT INTO admin_users (username, password_hash, role, must_change_password, created_by)
+                VALUES (%s, %s, 'admin', true, 'system')
+            """, ('admin', password_hash))
+            
+            conn.commit()
+            logger.info("[ADMIN] ✓ Created default admin user (username: admin, password: admin)")
+        
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"[ADMIN] Error ensuring default admin exists: {e}")
+
+
 def generate_session_token():
     """Generate a secure session token"""
     return secrets.token_urlsafe(32)
@@ -2052,6 +2097,9 @@ def create_app(bot=None):
 
 async def start_oauth_server(bot=None, port=8000):
     """Start the OAuth web server"""
+    # Ensure default admin user exists
+    ensure_default_admin_exists()
+    
     app = create_app(bot)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -2068,4 +2116,5 @@ async def start_oauth_server(bot=None, port=8000):
 
 if __name__ == '__main__':
     """Run server standalone for testing"""
+    ensure_default_admin_exists()
     web.run_app(create_app(), host='0.0.0.0', port=8000)

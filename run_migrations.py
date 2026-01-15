@@ -293,6 +293,37 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ api_keys table ready")
         
+        # ============================================================================
+        # ADMIN USERS TABLE (for web panel authentication)
+        # ============================================================================
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+                must_change_password BOOLEAN NOT NULL DEFAULT false,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                last_login TIMESTAMP WITH TIME ZONE,
+                created_by VARCHAR(50)
+            );
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username);
+        """)
+        
+        # Note: Default admin user is created by oauth_server.py on startup
+        # with a freshly generated bcrypt hash (username: admin, password: admin)
+        
+        cursor.execute("""
+            GRANT ALL PRIVILEGES ON TABLE admin_users TO luminisbot;
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ admin_users table ready")
+        
         # Grant permissions
         cursor.execute("""
             GRANT ALL PRIVILEGES ON TABLE oauth_states TO luminisbot;
