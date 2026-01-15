@@ -1737,23 +1737,87 @@ async def handle_characters_page(request):
         return web.Response(text=f"Error: {e}", status=500)
 
 
-async def get_discord_username(discord_id):
-    """Fetch Discord username from the bot if available"""
+async def get_discord_username_from_bot(discord_id):
+    """Fetch Discord username from the bot if available (with timeout)"""
     try:
         if discord_bot and hasattr(discord_bot, 'get_user'):
+            # First try cache (instant)
             user = discord_bot.get_user(int(discord_id))
             if user:
                 return user.display_name, user.name, str(user.avatar.url) if user.avatar else None
-            # Try fetching if not in cache
+            
+            # Try fetching with timeout (don't hang the page)
             try:
-                user = await discord_bot.fetch_user(int(discord_id))
+                user = await asyncio.wait_for(
+                    discord_bot.fetch_user(int(discord_id)),
+                    timeout=2.0  # 2 second timeout
+                )
                 if user:
                     return user.display_name, user.name, str(user.avatar.url) if user.avatar else None
-            except:
+            except asyncio.TimeoutError:
+                logger.debug(f"Timeout fetching Discord user {discord_id}")
+            except Exception:
                 pass
     except Exception as e:
         logger.debug(f"Could not fetch Discord user {discord_id}: {e}")
     return None, None, None
+
+
+def get_stored_discord_info(cursor, discord_id):
+    """Get stored Discord info from database"""
+    cursor.execute("""
+        SELECT discord_display_name, discord_username, discord_avatar_url 
+        FROM wow_connections 
+        WHERE discord_id = %s
+    """, (discord_id,))
+    row = cursor.fetchone()
+    if row and row['discord_username']:
+        return row['discord_display_name'], row['discord_username'], row['discord_avatar_url']
+    return None, None, None
+
+
+def store_discord_info(discord_id, display_name, username, avatar_url):
+    """Store Discord info in database"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE wow_connections 
+            SET discord_display_name = %s, discord_username = %s, discord_avatar_url = %s
+            WHERE discord_id = %s
+        """, (display_name, username, avatar_url, discord_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.debug(f"Stored Discord info for {discord_id}: {display_name}")
+    except Exception as e:
+        logger.error(f"Error storing Discord info for {discord_id}: {e}")
+
+
+async def get_discord_username(discord_id):
+    """Get Discord username - checks database first, falls back to bot and stores result"""
+    try:
+        # First check database
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        display_name, username, avatar_url = get_stored_discord_info(cursor, discord_id)
+        cursor.close()
+        conn.close()
+        
+        if username:
+            return display_name, username, avatar_url
+        
+        # Fall back to bot fetch
+        display_name, username, avatar_url = await get_discord_username_from_bot(discord_id)
+        
+        # Store for future use if we got info
+        if username:
+            store_discord_info(discord_id, display_name, username, avatar_url)
+        
+        return display_name, username, avatar_url
+    except Exception as e:
+        logger.error(f"Error getting Discord username for {discord_id}: {e}")
+        return None, None, None
 
 
 @require_auth
@@ -1765,29 +1829,74 @@ async def handle_discord_users_page(request):
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Get all unique Discord users with character counts
+        # Get all unique Discord users with character counts AND stored Discord info
         cursor.execute("""
             SELECT 
-                discord_id,
+                wc.discord_id,
                 COUNT(*) as character_count,
-                MIN(created_at) as first_linked,
-                MAX(last_updated) as last_updated
-            FROM wow_characters
-            GROUP BY discord_id
-            ORDER BY last_updated DESC
+                MIN(wc.created_at) as first_linked,
+                MAX(wc.last_updated) as last_updated,
+                conn.discord_display_name,
+                conn.discord_username,
+                conn.discord_avatar_url,
+                STRING_AGG(wc.character_name, ', ') as character_names
+            FROM wow_characters wc
+            LEFT JOIN wow_connections conn ON wc.discord_id = conn.discord_id
+            GROUP BY wc.discord_id, conn.discord_display_name, conn.discord_username, conn.discord_avatar_url
+            ORDER BY MAX(wc.last_updated) DESC
         """)
         discord_users = cursor.fetchall()
         
         cursor.close()
         conn.close()
         
-        # Fetch Discord usernames for each user
+        # Find users without stored Discord info and fetch from bot
+        users_to_fetch = [u for u in discord_users if not u.get('discord_username')]
+        
+        if users_to_fetch:
+            try:
+                async def fetch_and_store(discord_id):
+                    display_name, username, avatar_url = await get_discord_username_from_bot(discord_id)
+                    if username:
+                        store_discord_info(discord_id, display_name, username, avatar_url)
+                    return discord_id, (display_name, username, avatar_url)
+                
+                # Fetch missing users with a 5 second overall timeout
+                tasks = [fetch_and_store(user['discord_id']) for user in users_to_fetch]
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=5.0
+                )
+                
+                # Update the user list with fetched info
+                fetched_info = {}
+                for result in results:
+                    if isinstance(result, tuple) and len(result) == 2:
+                        discord_id, info = result
+                        fetched_info[discord_id] = info
+                
+                for user in discord_users:
+                    if user['discord_id'] in fetched_info:
+                        info = fetched_info[user['discord_id']]
+                        user['discord_display_name'] = info[0]
+                        user['discord_username'] = info[1]
+                        user['discord_avatar_url'] = info[2]
+                        
+            except asyncio.TimeoutError:
+                logger.warning("Timeout fetching Discord usernames for new users")
+            except Exception as e:
+                logger.warning(f"Error fetching Discord usernames: {e}")
+        
         rows_html = ""
         for user in discord_users:
-            display_name, username, avatar_url = await get_discord_username(user['discord_id'])
+            display_name = user.get('discord_display_name')
+            username = user.get('discord_username')
+            avatar_url = user.get('discord_avatar_url')
             
-            if display_name:
+            if display_name and username:
                 name_html = f'<strong>{display_name}</strong> <span style="color:rgba(255,255,255,0.5)">@{username}</span>'
+            elif username:
+                name_html = f'<strong>@{username}</strong>'
             else:
                 name_html = f'<span style="color:rgba(255,255,255,0.5)">Unknown User</span>'
             
@@ -1795,9 +1904,10 @@ async def handle_discord_users_page(request):
             
             first_linked = user['first_linked'].strftime('%Y-%m-%d') if user['first_linked'] else 'N/A'
             last_updated = user['last_updated'].strftime('%Y-%m-%d %H:%M') if user['last_updated'] else 'N/A'
+            character_names = user.get('character_names', '') or ''
             
             rows_html += f"""
-            <tr onclick="window.location='/admin/discord-users/{user['discord_id']}'" style="cursor:pointer">
+            <tr onclick="window.location='/admin/discord-users/{user['discord_id']}'" style="cursor:pointer" data-characters="{character_names.lower()}">
                 <td>{avatar_html}{name_html}</td>
                 <td><code>{user['discord_id']}</code></td>
                 <td style="text-align:center"><span class="badge" style="background:#5865F2">{user['character_count']}</span></td>
@@ -1828,7 +1938,7 @@ async def handle_discord_users_page(request):
                     <h2 style="margin-top:0">👥 Discord Users</h2>
                     <p style="color:rgba(255,255,255,0.6);margin-bottom:20px">Click on a user to view their linked WoW characters</p>
                     <div class="search-box">
-                        <input type="text" id="search" placeholder="Search by name or Discord ID..." onkeyup="filterTable()">
+                        <input type="text" id="search" placeholder="Search by Discord name, ID, or character name..." onkeyup="filterTable()">
                     </div>
                     <div class="table-wrapper">
                         {'<table id="userTable"><thead><tr><th>Discord User</th><th>Discord ID</th><th>Characters</th><th>First Linked</th><th>Last Updated</th></tr></thead><tbody>' + rows_html + '</tbody></table>' if discord_users else '<p style="text-align:center;color:rgba(255,255,255,0.5)">No Discord users have linked their Battle.net accounts yet.</p>'}
@@ -1840,7 +1950,9 @@ async def handle_discord_users_page(request):
                     const filter = document.getElementById('search').value.toLowerCase();
                     const rows = document.querySelectorAll('#userTable tbody tr');
                     rows.forEach(row => {{
-                        row.style.display = row.textContent.toLowerCase().includes(filter) ? '' : 'none';
+                        const textMatch = row.textContent.toLowerCase().includes(filter);
+                        const charMatch = (row.dataset.characters || '').includes(filter);
+                        row.style.display = (textMatch || charMatch) ? '' : 'none';
                     }});
                 }}
             </script>

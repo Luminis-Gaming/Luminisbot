@@ -56,6 +56,33 @@ def run_migrations():
             );
         """)
         
+        # Add discord username/avatar columns if they don't exist
+        cursor.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_connections' AND column_name = 'discord_username'
+                ) THEN
+                    ALTER TABLE wow_connections ADD COLUMN discord_username TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_connections' AND column_name = 'discord_display_name'
+                ) THEN
+                    ALTER TABLE wow_connections ADD COLUMN discord_display_name TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_connections' AND column_name = 'discord_avatar_url'
+                ) THEN
+                    ALTER TABLE wow_connections ADD COLUMN discord_avatar_url TEXT;
+                END IF;
+            END $$;
+        """)
+        
         logger.info("[MIGRATIONS] ✓ wow_connections table ready")
         
         # Create wow_characters table
