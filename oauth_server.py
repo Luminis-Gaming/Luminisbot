@@ -2254,34 +2254,68 @@ async def handle_events_page(request):
                     reservations_by_event[event_id] = []
                 reservations_by_event[event_id].append(dict(reservation))
         
-        # For users without stored Discord info, try to get it from the bot's cache
-        if discord_bot:
-            # Process signups
-            for event_id, signups in signups_by_event.items():
-                for signup in signups:
-                    if not signup.get('discord_display_name') and not signup.get('discord_username'):
+        # For users without stored Discord info, try to get it from the bot
+        # Collect all discord IDs that need fetching
+        discord_ids_to_fetch = set()
+        
+        for event_id, signups in signups_by_event.items():
+            for signup in signups:
+                if not signup.get('discord_display_name') and not signup.get('discord_username'):
+                    discord_ids_to_fetch.add(signup['discord_id'])
+        
+        for event_id, reservations in reservations_by_event.items():
+            for reservation in reservations:
+                if not reservation.get('discord_display_name') and not reservation.get('discord_username'):
+                    discord_ids_to_fetch.add(reservation['discord_id'])
+        
+        # Fetch Discord user info for all IDs at once
+        discord_user_cache = {}
+        if discord_bot and discord_ids_to_fetch:
+            for discord_id in discord_ids_to_fetch:
+                try:
+                    # First try cache (instant)
+                    user = discord_bot.get_user(int(discord_id))
+                    if user:
+                        discord_user_cache[discord_id] = {
+                            'display_name': user.display_name,
+                            'username': user.name
+                        }
+                    else:
+                        # Fetch from API with timeout
                         try:
-                            discord_id = signup['discord_id']
-                            # Try bot's user cache (instant, no API call)
-                            user = discord_bot.get_user(int(discord_id))
+                            user = await asyncio.wait_for(
+                                discord_bot.fetch_user(int(discord_id)),
+                                timeout=2.0
+                            )
                             if user:
-                                signup['discord_display_name'] = user.display_name
-                                signup['discord_username'] = user.name
-                        except Exception:
-                            pass  # Keep Discord ID as fallback
-            
-            # Process reservations
-            for event_id, reservations in reservations_by_event.items():
-                for reservation in reservations:
-                    if not reservation.get('discord_display_name') and not reservation.get('discord_username'):
-                        try:
-                            discord_id = reservation['discord_id']
-                            user = discord_bot.get_user(int(discord_id))
-                            if user:
-                                reservation['discord_display_name'] = user.display_name
-                                reservation['discord_username'] = user.name
+                                discord_user_cache[discord_id] = {
+                                    'display_name': user.display_name,
+                                    'username': user.name
+                                }
+                        except asyncio.TimeoutError:
+                            logger.debug(f"Timeout fetching Discord user {discord_id}")
                         except Exception:
                             pass
+                except Exception:
+                    pass
+        
+        # Apply fetched Discord info to signups
+        for event_id, signups in signups_by_event.items():
+            for signup in signups:
+                if not signup.get('discord_display_name') and not signup.get('discord_username'):
+                    discord_id = signup['discord_id']
+                    if discord_id in discord_user_cache:
+                        signup['discord_display_name'] = discord_user_cache[discord_id]['display_name']
+                        signup['discord_username'] = discord_user_cache[discord_id]['username']
+        
+        # Apply fetched Discord info to reservations
+        for event_id, reservations in reservations_by_event.items():
+            for reservation in reservations:
+                if not reservation.get('discord_display_name') and not reservation.get('discord_username'):
+                    discord_id = reservation['discord_id']
+                    if discord_id in discord_user_cache:
+                        reservation['discord_display_name'] = discord_user_cache[discord_id]['display_name']
+                        reservation['discord_username'] = discord_user_cache[discord_id]['username']
         
         # Get stats
         cursor.execute("SELECT COUNT(*) as total FROM raid_events")
@@ -2452,10 +2486,10 @@ async def handle_events_page(request):
                 .event-card {{ transition: all 0.2s; }}
                 .event-card:hover {{ background: rgba(255,255,255,0.15); }}
                 .event-details {{ border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px; margin-top: 15px; }}
-                .filters {{ display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-end; }}
+                .filters {{ display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }}
                 .filter-group {{ display: flex; flex-direction: column; gap: 5px; }}
                 .filter-group label {{ font-size: 12px; color: rgba(255,255,255,0.7); }}
-                .filter-group input {{ padding: 10px 15px; min-width: 150px; }}
+                .filter-group input {{ padding: 10px 15px; min-width: 150px; margin-bottom: 0; }}
             </style>
         </head>
         <body>
