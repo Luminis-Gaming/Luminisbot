@@ -1561,6 +1561,7 @@ def render_nav(session, active='characters'):
     <nav class="nav">
         <a href="/admin/characters" class="{'active' if active == 'characters' else ''}">🎮 All Characters</a>
         <a href="/admin/discord-users" class="{'active' if active == 'discord-users' else ''}">👥 Discord Users</a>
+        <a href="/admin/events" class="{'active' if active == 'events' else ''}">📅 Events</a>
         {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">⚙️ Admin Users</a>' if is_admin else ''}
         <a href="/admin/change-password" class="{'active' if active == 'password' else ''}">🔑 Password</a>
         <div class="spacer"></div>
@@ -2133,6 +2134,325 @@ async def handle_discord_user_detail(request):
         return web.Response(text=f"Error: {e}", status=500)
 
 
+# ============================================================================
+# Events History Page
+# ============================================================================
+
+@require_auth
+async def handle_events_page(request):
+    """GET /admin/events - show raid events history with filtering"""
+    session = request['session']
+    
+    # Get filter parameters
+    from_date = request.query.get('from', '')
+    to_date = request.query.get('to', '')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Build query with optional date filters
+        query = """
+            SELECT 
+                e.id,
+                e.guild_id,
+                e.title,
+                e.event_date,
+                e.event_time,
+                e.created_by,
+                e.created_at,
+                e.log_url,
+                e.log_detected_at,
+                COUNT(rs.id) as signup_count
+            FROM raid_events e
+            LEFT JOIN raid_signups rs ON e.id = rs.event_id
+            WHERE 1=1
+        """
+        params = []
+        
+        if from_date:
+            query += " AND e.event_date >= %s"
+            params.append(from_date)
+        
+        if to_date:
+            query += " AND e.event_date <= %s"
+            params.append(to_date)
+        
+        query += """
+            GROUP BY e.id
+            ORDER BY e.event_date DESC, e.event_time DESC
+            LIMIT 100
+        """
+        
+        cursor.execute(query, params)
+        events = cursor.fetchall()
+        
+        # Get all signups for these events with Discord user info
+        event_ids = [e['id'] for e in events]
+        signups_by_event = {}
+        
+        if event_ids:
+            cursor.execute("""
+                SELECT 
+                    rs.event_id,
+                    rs.discord_id,
+                    rs.character_name,
+                    rs.realm_slug,
+                    rs.character_class,
+                    rs.role,
+                    rs.spec,
+                    rs.status,
+                    rs.signed_at,
+                    wc.discord_display_name,
+                    wc.discord_username
+                FROM raid_signups rs
+                LEFT JOIN wow_connections wc ON rs.discord_id = wc.discord_id
+                WHERE rs.event_id = ANY(%s)
+                ORDER BY 
+                    CASE rs.status
+                        WHEN 'signed' THEN 1
+                        WHEN 'late' THEN 2
+                        WHEN 'tentative' THEN 3
+                        WHEN 'benched' THEN 4
+                        WHEN 'absent' THEN 5
+                    END,
+                    rs.role, rs.character_name
+            """, (event_ids,))
+            
+            for signup in cursor.fetchall():
+                event_id = signup['event_id']
+                if event_id not in signups_by_event:
+                    signups_by_event[event_id] = []
+                signups_by_event[event_id].append(dict(signup))
+        
+        # For users without stored Discord info, try to get it from the bot's cache
+        if discord_bot:
+            for event_id, signups in signups_by_event.items():
+                for signup in signups:
+                    if not signup.get('discord_display_name') and not signup.get('discord_username'):
+                        try:
+                            discord_id = signup['discord_id']
+                            # Try bot's user cache (instant, no API call)
+                            user = discord_bot.get_user(int(discord_id))
+                            if user:
+                                signup['discord_display_name'] = user.display_name
+                                signup['discord_username'] = user.name
+                        except Exception:
+                            pass  # Keep Discord ID as fallback
+        
+        # Get stats
+        cursor.execute("SELECT COUNT(*) as total FROM raid_events")
+        total_events = cursor.fetchone()['total']
+        
+        cursor.close()
+        conn.close()
+        
+        # Build events HTML
+        events_html = ""
+        for event in events:
+            event_id = event['id']
+            signups = signups_by_event.get(event_id, [])
+            
+            event_date = event['event_date'].strftime('%Y-%m-%d') if event['event_date'] else 'N/A'
+            event_time = event['event_time'].strftime('%H:%M') if event['event_time'] else 'N/A'
+            
+            # Determine if event is in the past, today, or future
+            from datetime import date
+            today = date.today()
+            if event['event_date'] < today:
+                date_badge = '<span class="badge" style="background:rgba(255,255,255,0.2)">Past</span>'
+            elif event['event_date'] == today:
+                date_badge = '<span class="badge" style="background:#ffc107;color:#000">Today</span>'
+            else:
+                date_badge = '<span class="badge" style="background:#28a745">Upcoming</span>'
+            
+            # Log link
+            log_html = ''
+            if event['log_url']:
+                log_html = f'<a href="{event["log_url"]}" target="_blank" class="btn btn-sm" style="background:#f97316;color:#fff;margin-left:10px">📊 View Logs</a>'
+            
+            # Build signups table
+            signups_html = ""
+            if signups:
+                signups_html = """
+                <table style="margin-top:15px;font-size:14px">
+                    <thead>
+                        <tr>
+                            <th>Character</th>
+                            <th>Discord User</th>
+                            <th>Class</th>
+                            <th>Role</th>
+                            <th>Spec</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                """
+                for signup in signups:
+                    # Get Discord display name
+                    discord_display = ''
+                    if signup.get('discord_display_name'):
+                        discord_display = f"{signup['discord_display_name']}"
+                        if signup.get('discord_username'):
+                            discord_display += f" <span style='color:rgba(255,255,255,0.5)'>@{signup['discord_username']}</span>"
+                    elif signup.get('discord_username'):
+                        discord_display = f"@{signup['discord_username']}"
+                    else:
+                        discord_display = f"<code style='font-size:11px'>{signup['discord_id']}</code>"
+                    
+                    # Status badge colors
+                    status = signup['status'] or 'signed'
+                    status_colors = {
+                        'signed': '#28a745',
+                        'late': '#ffc107',
+                        'tentative': '#17a2b8',
+                        'benched': '#6c757d',
+                        'absent': '#dc3545'
+                    }
+                    status_color = status_colors.get(status, '#6c757d')
+                    
+                    # Role emoji
+                    role_emojis = {'tank': '🛡️', 'healer': '💚', 'dps': '⚔️'}
+                    role_emoji = role_emojis.get(signup['role'], '')
+                    
+                    signups_html += f"""
+                    <tr>
+                        <td><strong>{signup['character_name']}</strong> <span style="color:rgba(255,255,255,0.5)">({signup['realm_slug']})</span></td>
+                        <td>{discord_display}</td>
+                        <td>{signup['character_class'] or 'N/A'}</td>
+                        <td>{role_emoji} {(signup['role'] or 'N/A').capitalize()}</td>
+                        <td>{signup['spec'] or 'N/A'}</td>
+                        <td><span class="badge" style="background:{status_color}">{status.capitalize()}</span></td>
+                    </tr>
+                    """
+                signups_html += "</tbody></table>"
+            else:
+                signups_html = '<p style="color:rgba(255,255,255,0.5);margin-top:15px">No signups for this event</p>'
+            
+            events_html += f"""
+            <div class="card event-card" data-event-id="{event_id}">
+                <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:10px">
+                    <div>
+                        <h3 style="margin:0">{event['title']}</h3>
+                        <p style="margin:5px 0;color:rgba(255,255,255,0.7)">
+                            📅 {event_date} at {event_time} {date_badge}
+                        </p>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <span class="badge" style="background:#5865F2;font-size:14px">{event['signup_count']} signups</span>
+                        {log_html}
+                        <button class="btn btn-secondary btn-sm toggle-details" onclick="toggleDetails({event_id})">
+                            Show Details ▼
+                        </button>
+                    </div>
+                </div>
+                <div class="event-details" id="details-{event_id}" style="display:none">
+                    {signups_html}
+                </div>
+            </div>
+            """
+        
+        if not events:
+            events_html = '<div class="card"><p style="text-align:center;color:rgba(255,255,255,0.5)">No events found for the selected date range.</p></div>'
+        
+        # Set default dates if not provided
+        from datetime import timedelta
+        if not from_date:
+            from_date = (date.today() - timedelta(days=30)).isoformat()
+        if not to_date:
+            to_date = (date.today() + timedelta(days=30)).isoformat()
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot Admin - Events History</title>
+            <style>
+                {ADMIN_CSS}
+                .event-card {{ transition: all 0.2s; }}
+                .event-card:hover {{ background: rgba(255,255,255,0.15); }}
+                .event-details {{ border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px; margin-top: 15px; }}
+                .filters {{ display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 20px; align-items: flex-end; }}
+                .filter-group {{ display: flex; flex-direction: column; gap: 5px; }}
+                .filter-group label {{ font-size: 12px; color: rgba(255,255,255,0.7); }}
+                .filter-group input {{ padding: 10px 15px; min-width: 150px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'events')}
+                
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value">{total_events}</div>
+                        <div class="stat-label">Total Events</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">{len(events)}</div>
+                        <div class="stat-label">Showing</div>
+                    </div>
+                </div>
+                
+                <div class="card" style="margin-top:20px">
+                    <h2 style="margin-top:0">📅 Events History</h2>
+                    <p style="color:rgba(255,255,255,0.6);margin-bottom:20px">View raid events with signups and Warcraft Logs</p>
+                    
+                    <form method="GET" action="/admin/events" class="filters">
+                        <div class="filter-group">
+                            <label>From Date</label>
+                            <input type="date" name="from" value="{from_date}">
+                        </div>
+                        <div class="filter-group">
+                            <label>To Date</label>
+                            <input type="date" name="to" value="{to_date}">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Apply Filter</button>
+                        <a href="/admin/events" class="btn btn-secondary">Reset</a>
+                    </form>
+                </div>
+                
+                <div style="margin-top:20px;display:flex;flex-direction:column;gap:15px">
+                    {events_html}
+                </div>
+            </div>
+            
+            <script>
+                function toggleDetails(eventId) {{
+                    const details = document.getElementById('details-' + eventId);
+                    const btn = document.querySelector('[data-event-id="' + eventId + '"] .toggle-details');
+                    
+                    if (details.style.display === 'none') {{
+                        details.style.display = 'block';
+                        btn.textContent = 'Hide Details ▲';
+                    }} else {{
+                        details.style.display = 'none';
+                        btn.textContent = 'Show Details ▼';
+                    }}
+                }}
+                
+                // Expand all / collapse all functionality
+                function expandAll() {{
+                    document.querySelectorAll('.event-details').forEach(el => el.style.display = 'block');
+                    document.querySelectorAll('.toggle-details').forEach(btn => btn.textContent = 'Hide Details ▲');
+                }}
+                
+                function collapseAll() {{
+                    document.querySelectorAll('.event-details').forEach(el => el.style.display = 'none');
+                    document.querySelectorAll('.toggle-details').forEach(btn => btn.textContent = 'Show Details ▼');
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except Exception as e:
+        logger.error(f"Error fetching events: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.Response(text=f"Error: {e}", status=500)
+
+
 @require_admin
 async def handle_users_page(request):
     """GET /admin/users - manage users (admin only)"""
@@ -2548,6 +2868,7 @@ def create_app(bot=None):
     app.router.add_get('/admin/discord-users', handle_discord_users_page)
     app.router.add_get('/admin/discord-users/{discord_id}', handle_discord_user_detail)
     app.router.add_post('/admin/api/refresh-discord-info/{discord_id}', handle_refresh_discord_info)
+    app.router.add_get('/admin/events', handle_events_page)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
     app.router.add_post('/admin/users/new', handle_new_user)
