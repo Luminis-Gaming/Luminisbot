@@ -2520,8 +2520,14 @@ async def handle_events_page(request):
                             <label>To Date</label>
                             <input type="date" name="to" value="{to_date}">
                         </div>
-                        <button type="submit" class="btn btn-primary">Apply Filter</button>
-                        <a href="/admin/events" class="btn btn-secondary">Reset</a>
+                        <div class="filter-group">
+                            <label>&nbsp;</label>
+                            <button type="submit" class="btn btn-primary">Apply Filter</button>
+                        </div>
+                        <div class="filter-group">
+                            <label>&nbsp;</label>
+                            <a href="/admin/events" class="btn btn-secondary">Reset</a>
+                        </div>
                     </form>
                 </div>
                 
