@@ -1298,7 +1298,7 @@ body {
 }
 h1, h2 { margin: 0 0 20px 0; }
 .logo { font-size: 48px; margin-bottom: 20px; }
-input[type="text"], input[type="password"], select {
+input[type="text"], input[type="password"], input[type="date"], select {
     width: 100%;
     padding: 14px;
     border: 2px solid rgba(255,255,255,0.2);
@@ -1307,6 +1307,13 @@ input[type="text"], input[type="password"], select {
     color: #fff;
     font-size: 16px;
     margin-bottom: 15px;
+}
+select {
+    background: #2a2a4a;
+}
+select option {
+    background: #2a2a4a;
+    color: #fff;
 }
 input:focus, select:focus { outline: none; border-color: #5865F2; }
 input::placeholder { color: rgba(255,255,255,0.5); }
@@ -2190,8 +2197,10 @@ async def handle_events_page(request):
         # Get all signups for these events with Discord user info
         event_ids = [e['id'] for e in events]
         signups_by_event = {}
+        reservations_by_event = {}
         
         if event_ids:
+            # Get character signups
             cursor.execute("""
                 SELECT 
                     rs.event_id,
@@ -2224,9 +2233,30 @@ async def handle_events_page(request):
                 if event_id not in signups_by_event:
                     signups_by_event[event_id] = []
                 signups_by_event[event_id].append(dict(signup))
+            
+            # Get emoji reservations (✅ reactions without character signup)
+            cursor.execute("""
+                SELECT 
+                    rr.event_id,
+                    rr.discord_id,
+                    rr.added_at,
+                    wc.discord_display_name,
+                    wc.discord_username
+                FROM raid_reservations rr
+                LEFT JOIN wow_connections wc ON rr.discord_id = wc.discord_id
+                WHERE rr.event_id = ANY(%s)
+                ORDER BY rr.added_at
+            """, (event_ids,))
+            
+            for reservation in cursor.fetchall():
+                event_id = reservation['event_id']
+                if event_id not in reservations_by_event:
+                    reservations_by_event[event_id] = []
+                reservations_by_event[event_id].append(dict(reservation))
         
         # For users without stored Discord info, try to get it from the bot's cache
         if discord_bot:
+            # Process signups
             for event_id, signups in signups_by_event.items():
                 for signup in signups:
                     if not signup.get('discord_display_name') and not signup.get('discord_username'):
@@ -2239,6 +2269,19 @@ async def handle_events_page(request):
                                 signup['discord_username'] = user.name
                         except Exception:
                             pass  # Keep Discord ID as fallback
+            
+            # Process reservations
+            for event_id, reservations in reservations_by_event.items():
+                for reservation in reservations:
+                    if not reservation.get('discord_display_name') and not reservation.get('discord_username'):
+                        try:
+                            discord_id = reservation['discord_id']
+                            user = discord_bot.get_user(int(discord_id))
+                            if user:
+                                reservation['discord_display_name'] = user.display_name
+                                reservation['discord_username'] = user.name
+                        except Exception:
+                            pass
         
         # Get stats
         cursor.execute("SELECT COUNT(*) as total FROM raid_events")
@@ -2252,6 +2295,7 @@ async def handle_events_page(request):
         for event in events:
             event_id = event['id']
             signups = signups_by_event.get(event_id, [])
+            reservations = reservations_by_event.get(event_id, [])
             
             event_date = event['event_date'].strftime('%Y-%m-%d') if event['event_date'] else 'N/A'
             event_time = event['event_time'].strftime('%H:%M') if event['event_time'] else 'N/A'
@@ -2327,7 +2371,43 @@ async def handle_events_page(request):
                     """
                 signups_html += "</tbody></table>"
             else:
-                signups_html = '<p style="color:rgba(255,255,255,0.5);margin-top:15px">No signups for this event</p>'
+                signups_html = '<p style="color:rgba(255,255,255,0.5);margin-top:15px">No character signups for this event</p>'
+            
+            # Build reservations section (✅ emoji reactions)
+            reservations_html = ""
+            if reservations:
+                reservations_html = """
+                <div style="margin-top:20px;padding-top:15px;border-top:1px solid rgba(255,255,255,0.1)">
+                    <h4 style="margin:0 0 10px 0;font-size:14px;color:rgba(255,255,255,0.7)">✅ Interested (no character selected)</h4>
+                    <div style="display:flex;flex-wrap:wrap;gap:10px">
+                """
+                for reservation in reservations:
+                    # Get Discord display name
+                    discord_display = ''
+                    if reservation.get('discord_display_name'):
+                        discord_display = f"{reservation['discord_display_name']}"
+                        if reservation.get('discord_username'):
+                            discord_display += f" (@{reservation['discord_username']})"
+                    elif reservation.get('discord_username'):
+                        discord_display = f"@{reservation['discord_username']}"
+                    else:
+                        discord_display = f"ID: {reservation['discord_id']}"
+                    
+                    reservations_html += f"""
+                    <span class="badge" style="background:rgba(255,255,255,0.15);padding:8px 12px;font-size:13px">{discord_display}</span>
+                    """
+                reservations_html += "</div></div>"
+            
+            # Combine signups and reservations
+            details_content = signups_html + reservations_html
+            if not signups and not reservations:
+                details_content = '<p style="color:rgba(255,255,255,0.5);margin-top:15px">No signups or reservations for this event</p>'
+            
+            # Calculate total participants for badge
+            total_participants = event['signup_count'] + len(reservations)
+            participant_text = f"{event['signup_count']} signups"
+            if reservations:
+                participant_text += f" + {len(reservations)} interested"
             
             events_html += f"""
             <div class="card event-card" data-event-id="{event_id}">
@@ -2339,7 +2419,7 @@ async def handle_events_page(request):
                         </p>
                     </div>
                     <div style="display:flex;align-items:center;gap:10px">
-                        <span class="badge" style="background:#5865F2;font-size:14px">{event['signup_count']} signups</span>
+                        <span class="badge" style="background:#5865F2;font-size:14px">{participant_text}</span>
                         {log_html}
                         <button class="btn btn-secondary btn-sm toggle-details" onclick="toggleDetails({event_id})">
                             Show Details ▼
@@ -2347,7 +2427,7 @@ async def handle_events_page(request):
                     </div>
                 </div>
                 <div class="event-details" id="details-{event_id}" style="display:none">
-                    {signups_html}
+                    {details_content}
                 </div>
             </div>
             """
