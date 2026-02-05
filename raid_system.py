@@ -895,6 +895,147 @@ def count_signups_by_role(event_id: int, status: str = 'signed'):
     return counts
 
 # ============================================================================
+# RAID REMINDER FUNCTIONS
+# ============================================================================
+
+def add_raid_reminder(event_id: int, discord_id: str, reminder_time: datetime):
+    """
+    Add a reminder for a user for a raid event.
+    Uses INSERT ... ON CONFLICT to prevent duplicates.
+    
+    Args:
+        event_id: The raid event ID
+        discord_id: Discord user ID to remind
+        reminder_time: When to send the reminder (typically event time - 1 hour)
+    
+    Returns:
+        reminder_id: ID of the created/existing reminder
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO raid_reminders (event_id, discord_id, reminder_time, sent)
+        VALUES (%s, %s, %s, FALSE)
+        ON CONFLICT (event_id, discord_id) 
+        DO UPDATE SET reminder_time = EXCLUDED.reminder_time, 
+                      sent = FALSE,
+                      sent_at = NULL
+        RETURNING id
+    """, (event_id, discord_id, reminder_time))
+    
+    reminder_id = cursor.fetchone()[0]
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return reminder_id
+
+def get_pending_reminders(current_time: datetime):
+    """
+    Get all pending reminders that should be sent now.
+    Only returns reminders that haven't been sent and are due.
+    
+    Args:
+        current_time: Current time to check against
+    
+    Returns:
+        List of reminder dicts with event and user information
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT 
+            r.id as reminder_id,
+            r.event_id,
+            r.discord_id,
+            r.reminder_time,
+            e.title as event_title,
+            e.event_date,
+            e.event_time,
+            e.guild_id,
+            e.channel_id,
+            e.message_id
+        FROM raid_reminders r
+        JOIN raid_events e ON r.event_id = e.id
+        WHERE r.sent = FALSE 
+        AND r.reminder_time <= %s
+        ORDER BY r.reminder_time
+    """, (current_time,))
+    
+    reminders = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return reminders
+
+def mark_reminder_sent(reminder_id: int):
+    """
+    Mark a reminder as sent to prevent duplicate sends.
+    
+    Args:
+        reminder_id: ID of the reminder to mark as sent
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        UPDATE raid_reminders
+        SET sent = TRUE, sent_at = NOW()
+        WHERE id = %s
+    """, (reminder_id,))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def remove_raid_reminder(event_id: int, discord_id: str):
+    """
+    Remove a reminder for a user (if they change their mind).
+    
+    Args:
+        event_id: The raid event ID
+        discord_id: Discord user ID
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        DELETE FROM raid_reminders
+        WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_user_reminder(event_id: int, discord_id: str):
+    """
+    Check if a user has a reminder set for an event.
+    
+    Args:
+        event_id: The raid event ID
+        discord_id: Discord user ID
+    
+    Returns:
+        Reminder dict if exists, None otherwise
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT * FROM raid_reminders
+        WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+    
+    reminder = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    return reminder
+
+# ============================================================================
 # EMBED GENERATION
 # ============================================================================
 
@@ -1332,6 +1473,11 @@ class RaidButtonsView(View):
     async def changerole_button(self, interaction: discord.Interaction, button: Button):
         """Handle change role button click"""
         await handle_change_role_click(interaction)
+    
+    @discord.ui.button(label="Remind Me", style=discord.ButtonStyle.secondary, custom_id="raid:remindme", emoji="🔔", row=1)
+    async def remindme_button(self, interaction: discord.Interaction, button: Button):
+        """Handle remind me button click"""
+        await handle_remind_me_click(interaction)
     
     @discord.ui.button(label="Admin Panel", style=discord.ButtonStyle.secondary, custom_id="raid:admin", emoji="⚙️", row=1)
     async def admin_button(self, interaction: discord.Interaction, button: Button):
@@ -2375,6 +2521,59 @@ class AdminPanelView(View):
             await interaction.followup.send(output_text, ephemeral=True)
 
 
+class ReminderConfirmView(View):
+    """View for confirming raid reminder preference"""
+    
+    def __init__(self, event_id, event_datetime):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        self.event_datetime = event_datetime
+    
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success, emoji="✅")
+    async def yes_button(self, interaction: discord.Interaction, button: Button):
+        """User wants to be reminded"""
+        discord_id = str(interaction.user.id)
+        
+        # Calculate reminder time (1 hour before event)
+        from datetime import timedelta
+        reminder_time = self.event_datetime - timedelta(hours=1)
+        
+        # Check if reminder time is in the past
+        now = datetime.now(timezone.utc)
+        if reminder_time <= now:
+            await interaction.response.send_message(
+                "❌ Cannot set a reminder for this event - it starts in less than 1 hour!",
+                ephemeral=True
+            )
+            self.stop()
+            return
+        
+        # Add reminder to database
+        try:
+            add_raid_reminder(self.event_id, discord_id, reminder_time)
+            await interaction.response.send_message(
+                "✅ Reminder set! You'll receive a DM approximately 1 hour before the raid starts.",
+                ephemeral=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to add reminder: {e}")
+            await interaction.response.send_message(
+                "❌ Failed to set reminder. Please try again later.",
+                ephemeral=True
+            )
+        
+        self.stop()
+    
+    @discord.ui.button(label="No", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def no_button(self, interaction: discord.Interaction, button: Button):
+        """User doesn't want to be reminded"""
+        await interaction.response.send_message(
+            "Reminder cancelled.",
+            ephemeral=True
+        )
+        self.stop()
+
+
 # ============================================================================
 # BUTTON HANDLER FUNCTIONS
 # ============================================================================
@@ -2449,6 +2648,47 @@ async def handle_status_change(interaction: discord.Interaction, new_status: str
     
     await interaction.response.send_message(
         f"✅ Status updated to **{status_names[new_status]}**!",
+        ephemeral=True
+    )
+
+
+async def handle_remind_me_click(interaction: discord.Interaction):
+    """Handle remind me button click"""
+    discord_id = str(interaction.user.id)
+    
+    # Get event
+    event = get_raid_event(interaction.message.id)
+    if not event:
+        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
+        return
+    
+    event_id = event['id']
+    
+    # Check if user already has a reminder
+    existing_reminder = get_user_reminder(event_id, discord_id)
+    if existing_reminder and not existing_reminder['sent']:
+        # User already has a pending reminder
+        await interaction.response.send_message(
+            "ℹ️ You already have a reminder set for this event!\n\n"
+            "You'll receive a DM approximately 1 hour before the raid starts.",
+            ephemeral=True
+        )
+        return
+    
+    # Combine event date and time into a datetime object
+    event_date = event['event_date']
+    event_time = event['event_time']
+    
+    # Create timezone-aware datetime
+    tz = ZoneInfo(DEFAULT_TIMEZONE)
+    event_datetime_local = datetime.combine(event_date, event_time)
+    event_datetime = event_datetime_local.replace(tzinfo=tz)
+    
+    # Show confirmation dialog
+    view = ReminderConfirmView(event_id, event_datetime)
+    await interaction.response.send_message(
+        "🔔 Do you want to be reminded of this event approximately an hour prior?",
+        view=view,
         ephemeral=True
     )
 

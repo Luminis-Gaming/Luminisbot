@@ -27,7 +27,8 @@ from run_migrations import run_migrations
 from raid_system import (
     RaidButtonsView, generate_raid_embed, create_raid_event,
     get_raid_event, add_raid_reservation, remove_raid_reservation,
-    get_user_signup, refresh_event_embed, backfill_reservations_for_existing_events
+    get_user_signup, refresh_event_embed, backfill_reservations_for_existing_events,
+    get_pending_reminders, mark_reminder_sent
 )
 
 # --- Load All Secrets from Environment ---
@@ -170,6 +171,77 @@ async def update_started_events():
     await update_started_events(client)
 
 
+@tasks.loop(minutes=2)
+async def check_raid_reminders():
+    """Check for pending raid reminders and send DMs to users."""
+    try:
+        from datetime import datetime, timezone
+        
+        # Get current time in UTC
+        current_time = datetime.now(timezone.utc)
+        
+        # Get all pending reminders that are due
+        pending_reminders = get_pending_reminders(current_time)
+        
+        if not pending_reminders:
+            return  # No reminders to send
+        
+        print(f"[REMINDERS] Found {len(pending_reminders)} pending reminder(s) to send")
+        
+        for reminder in pending_reminders:
+            try:
+                # Get user
+                user = await client.fetch_user(int(reminder['discord_id']))
+                if not user:
+                    print(f"[REMINDERS] Could not find user {reminder['discord_id']}")
+                    # Mark as sent anyway to avoid retrying
+                    mark_reminder_sent(reminder['reminder_id'])
+                    continue
+                
+                # Format event information
+                event_title = reminder['event_title']
+                event_date = reminder['event_date']
+                event_time = reminder['event_time']
+                
+                # Create Discord timestamp for automatic timezone conversion
+                from zoneinfo import ZoneInfo
+                from raid_system import DEFAULT_TIMEZONE
+                tz = ZoneInfo(DEFAULT_TIMEZONE)
+                event_datetime_local = datetime.combine(event_date, event_time)
+                event_datetime = event_datetime_local.replace(tzinfo=tz)
+                discord_timestamp = f"<t:{int(event_datetime.timestamp())}:F>"
+                
+                # Create message with link to event
+                guild_id = reminder['guild_id']
+                channel_id = reminder['channel_id']
+                message_id = reminder['message_id']
+                message_link = f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+                
+                # Send DM
+                try:
+                    await user.send(
+                        f"🔔 **Raid Reminder!**\n\n"
+                        f"The raid **{event_title}** is starting soon!\n\n"
+                        f"**Time:** {discord_timestamp}\n\n"
+                        f"[View Event]({message_link})"
+                    )
+                    print(f"[REMINDERS] Sent reminder to {user.name} for event '{event_title}'")
+                except discord.Forbidden:
+                    print(f"[REMINDERS] Could not DM user {user.name} - DMs disabled")
+                except Exception as e:
+                    print(f"[REMINDERS] Failed to send DM to {user.name}: {e}")
+                
+                # Mark reminder as sent (even if DM failed, to avoid spam retries)
+                mark_reminder_sent(reminder['reminder_id'])
+                
+            except Exception as e:
+                print(f"[REMINDERS] Error processing reminder {reminder['reminder_id']}: {e}")
+                # Don't mark as sent if there was an error, will retry next loop
+        
+    except Exception as e:
+        print(f"[ERROR] REMINDERS: Exception during reminder check: {e}")
+
+
 # --- Discord Event Handlers ---
 @client.event
 async def on_ready():
@@ -194,6 +266,8 @@ async def on_ready():
         cleanup_old_raid_events.start()
     if not update_started_events.is_running():
         update_started_events.start()
+    if not check_raid_reminders.is_running():
+        check_raid_reminders.start()
     
     # Start OAuth web server for Battle.net integration
     if not hasattr(client, 'oauth_server_started'):
