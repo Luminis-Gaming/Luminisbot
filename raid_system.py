@@ -658,7 +658,7 @@ def remove_raid_reservation(event_id: int, discord_id: str):
     conn.close()
 
 def add_raid_signup(event_id: int, discord_id: str, character_name: str, realm_slug: str,
-                   character_class: str, role: str, spec: str = None):
+                   character_class: str, role: str, spec: str = None, status: str = 'signed'):
     """Add a signup to a raid event"""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -666,17 +666,17 @@ def add_raid_signup(event_id: int, discord_id: str, character_name: str, realm_s
     cursor.execute("""
         INSERT INTO raid_signups (event_id, discord_id, character_name, realm_slug, 
                                  character_class, role, spec, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'signed')
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (event_id, discord_id)
         DO UPDATE SET character_name = EXCLUDED.character_name,
                       realm_slug = EXCLUDED.realm_slug,
                       character_class = EXCLUDED.character_class,
                       role = EXCLUDED.role,
                       spec = EXCLUDED.spec,
-                      status = 'signed',
+                      status = EXCLUDED.status,
                       signed_at = NOW()
         RETURNING id
-    """, (event_id, discord_id, character_name, realm_slug, character_class, role, spec))
+    """, (event_id, discord_id, character_name, realm_slug, character_class, role, spec, status))
     
     signup_id = cursor.fetchone()[0]
     conn.commit()
@@ -1507,10 +1507,11 @@ def create_raid_buttons_view(log_url: str = None):
 class CharacterSelectDropdown(Select):
     """Dropdown for selecting a WoW character"""
     
-    def __init__(self, characters, event_id, show_all=False):
+    def __init__(self, characters, event_id, show_all=False, status='signed'):
         self.event_id = event_id
         self.all_characters = characters
         self.show_all = show_all
+        self.status = status
         
         # Filter to max-level characters first (unless show_all is True)
         if not show_all:
@@ -1573,7 +1574,7 @@ class CharacterSelectDropdown(Select):
         # Check if user wants to show all characters
         if self.values[0] == "__SHOW_ALL__":
             # Show all characters view
-            view = CharacterSelectView(self.all_characters, self.event_id, show_all=True)
+            view = CharacterSelectView(self.all_characters, self.event_id, show_all=True, status=self.status)
             await interaction.response.edit_message(
                 content="🎮 Showing all characters:",
                 view=view
@@ -1592,7 +1593,7 @@ class CharacterSelectDropdown(Select):
             role = preference['preferred_role']
             spec = preference['preferred_spec']
             
-            # Add signup to database (this also updates status to 'signed')
+            # Add signup to database with the desired status
             add_raid_signup(
                 self.event_id,
                 discord_id,
@@ -1600,7 +1601,8 @@ class CharacterSelectDropdown(Select):
                 realm_slug,
                 char_class,
                 role,
-                spec
+                spec,
+                self.status
             )
 
             # Remove any existing emoji-based reservation for this user
@@ -1610,8 +1612,14 @@ class CharacterSelectDropdown(Select):
                 pass
             
             # Respond to interaction FIRST to avoid timeout (must respond within 3 seconds)
+            status_names = {
+                'late': 'Late',
+                'tentative': 'Tentative',
+                'absent': 'Absent',
+                'signed': 'Signed Up'
+            }
             await interaction.response.send_message(
-                f"✅ Signed up as **{char_name}** ({spec} {role.capitalize()})!",
+                f"✅ Signed up as **{char_name}** ({spec} {role.capitalize()}) - Status: **{status_names.get(self.status, self.status)}**!",
                 ephemeral=True
             )
             
@@ -1633,25 +1641,26 @@ class CharacterSelectDropdown(Select):
                         logger.error(f"Failed to update raid message: {e}")
         else:
             # No preference - show role selection
-            await show_role_selection(interaction, char_name, realm_slug, char_class, self.event_id)
+            await show_role_selection(interaction, char_name, realm_slug, char_class, self.event_id, status=self.status)
 
 
 class CharacterSelectView(View):
     """View containing character selection dropdown"""
     
-    def __init__(self, characters, event_id, show_all=False):
+    def __init__(self, characters, event_id, show_all=False, status='signed'):
         super().__init__(timeout=180)  # 3 minute timeout
-        self.add_item(CharacterSelectDropdown(characters, event_id, show_all))
+        self.add_item(CharacterSelectDropdown(characters, event_id, show_all, status))
 
 
 class RoleSelectDropdown(Select):
     """Dropdown for selecting role"""
     
-    def __init__(self, character_name, realm_slug, character_class, event_id, available_roles):
+    def __init__(self, character_name, realm_slug, character_class, event_id, available_roles, status='signed'):
         self.character_name = character_name
         self.realm_slug = realm_slug
         self.character_class = character_class
         self.event_id = event_id
+        self.status = status
         
         # Create options from available roles
         options = []
@@ -1689,7 +1698,8 @@ class RoleSelectDropdown(Select):
                 self.realm_slug,
                 self.character_class,
                 role,
-                spec
+                spec,
+                self.status
             )
         else:
             # Multiple specs - show spec selection
@@ -1700,27 +1710,29 @@ class RoleSelectDropdown(Select):
                 self.character_class,
                 self.event_id,
                 role,
-                specs
+                specs,
+                self.status
             )
 
 
 class RoleSelectView(View):
     """View containing role selection dropdown"""
     
-    def __init__(self, character_name, realm_slug, character_class, event_id, available_roles):
+    def __init__(self, character_name, realm_slug, character_class, event_id, available_roles, status='signed'):
         super().__init__(timeout=180)
-        self.add_item(RoleSelectDropdown(character_name, realm_slug, character_class, event_id, available_roles))
+        self.add_item(RoleSelectDropdown(character_name, realm_slug, character_class, event_id, available_roles, status))
 
 
 class SpecSelectDropdown(Select):
     """Dropdown for selecting spec"""
     
-    def __init__(self, character_name, realm_slug, character_class, event_id, role, specs):
+    def __init__(self, character_name, realm_slug, character_class, event_id, role, specs, status='signed'):
         self.character_name = character_name
         self.realm_slug = realm_slug
         self.character_class = character_class
         self.event_id = event_id
         self.role = role
+        self.status = status
         
         # Create options from specs
         options = []
@@ -1752,16 +1764,17 @@ class SpecSelectDropdown(Select):
             self.realm_slug,
             self.character_class,
             self.role,
-            spec
+            spec,
+            self.status
         )
 
 
 class SpecSelectView(View):
     """View containing spec selection dropdown"""
     
-    def __init__(self, character_name, realm_slug, character_class, event_id, role, specs):
+    def __init__(self, character_name, realm_slug, character_class, event_id, role, specs, status='signed'):
         super().__init__(timeout=180)
-        self.add_item(SpecSelectDropdown(character_name, realm_slug, character_class, event_id, role, specs))
+        self.add_item(SpecSelectDropdown(character_name, realm_slug, character_class, event_id, role, specs, status))
 
 
 class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
@@ -2627,8 +2640,29 @@ async def handle_status_change(interaction: discord.Interaction, new_status: str
     signup = get_user_signup(event_id, discord_id)
     
     if not signup:
+        # User is not signed up - initiate signup flow with the desired status
+        # Get user's characters
+        characters = get_user_characters(discord_id)
+        
+        if not characters:
+            # No characters - prompt to connect account
+            await interaction.response.send_message(
+                "❌ You haven't connected your Battle.net account yet!\n\n"
+                "Please use the `/connectwow` command to link your WoW characters first.",
+                ephemeral=True
+            )
+            return
+        
+        # Show character selection with the desired status
+        view = CharacterSelectView(characters, event_id, status=new_status)
+        status_names = {
+            'late': 'Late',
+            'tentative': 'Tentative',
+            'absent': 'Absent'
+        }
         await interaction.response.send_message(
-            "❌ You need to sign up first before changing your status!",
+            f"🎮 Select your character to sign up as **{status_names[new_status]}**:",
+            view=view,
             ephemeral=True
         )
         return
@@ -2914,7 +2948,7 @@ async def handle_admin_panel_click(interaction: discord.Interaction):
 
 
 async def show_role_selection(interaction: discord.Interaction, character_name: str, 
-                              realm_slug: str, character_class: str, event_id: int, is_change=False):
+                              realm_slug: str, character_class: str, event_id: int, is_change=False, status='signed'):
     """Show role selection dropdown"""
     available_roles = get_available_roles_for_class(character_class)
     
@@ -2925,7 +2959,7 @@ async def show_role_selection(interaction: discord.Interaction, character_name: 
         )
         return
     
-    view = RoleSelectView(character_name, realm_slug, character_class, event_id, available_roles)
+    view = RoleSelectView(character_name, realm_slug, character_class, event_id, available_roles, status=status)
     
     message = "🎭 Choose your role:" if not is_change else "🔄 Change your role:"
     
@@ -2936,9 +2970,9 @@ async def show_role_selection(interaction: discord.Interaction, character_name: 
 
 
 async def show_spec_selection(interaction: discord.Interaction, character_name: str,
-                              realm_slug: str, character_class: str, event_id: int, role: str, specs: list):
+                              realm_slug: str, character_class: str, event_id: int, role: str, specs: list, status='signed'):
     """Show spec selection dropdown"""
-    view = SpecSelectView(character_name, realm_slug, character_class, event_id, role, specs)
+    view = SpecSelectView(character_name, realm_slug, character_class, event_id, role, specs, status=status)
     
     await interaction.response.send_message(
         "⚔️ Choose your specialization:",
@@ -2948,7 +2982,7 @@ async def show_spec_selection(interaction: discord.Interaction, character_name: 
 
 
 async def finalize_signup(interaction: discord.Interaction, event_id: int, character_name: str,
-                         realm_slug: str, character_class: str, role: str, spec: str):
+                         realm_slug: str, character_class: str, role: str, spec: str, status: str = 'signed'):
     """Finalize the signup and update the embed"""
     discord_id = str(interaction.user.id)
     
@@ -2956,7 +2990,7 @@ async def finalize_signup(interaction: discord.Interaction, event_id: int, chara
     save_character_preference(discord_id, character_name, realm_slug, role, spec)
     
     # Add signup
-    add_raid_signup(event_id, discord_id, character_name, realm_slug, character_class, role, spec)
+    add_raid_signup(event_id, discord_id, character_name, realm_slug, character_class, role, spec, status)
 
     # Remove any existing emoji-based reservation for this user
     try:
@@ -2983,8 +3017,15 @@ async def finalize_signup(interaction: discord.Interaction, event_id: int, chara
             except:
                 pass
     
+    status_names = {
+        'late': 'Late',
+        'tentative': 'Tentative',
+        'absent': 'Absent',
+        'signed': 'Signed Up'
+    }
+    
     await interaction.response.send_message(
-        f"✅ Signed up as **{character_name}** ({spec} {role.capitalize()})!",
+        f"✅ Signed up as **{character_name}** ({spec} {role.capitalize()}) - Status: **{status_names.get(status, status)}**!",
         ephemeral=True
     )
 
