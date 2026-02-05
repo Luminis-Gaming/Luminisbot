@@ -393,6 +393,44 @@ def run_migrations():
             GRANT ALL PRIVILEGES ON TABLE raid_reservations TO luminisbot;
         """)
         
+        # ============================================================================
+        # RAID REMINDERS TABLE (for 1-hour reminder notifications)
+        # ============================================================================
+        
+        # Create raid_reminders table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS raid_reminders (
+                id SERIAL PRIMARY KEY,
+                event_id INTEGER NOT NULL REFERENCES raid_events(id) ON DELETE CASCADE,
+                discord_id TEXT NOT NULL,
+                reminder_time TIMESTAMP WITH TIME ZONE NOT NULL,
+                sent BOOLEAN DEFAULT FALSE,
+                sent_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(event_id, discord_id)
+            );
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_raid_reminders_pending 
+                ON raid_reminders(reminder_time, sent) 
+                WHERE sent = FALSE;
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_raid_reminders_event ON raid_reminders(event_id);
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_raid_reminders_discord ON raid_reminders(discord_id);
+        """)
+        
+        cursor.execute("""
+            GRANT ALL PRIVILEGES ON TABLE raid_reminders TO luminisbot;
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ raid_reminders table ready")
+        
         conn.commit()
         cursor.close()
         conn.close()
