@@ -3061,23 +3061,23 @@ async def update_started_events(bot):
 
 
 def cleanup_old_events():
-    """Delete raid events that are more than 24 hours old"""
+    """Delete raid events that are more than 1 year old (keeps history for admin panel)"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Calculate cutoff time (24 hours after event datetime)
+        # Calculate cutoff time (1 year after event datetime - keeps history for admin panel)
         cursor.execute("""
             DELETE FROM raid_signups
             WHERE event_id IN (
                 SELECT id FROM raid_events
-                WHERE (event_date + event_time) < (NOW() - INTERVAL '24 hours')
+                WHERE (event_date + event_time) < (NOW() - INTERVAL '365 days')
             )
         """)
         
         cursor.execute("""
             DELETE FROM raid_events
-            WHERE (event_date + event_time) < (NOW() - INTERVAL '24 hours')
+            WHERE (event_date + event_time) < (NOW() - INTERVAL '365 days')
             RETURNING id, title
         """)
         
