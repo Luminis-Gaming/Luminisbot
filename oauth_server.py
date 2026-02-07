@@ -2312,19 +2312,19 @@ async def handle_discord_user_detail(request):
                             <div class="section-title">⚔️ Mythic+ Rating</div>
                             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:20px">
                                 <div class="stat-box">
-                                    <div style="font-size:24px;font-weight:700;color:#5865F2">\${{Math.round(data.mythic_plus_score)}}</div>
+                                    <div style="font-size:24px;font-weight:700;color:#5865F2">${{Math.round(data.mythic_plus_score)}}</div>
                                     <div style="font-size:12px;color:rgba(255,255,255,0.6)">Overall</div>
                                 </div>
                                 <div class="stat-box">
-                                    <div style="font-size:18px;font-weight:600">\${{Math.round(data.mythic_plus_score_tank || 0)}}</div>
+                                    <div style="font-size:18px;font-weight:600">${{Math.round(data.mythic_plus_score_tank || 0)}}</div>
                                     <div style="font-size:12px;color:rgba(255,255,255,0.6)">Tank</div>
                                 </div>
                                 <div class="stat-box">
-                                    <div style="font-size:18px;font-weight:600">\${{Math.round(data.mythic_plus_score_healer || 0)}}</div>
+                                    <div style="font-size:18px;font-weight:600">${{Math.round(data.mythic_plus_score_healer || 0)}}</div>
                                     <div style="font-size:12px;color:rgba(255,255,255,0.6)">Healer</div>
                                 </div>
                                 <div class="stat-box">
-                                    <div style="font-size:18px;font-weight:600">\${{Math.round(data.mythic_plus_score_dps || 0)}}</div>
+                                    <div style="font-size:18px;font-weight:600">${{Math.round(data.mythic_plus_score_dps || 0)}}</div>
                                     <div style="font-size:12px;color:rgba(255,255,255,0.6)">DPS</div>
                                 </div>
                             </div>
@@ -2345,11 +2345,11 @@ async def handle_discord_user_detail(request):
                                 const raidDisplayName = raidName.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
                                 html += `
                                     <div style="margin-bottom:10px;padding:12px;background:rgba(255,255,255,0.05);border-radius:8px">
-                                        <div style="font-weight:600;margin-bottom:8px">\${{raidDisplayName}}</div>
+                                        <div style="font-weight:600;margin-bottom:8px">${{raidDisplayName}}</div>
                                         <div style="display:flex;gap:20px;font-size:14px;flex-wrap:wrap">
-                                            <span style="color:#00ff00">Normal: \${{normal}}/\${{total}}</span>
-                                            <span style="color:#0088ff">Heroic: \${{heroic}}/\${{total}}</span>
-                                            <span style="color:#ff6b6b">Mythic: \${{mythic}}/\${{total}}</span>
+                                            <span style="color:#00ff00">Normal: ${{normal}}/${{total}}</span>
+                                            <span style="color:#0088ff">Heroic: ${{heroic}}/${{total}}</span>
+                                            <span style="color:#ff6b6b">Mythic: ${{mythic}}/${{total}}</span>
                                         </div>
                                     </div>
                                 `;
@@ -2365,15 +2365,15 @@ async def handle_discord_user_detail(request):
                         `;
                         
                         data.mythic_plus_best_runs.slice(0, 5).forEach(run => {{
-                            const upgradeText = run.num_keystone_upgrades > 0 ? `+\${{run.num_keystone_upgrades}} chest` : 'Timed';
+                            const upgradeText = run.num_keystone_upgrades > 0 ? `+${{run.num_keystone_upgrades}} chest` : 'Timed';
                             html += `
                                 <div class="dungeon-run">
                                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                                        <span style="font-weight:600">\${{run.dungeon}}</span>
-                                        <span style="color:#5865F2;font-weight:700;font-size:16px">+\${{run.mythic_level}}</span>
+                                        <span style="font-weight:600">${{run.dungeon}}</span>
+                                        <span style="color:#5865F2;font-weight:700;font-size:16px">+${{run.mythic_level}}</span>
                                     </div>
                                     <div style="color:rgba(255,255,255,0.6);font-size:12px">
-                                        \${{upgradeText}} · Score: \${{Math.round(run.score)}} · \${{new Date(run.completed_at).toLocaleDateString()}}
+                                        ${{upgradeText}} · Score: ${{Math.round(run.score)}} · ${{new Date(run.completed_at).toLocaleDateString()}}
                                     </div>
                                 </div>
                             `;
@@ -2388,16 +2388,16 @@ async def handle_discord_user_detail(request):
                         html += '<div style="display:grid;gap:10px;margin-bottom:20px;background:rgba(255,255,255,0.05);padding:15px;border-radius:8px">';
                         
                         if (data.active_spec) {{
-                            html += `<div><strong>Active Spec:</strong> \${{data.active_spec}}</div>`;
+                            html += `<div><strong>Active Spec:</strong> ${{data.active_spec}}</div>`;
                         }}
                         if (data.achievement_points) {{
-                            html += `<div><strong>Achievement Points:</strong> \${{data.achievement_points.toLocaleString()}}</div>`;
+                            html += `<div><strong>Achievement Points:</strong> ${{data.achievement_points.toLocaleString()}}</div>`;
                         }}
                         if (data.covenant) {{
-                            html += `<div><strong>Covenant:</strong> \${{data.covenant}}\${{data.renown ? ' (Renown ' + data.renown + ')' : ''}}</div>`;
+                            html += `<div><strong>Covenant:</strong> ${{data.covenant}}${{data.renown ? ' (Renown ' + data.renown + ')' : ''}}</div>`;
                         }}
                         if (data.guild) {{
-                            html += `<div><strong>Guild:</strong> \${{data.guild}}</div>`;
+                            html += `<div><strong>Guild:</strong> ${{data.guild}}</div>`;
                         }}
                         
                         html += '</div>';
@@ -2424,12 +2424,12 @@ async def handle_discord_user_detail(request):
                                 const socketText = item.sockets ? ' 💎' : '';
                                 
                                 html += `
-                                    <div class="gear-item" style="border-color: \${{qualityColor}}">
-                                        <div style="font-weight:600;color:\${{qualityColor}};margin-bottom:2px">\${{item.name}}\${{enchantText}}\${{socketText}}</div>
-                                        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">\${{slotName}}</div>
+                                    <div class="gear-item" style="border-color: ${{qualityColor}}">
+                                        <div style="font-weight:600;color:${{qualityColor}};margin-bottom:2px">${{item.name}}${{enchantText}}${{socketText}}</div>
+                                        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">${{slotName}}</div>
                                         <div style="display:flex;justify-content:space-between;font-size:12px">
-                                            <span>iLvl \${{item.level.value}}</span>
-                                            \${{item.stats ? '<span>' + item.stats.length + ' stats</span>' : ''}}
+                                            <span>iLvl ${{item.level.value}}</span>
+                                            ${{item.stats ? '<span>' + item.stats.length + ' stats</span>' : ''}}
                                         </div>
                                     </div>
                                 `;
@@ -2445,7 +2445,7 @@ async def handle_discord_user_detail(request):
                         html += '<div style="margin-bottom:20px">';
                         
                         data.active_specialization.talents.forEach(talent => {{
-                            html += `<span class="talent-choice">\${{talent.talent.name}}</span>`;
+                            html += `<span class="talent-choice">${{talent.talent.name}}</span>`;
                         }});
                         
                         html += '</div>';
@@ -2455,15 +2455,15 @@ async def handle_discord_user_detail(request):
                     html += '<div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">';
                     
                     if (data.raiderio_url) {{
-                        html += `<a href="\${{data.raiderio_url}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Raider.IO</a>`;
+                        html += `<a href="${{data.raiderio_url}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Raider.IO</a>`;
                     }}
                     
-                    html += `<button onclick="event.stopPropagation(); loadCharacterDetails(\${{characterId}}, true)" class="btn btn-secondary" style="font-size:14px">🔄 Refresh Data</button>`;
+                    html += `<button onclick="event.stopPropagation(); loadCharacterDetails(${{characterId}}, true)" class="btn btn-secondary" style="font-size:14px">🔄 Refresh Data</button>`;
                     html += '</div>';
                     
                     if (cached && cachedAt) {{
                         const cachedTime = new Date(cachedAt).toLocaleString();
-                        html += `<div style="margin-top:15px;padding:10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:12px;color:rgba(255,255,255,0.5)">📦 Cached data from \${{cachedTime}}</div>`;
+                        html += `<div style="margin-top:15px;padding:10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:12px;color:rgba(255,255,255,0.5)">📦 Cached data from ${{cachedTime}}</div>`;
                     }}
                     
                     return html;
