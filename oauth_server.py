@@ -2144,6 +2144,126 @@ async def handle_character_simc_api(request):
 
 
 @require_auth
+async def handle_user_raid_stats_api(request):
+    """GET /admin/api/user-raid-stats/{discord_id} - fetch raid event statistics for a Discord user"""
+    discord_id = request.match_info.get('discord_id')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all raid signups for this user with event details
+        cursor.execute("""
+            SELECT 
+                rs.id,
+                rs.event_id,
+                rs.character_name,
+                rs.realm_slug,
+                rs.character_class,
+                rs.role,
+                rs.spec,
+                rs.status,
+                rs.signed_at,
+                re.title as event_title,
+                re.event_date,
+                re.event_time,
+                re.log_url,
+                re.guild_id
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+            ORDER BY re.event_date DESC, re.event_time DESC
+            LIMIT 100
+        """, (discord_id,))
+        
+        signups = cursor.fetchall()
+        
+        # Get total event count and statistics
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_events,
+                COUNT(CASE WHEN status = 'signed' THEN 1 END) as signed_count,
+                COUNT(CASE WHEN status = 'late' THEN 1 END) as late_count,
+                COUNT(CASE WHEN status = 'tentative' THEN 1 END) as tentative_count,
+                COUNT(CASE WHEN status = 'absent' THEN 1 END) as absent_count,
+                COUNT(CASE WHEN status = 'benched' THEN 1 END) as benched_count,
+                COUNT(CASE WHEN re.log_url IS NOT NULL THEN 1 END) as events_with_logs
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+        """, (discord_id,))
+        
+        stats = cursor.fetchone()
+        
+        # Get role distribution
+        cursor.execute("""
+            SELECT 
+                role,
+                COUNT(*) as count
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+            GROUP BY role
+            ORDER BY count DESC
+        """, (discord_id,))
+        
+        role_distribution = cursor.fetchall()
+        
+        # Get most played characters
+        cursor.execute("""
+            SELECT 
+                character_name,
+                realm_slug,
+                character_class,
+                COUNT(*) as event_count
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+            GROUP BY character_name, realm_slug, character_class
+            ORDER BY event_count DESC
+            LIMIT 5
+        """, (discord_id,))
+        
+        top_characters = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Convert to serializable format
+        signups_list = []
+        for signup in signups:
+            signups_list.append({
+                'id': signup['id'],
+                'event_id': signup['event_id'],
+                'character_name': signup['character_name'],
+                'realm_slug': signup['realm_slug'],
+                'character_class': signup['character_class'],
+                'role': signup['role'],
+                'spec': signup['spec'],
+                'status': signup['status'],
+                'signed_at': signup['signed_at'].isoformat() if signup['signed_at'] else None,
+                'event_title': signup['event_title'],
+                'event_date': signup['event_date'].isoformat() if signup['event_date'] else None,
+                'event_time': signup['event_time'].strftime('%H:%M') if signup['event_time'] else None,
+                'log_url': signup['log_url']
+            })
+        
+        return web.json_response({
+            'success': True,
+            'stats': dict(stats),
+            'signups': signups_list,
+            'role_distribution': [dict(r) for r in role_distribution],
+            'top_characters': [dict(c) for c in top_characters]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching user raid stats: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@require_auth
 async def handle_discord_user_detail(request):
     """GET /admin/discord-users/{discord_id} - show characters for a specific Discord user"""
     session = request['session']
@@ -2349,6 +2469,18 @@ async def handle_discord_user_detail(request):
                     </div>
                 </div>
                 
+                <!-- Raid Event Attendance Section -->
+                <div class="card" style="margin-bottom:20px" id="raid-stats-section">
+                    <h2 style="margin:0 0 15px 0;color:#5865F2;display:flex;align-items:center;gap:10px">
+                        🗓️ Raid Event Attendance
+                    </h2>
+                    <div id="raid-stats-content">
+                        <div class="loading" style="text-align:center;padding:40px;color:rgba(255,255,255,0.6)">
+                            ⏳ Loading raid statistics...
+                        </div>
+                    </div>
+                </div>
+                
                 <div style="display:grid;gap:15px">
                     {chars_html}
                 </div>
@@ -2429,6 +2561,7 @@ async def handle_discord_user_detail(request):
                         
                         // Create modal to display SimC string
                         const modal = document.createElement('div');
+                        modal.id = 'simc-modal';
                         modal.style.cssText = `
                             position: fixed;
                             top: 0;
@@ -2458,7 +2591,7 @@ async def handle_discord_user_detail(request):
                         modalContent.innerHTML = `
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
                                 <h2 style="margin:0;color:#5865F2">📊 SimulationCraft String</h2>
-                                <button onclick="this.closest('div[style*=\\'position: fixed\\']').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0;width:30px;height:30px">&times;</button>
+                                <button onclick="closeSimcModal()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0;width:30px;height:30px">&times;</button>
                             </div>
                             <p style="margin-bottom:15px;color:rgba(255,255,255,0.7)">
                                 Copy this string and paste it into <a href="https://www.raidbots.com/simbot" target="_blank" style="color:#5865F2">Raidbots</a> or SimulationCraft to simulate your character.
@@ -2527,6 +2660,13 @@ async def handle_discord_user_detail(request):
                         button.textContent = originalText;
                         button.style.background = '#5865F2';
                     }}, 2000);
+                }}
+                
+                function closeSimcModal() {{
+                    const modal = document.getElementById('simc-modal');
+                    if (modal) {{
+                        modal.remove();
+                    }}
                 }}
                 
                 function buildCharacterDetailsHTML(data, characterId, cached, cachedAt) {{
@@ -2933,6 +3073,200 @@ async def handle_discord_user_detail(request):
                         tooltipElement.style.display = 'none';
                     }}
                 }}
+                
+                // Load raid statistics
+                async function loadRaidStats() {{
+                    const discordId = '{discord_id}';
+                    const container = document.getElementById('raid-stats-content');
+                    
+                    try {{
+                        const response = await fetch('/admin/api/user-raid-stats/' + discordId);
+                        const result = await response.json();
+                        
+                        if (!result.success) {{
+                            container.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ No raid event data found</p>';
+                            return;
+                        }}
+                        
+                        const {{ stats, signups, role_distribution, top_characters }} = result;
+                        
+                        // Build stats overview
+                        let html = '<div class="stats" style="margin-bottom:20px">';
+                        html += `
+                            <div class="stat">
+                                <div class="stat-value">${{stats.total_events || 0}}</div>
+                                <div class="stat-label">Total Events</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">${{stats.signed_count || 0}}</div>
+                                <div class="stat-label">Attended</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">${{stats.events_with_logs || 0}}</div>
+                                <div class="stat-label">Boss Kills</div>
+                            </div>
+                        `;
+                        html += '</div>';
+                        
+                        // Status breakdown
+                        if (stats.total_events > 0) {{
+                            html += '<div style="margin-bottom:20px">';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Status Breakdown</h3>';
+                            html += '<div style="display:flex;gap:10px;flex-wrap:wrap">';
+                            
+                            const statusColors = {{
+                                signed: '#28a745',
+                                late: '#ffc107',
+                                tentative: '#17a2b8',
+                                absent: '#dc3545',
+                                benched: '#6c757d'
+                            }};
+                            
+                            const statusLabels = {{
+                                signed: 'Signed',
+                                late: 'Late',
+                                tentative: 'Tentative',
+                                absent: 'Absent',
+                                benched: 'Benched'
+                            }};
+                            
+                            ['signed', 'late', 'tentative', 'benched', 'absent'].forEach(status => {{
+                                const count = stats[status + '_count'] || 0;
+                                if (count > 0) {{
+                                    const percentage = Math.round((count / stats.total_events) * 100);
+                                    html += `
+                                        <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:6px;border-left:3px solid ${{statusColors[status]}}">
+                                            <div style="font-weight:600;color:${{statusColors[status]}}">${{count}} ${{statusLabels[status]}}</div>
+                                            <div style="font-size:11px;color:rgba(255,255,255,0.5)">${{percentage}}%</div>
+                                        </div>
+                                    `;
+                                }}
+                            }});
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }}
+                        
+                        // Role distribution
+                        if (role_distribution.length > 0) {{
+                            html += '<div style="margin-bottom:20px">';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Role Distribution</h3>';
+                            html += '<div style="display:flex;gap:10px;flex-wrap:wrap">';
+                            
+                            const roleEmojis = {{
+                                tank: '🛡️',
+                                healer: '💚',
+                                melee: '⚔️',
+                                ranged: '🏹',
+                                dps: '⚔️'
+                            }};
+                            
+                            role_distribution.forEach(role => {{
+                                const emoji = roleEmojis[role.role] || '⚔️';
+                                const percentage = Math.round((role.count / stats.total_events) * 100);
+                                html += `
+                                    <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:6px">
+                                        <div style="font-weight:600">${{emoji}} ${{role.role.charAt(0).toUpperCase() + role.role.slice(1)}}</div>
+                                        <div style="font-size:11px;color:rgba(255,255,255,0.5)">${{role.count}} events (${{percentage}}%)</div>
+                                    </div>
+                                `;
+                            }});
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }}
+                        
+                        // Top characters
+                        if (top_characters.length > 0) {{
+                            html += '<div style="margin-bottom:20px">';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Most Played Characters</h3>';
+                            html += '<div style="display:flex;gap:10px;flex-wrap:wrap">';
+                            
+                            top_characters.forEach(char => {{
+                                html += `
+                                    <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:6px">
+                                        <div style="font-weight:600">${{char.character_name}}</div>
+                                        <div style="font-size:11px;color:rgba(255,255,255,0.5)">${{char.character_class}} • ${{char.event_count}} events</div>
+                                    </div>
+                                `;
+                            }});
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }}
+                        
+                        // Recent events
+                        if (signups.length > 0) {{
+                            html += '<div>';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Recent Events</h3>';
+                            html += '<div style="display:grid;gap:10px">';
+                            
+                            const statusColors = {{
+                                signed: '#28a745',
+                                late: '#ffc107',
+                                tentative: '#17a2b8',
+                                absent: '#dc3545',
+                                benched: '#6c757d'
+                            }};
+                            
+                            const statusEmojis = {{
+                                signed: '✅',
+                                late: '🕐',
+                                tentative: '⚖️',
+                                absent: '❌',
+                                benched: '📋'
+                            }};
+                            
+                            signups.slice(0, 10).forEach(signup => {{
+                                const statusColor = statusColors[signup.status] || '#888';
+                                const statusEmoji = statusEmojis[signup.status] || '✓';
+                                const hasLog = signup.log_url ? '📊' : '';
+                                
+                                html += `
+                                    <div style="background:rgba(255,255,255,0.05);padding:10px;border-radius:6px;border-left:3px solid ${{statusColor}}">
+                                        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap">
+                                            <div>
+                                                <div style="font-weight:600;margin-bottom:4px">${{signup.event_title}}</div>
+                                                <div style="font-size:12px;color:rgba(255,255,255,0.6)">
+                                                    ${{signup.character_name}} • ${{signup.character_class}} • ${{signup.role}}${{signup.spec ? ' (' + signup.spec + ')' : ''}}
+                                                </div>
+                                            </div>
+                                            <div style="text-align:right">
+                                                <div style="font-size:12px;color:rgba(255,255,255,0.7)">${{signup.event_date}} ${{signup.event_time}}</div>
+                                                <div style="font-size:12px;margin-top:4px">
+                                                    <span style="background:${{statusColor}};padding:2px 8px;border-radius:4px;color:#fff">
+                                                        ${{statusEmoji}} ${{signup.status}}
+                                                    </span>
+                                                    ${{hasLog ? '<span style="margin-left:4px">' + hasLog + '</span>' : ''}}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        ${{signup.log_url ? '<div style="margin-top:8px"><a href="' + signup.log_url + '" target="_blank" style="color:#5865F2;font-size:12px">View Logs →</a></div>' : ''}}
+                                    </div>
+                                `;
+                            }});
+                            
+                            html += '</div>';
+                            
+                            if (signups.length > 10) {{
+                                html += `<p style="margin-top:10px;color:rgba(255,255,255,0.5);font-size:12px;text-align:center">Showing 10 of ${{signups.length}} events</p>`;
+                            }}
+                            
+                            html += '</div>';
+                        }}
+                        
+                        container.innerHTML = html;
+                        
+                    }} catch (err) {{
+                        console.error(err);
+                        container.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ Error loading raid data: ' + err.message + '</p>';
+                    }}
+                }}
+                
+                // Load raid stats when page loads
+                document.addEventListener('DOMContentLoaded', function() {{
+                    loadRaidStats();
+                }});
             </script>
         </body>
         </html>
@@ -3795,6 +4129,7 @@ def create_app(bot=None):
     app.router.add_post('/admin/api/refresh-discord-info/{discord_id}', handle_refresh_discord_info)
     app.router.add_get('/admin/api/character-details/{character_id}', handle_character_details_api)
     app.router.add_get('/admin/api/character-simc/{character_id}', handle_character_simc_api)
+    app.router.add_get('/admin/api/user-raid-stats/{discord_id}', handle_user_raid_stats_api)
     app.router.add_get('/admin/events', handle_events_page)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)

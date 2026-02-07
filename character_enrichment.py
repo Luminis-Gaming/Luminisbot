@@ -403,6 +403,20 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     active_spec_data = character_data.get('active_specialization', {})
     spec_name = active_spec_data.get('specialization', {}).get('name', spec)
     
+    # Get role from specialization
+    role = active_spec_data.get('role', {}).get('type', 'AUTO')
+    role_clean = role.lower() if role != 'AUTO' else 'auto'
+    # Map DPS to proper role names
+    if role_clean == 'dps':
+        # Check if it's a spell-based spec
+        char_class_lower = char_class.lower()
+        caster_classes = ['mage', 'warlock', 'priest', 'shaman', 'druid', 'evoker']
+        caster_specs = ['balance', 'elemental', 'shadow', 'demonology', 'affliction', 'destruction', 'devastation', 'preservation', 'augmentation', 'devourer']
+        if char_class_lower in caster_classes or spec_name.lower() in caster_specs:
+            role_clean = 'spell'
+        else:
+            role_clean = 'attack'
+    
     # SimC header
     class_clean = char_class.lower().replace(' ', '')
     race_clean = race.lower().replace(' ', '_')
@@ -414,20 +428,30 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     lines.append(f"race={race_clean}")
     lines.append(f"region={region.lower()}")
     lines.append(f"server={realm_clean}")
-    lines.append(f"role=auto")
+    lines.append(f"role={role_clean}")
     lines.append(f"spec={spec_clean}")
     
-    # Talents (if available)
-    if active_spec_data and 'talents' in active_spec_data:
-        talents = active_spec_data['talents']
-        talent_string = ""
-        for talent in talents:
-            talent_name = talent.get('talent', {}).get('name', '')
-            if talent_name:
-                # SimC uses talent names in specific format
-                talent_string += f"{talent_name.lower().replace(' ', '_')},"
-        if talent_string:
-            lines.append(f"talents={talent_string.rstrip(',')}")
+    # Talents - use loadout string if available
+    talent_loadout = None
+    
+    # Try to get from active_specialization loadout_code
+    if active_spec_data:
+        if 'loadout_code' in active_spec_data:
+            talent_loadout = active_spec_data['loadout_code']
+        elif 'talent_loadout_code' in active_spec_data:
+            talent_loadout = active_spec_data['talent_loadout_code']
+    
+    # Try from Raider.IO talents data
+    if not talent_loadout:
+        raiderio_talents = character_data.get('talents', {})
+        if isinstance(raiderio_talents, list) and len(raiderio_talents) > 0:
+            for loadout in raiderio_talents:
+                if loadout.get('active'):
+                    talent_loadout = loadout.get('loadout_text')
+                    break
+    
+    if talent_loadout:
+        lines.append(f"talents={talent_loadout}")
     
     # Equipment
     equipped_items = character_data.get('equipped_items', [])
@@ -485,19 +509,31 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
             # Build item string
             item_str = f"{simc_slot}=,id={item_id}"
             
-            if bonus_ids:
-                item_str += f",bonus_id={'/'.join(map(str, bonus_ids))}"
-            
-            if enchant_id:
-                item_str += f",enchant_id={enchant_id}"
-            
+            # Add gem_id before bonus_id (SimC addon order)
             if gem_ids:
                 item_str += f",gem_id={'/'.join(map(str, gem_ids))}"
             
-            # Item level
-            item_level = item.get('level', {}).get('value', 0)
-            if item_level:
-                item_str += f",ilevel={item_level}"
+            if bonus_ids:
+                item_str += f",bonus_id={'/'.join(map(str, bonus_ids))}"
+            
+            # Add crafted stats if this is a crafted item
+            if 'modified_crafting_stat' in item:
+                crafted_stats = []
+                for stat in item.get('modified_crafting_stat', []):
+                    stat_id = stat.get('type', {}).get('id')
+                    if stat_id:
+                        crafted_stats.append(str(stat_id))
+                if crafted_stats:
+                    item_str += f",crafted_stats={'/'.join(crafted_stats)}"
+            
+            # Add crafting quality if available
+            if 'crafting_quality' in item:
+                quality = item.get('crafting_quality', {}).get('id', 0)
+                if quality:
+                    item_str += f",crafting_quality={quality}"
+            
+            if enchant_id:
+                item_str += f",enchant_id={enchant_id}"
             
             lines.append(item_str)
     
