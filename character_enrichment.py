@@ -371,8 +371,15 @@ class CharacterEnricher:
             enriched['item_level_equipped'] = gear.get('item_level_equipped')
             enriched['item_level_total'] = gear.get('item_level_total')
             
-            # Talents
-            enriched['talents'] = raiderio.get('talents', {})
+            # Talents - Raider.IO uses 'talentLoadout' (not 'talents'!)
+            talents_data = raiderio.get('talents') or raiderio.get('talentLoadout')
+            enriched['talents'] = talents_data
+            
+            # Debug log for talents
+            if talents_data:
+                logger.info(f"Fetched talents for {name}")
+            else:
+                logger.warning(f"No talents found in Raider.IO data for {name}")
             
             # URLs
             enriched['raiderio_url'] = raiderio.get('profile_url')
@@ -384,8 +391,10 @@ class CharacterEnricher:
 def generate_simc_string(character_data: Dict[str, Any]) -> str:
     """
     Generate a SimulationCraft import string from character data.
-    Format based on SimC's addon string format.
+    Format based on SimC's addon string format compatible with raidbots.com.
     """
+    from datetime import datetime
+    
     lines = []
     
     # Character name and server
@@ -423,23 +432,24 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
         role = role_info.get('type', 'AUTO')
     
     role_clean = role.lower() if role != 'AUTO' else 'auto'
-    # Map DPS to proper role names
+    # Map DPS to proper role names for SimC
     if role_clean == 'dps':
-        # Check if it's a spell-based spec
-        char_class_lower = char_class.lower() if isinstance(char_class, str) else ''
-        caster_classes = ['mage', 'warlock', 'priest', 'shaman', 'druid', 'evoker']
-        caster_specs = ['balance', 'elemental', 'shadow', 'demonology', 'affliction', 'destruction', 'devastation', 'preservation', 'augmentation', 'devourer']
-        spec_name_lower = spec_name.lower() if isinstance(spec_name, str) else ''
-        if char_class_lower in caster_classes or spec_name_lower in caster_specs:
-            role_clean = 'spell'
-        else:
-            role_clean = 'attack'
+        # SimC expects 'attack' or 'spell', but for compatibility, we can leave as 'dps'
+        # However, tank/healer specs should use the proper role name
+        role_clean = 'dps'
+    elif role_clean == 'healing':
+        role_clean = 'healer'
     
     # SimC header - ensure all values are strings
     class_clean = char_class.lower().replace(' ', '') if isinstance(char_class, str) else 'unknown'
     race_clean = race.lower().replace(' ', '_') if isinstance(race, str) else 'unknown'
     realm_clean = realm.lower().replace(' ', '_').replace("'", '') if isinstance(realm, str) else 'unknown'
     spec_clean = spec_name.lower().replace(' ', '_') if isinstance(spec_name, str) else 'unknown'
+    
+    # Add header comment (like official SimC addon)
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+    lines.append(f"# {name} - {spec_name} - {timestamp} - {region}/{realm}")
+    lines.append("")
     
     lines.append(f'{class_clean}="{name}"')
     lines.append(f"level={level}")
@@ -449,7 +459,7 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     lines.append(f"role={role_clean}")
     lines.append(f"spec={spec_clean}")
     
-    # Talents - use loadout string if available
+    # Talents - use loadout string if available (CRITICAL for raidbots.com)
     talent_loadout = None
     
     # Try to get from active_specialization loadout_code
@@ -459,18 +469,38 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
         elif 'talent_loadout_code' in active_spec_data:
             talent_loadout = active_spec_data['talent_loadout_code']
     
-    # Try from Raider.IO talents data
+    # Try from Raider.IO talents data (most reliable source)
     if not talent_loadout:
-        raiderio_talents = character_data.get('talents', {})
-        if isinstance(raiderio_talents, list) and len(raiderio_talents) > 0:
+        raiderio_talents = character_data.get('talents')
+        
+        # Handle different Raider.IO response structures
+        if isinstance(raiderio_talents, dict):
+            # New structure: single talentLoadout object with loadout_text
+            talent_loadout = raiderio_talents.get('loadout_text') or raiderio_talents.get('talentLoadoutString')
+        elif isinstance(raiderio_talents, list) and len(raiderio_talents) > 0:
+            # Old structure: array of loadouts
             for loadout in raiderio_talents:
-                if isinstance(loadout, dict) and loadout.get('active'):
-                    talent_loadout = loadout.get('loadout_text')
-                    break
-                    break
+                if isinstance(loadout, dict):
+                    # Look for active loadout first
+                    if loadout.get('active'):
+                        talent_loadout = loadout.get('loadout_text') or loadout.get('talent_string')
+                        if talent_loadout:
+                            break
+            # If no active loadout found, use the first one
+            if not talent_loadout and raiderio_talents:
+                first_loadout = raiderio_talents[0]
+                if isinstance(first_loadout, dict):
+                    talent_loadout = first_loadout.get('loadout_text') or first_loadout.get('talent_string')
     
     if talent_loadout:
+        lines.append("")
         lines.append(f"talents={talent_loadout}")
+    else:
+        # Log warning if no talents found (important for debugging)
+        logger.warning(f"No talent loadout found for {name}. SimC string may be incomplete for raidbots.com")
+    
+    # Add blank line before equipment
+    lines.append("")
     
     # Equipment
     equipped_items = character_data.get('equipped_items', [])
@@ -515,6 +545,13 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
                 continue
                 
             item_id = item_info.get('id', 0)
+            item_name = item.get('name', 'Unknown Item')
+            item_level = item.get('level', {})
+            if isinstance(item_level, dict):
+                ilvl = item_level.get('value', 0)
+            else:
+                ilvl = item_level if isinstance(item_level, int) else 0
+            
             bonus_ids = []
             
             # Bonus list
@@ -538,8 +575,15 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
                         if isinstance(socket_item, dict):
                             gem_ids.append(socket_item.get('id', 0))
             
+            # Add item comment (like official SimC addon)
+            lines.append(f"# {item_name} ({ilvl})")
+            
             # Build item string
             item_str = f"{simc_slot}=,id={item_id}"
+            
+            # Add enchant_id BEFORE gem_id (official SimC addon order)
+            if enchant_id:
+                item_str += f",enchant_id={enchant_id}"
             
             # Add gem_id before bonus_id (SimC addon order)
             if gem_ids:
@@ -571,9 +615,6 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
                     quality = quality_info.get('id', 0)
                     if quality:
                         item_str += f",crafting_quality={quality}"
-            
-            if enchant_id:
-                item_str += f",enchant_id={enchant_id}"
             
             lines.append(item_str)
     
