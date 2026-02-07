@@ -2208,6 +2208,17 @@ async def handle_discord_user_detail(request):
                     border-radius: 6px;
                     font-size: 13px;
                     border-left: 3px solid;
+                    display: flex;
+                    gap: 8px;
+                    align-items: start;
+                }}
+                .item-icon {{
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 4px;
+                    border: 1px solid rgba(255,255,255,0.3);
+                    flex-shrink: 0;
+                    background: rgba(0,0,0,0.5);
                 }}
                 .talent-choice {{
                     padding: 6px 10px;
@@ -2455,15 +2466,21 @@ async def handle_discord_user_detail(request):
                                 const enchantText = item.enchantments ? ' 🌟' : '';
                                 const socketText = item.sockets ? ' 💎' : '';
                                 
+                                // Construct item icon URL from Blizzard CDN
+                                const iconUrl = getItemIconUrl(item);
+                                
                                 html += `
                                     <div class="gear-item" style="border-color: ${{qualityColor}}" 
                                          onmouseenter="showItemTooltip(event, ${{JSON.stringify(item).replace(/"/g, '&quot;')}})"
                                          onmouseleave="hideItemTooltip()">
-                                        <div style="font-weight:600;color:${{qualityColor}};margin-bottom:2px">${{item.name}}${{enchantText}}${{socketText}}</div>
-                                        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">${{slotName}}</div>
-                                        <div style="display:flex;justify-content:space-between;font-size:12px">
-                                            <span>iLvl ${{item.level.value}}</span>
-                                            ${{item.stats ? '<span>' + item.stats.length + ' stats</span>' : ''}}
+                                        <img src="${{iconUrl}}" class="item-icon" alt="${{item.name}}" onerror="this.style.display='none'">
+                                        <div style="flex:1;min-width:0">
+                                            <div style="font-weight:600;color:${{qualityColor}};margin-bottom:2px">${{item.name}}${{enchantText}}${{socketText}}</div>
+                                            <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">${{slotName}}</div>
+                                            <div style="display:flex;justify-content:space-between;font-size:12px">
+                                                <span>iLvl ${{item.level.value}}</span>
+                                                ${{item.stats ? '<span>' + item.stats.length + ' stats</span>' : ''}}
+                                            </div>
                                         </div>
                                     </div>
                                 `;
@@ -2548,6 +2565,20 @@ async def handle_discord_user_detail(request):
                     return names[slotType] || slotType;
                 }}
                 
+                function getItemIconUrl(item) {{
+                    // Try to get icon from media object
+                    if (item.media && item.media.id) {{
+                        // Use Blizzard's render service
+                        return `https://render.worldofwarcraft.com/eu/icons/56/${{item.media.id}}.jpg`;
+                    }}
+                    // Fallback: construct from item ID (less reliable but works)
+                    if (item.item && item.item.id) {{
+                        return `https://render.worldofwarcraft.com/eu/icons/56/${{item.item.id}}.jpg`;
+                    }}
+                    // Last resort: use a placeholder
+                    return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="56" height="56" fill="%23333"/></svg>';
+                }}
+                
                 let tooltipElement = null;
                 
                 function showItemTooltip(event, itemData) {{
@@ -2559,11 +2590,15 @@ async def handle_discord_user_detail(request):
                     
                     const item = typeof itemData === 'string' ? JSON.parse(itemData) : itemData;
                     const qualityColor = getQualityColor(item.quality.type);
+                    const iconUrl = getItemIconUrl(item);
                     
                     let tooltipHTML = `
-                        <div style="color:${{qualityColor}};font-weight:700;font-size:14px;margin-bottom:8px">${{item.name}}</div>
-                        <div style="color:rgba(255,255,255,0.7);font-size:12px;margin-bottom:8px">
-                            Item Level ${{item.level.value}}
+                        <div style="display:flex;gap:10px;margin-bottom:10px;align-items:start">
+                            <img src="${{iconUrl}}" style="width:48px;height:48px;border-radius:6px;border:2px solid ${{qualityColor}};flex-shrink:0" alt="${{item.name}}" onerror="this.style.display='none'">
+                            <div style="flex:1">
+                                <div style="color:${{qualityColor}};font-weight:700;font-size:14px;margin-bottom:4px">${{item.name}}</div>
+                                <div style="color:rgba(255,255,255,0.7);font-size:12px">Item Level ${{item.level.value}}</div>
+                            </div>
                         </div>
                     `;
                     
