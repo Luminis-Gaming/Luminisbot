@@ -2107,7 +2107,8 @@ async def handle_character_simc_api(request):
         
         # Get character info
         cursor.execute("""
-            SELECT id, character_name, realm_slug, realm_name, enrichment_cache, last_enriched
+            SELECT id, character_name, realm_slug, realm_name, character_class, 
+                   enrichment_cache, last_enriched, region
             FROM wow_characters
             WHERE id = %s
         """, (character_id,))
@@ -2119,17 +2120,32 @@ async def handle_character_simc_api(request):
         if not character:
             return web.json_response({'error': 'Character not found'}, status=404)
         
+        # Check if we have cached data
+        if not character['enrichment_cache']:
+            return web.json_response({'error': 'Character data not available. Please refresh character data first.'}, status=404)
+        
         # Generate SimC string
         from character_enrichment import generate_simc_string
         import json
         
-        # Use cached data if available and fresh
-        if character['enrichment_cache']:
-            # Parse JSON if it's a string
-            cache_data = character['enrichment_cache']
-            if isinstance(cache_data, str):
+        # Parse JSON if it's a string
+        cache_data = character['enrichment_cache']
+        if isinstance(cache_data, str):
+            try:
                 cache_data = json.loads(cache_data)
-            
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse enrichment_cache JSON: {e}")
+                return web.json_response({'error': 'Invalid character data format'}, status=500)
+        
+        # Ensure cache_data is a dict
+        if not isinstance(cache_data, dict):
+            logger.error(f"enrichment_cache is not a dict, it's a {type(cache_data)}")
+            return web.json_response({'error': 'Invalid character data structure'}, status=500)
+        
+        # Log the keys for debugging
+        logger.info(f"Cache data keys: {list(cache_data.keys())}")
+        
+        try:
             simc_string = generate_simc_string(cache_data)
             
             if simc_string:
@@ -2139,8 +2155,14 @@ async def handle_character_simc_api(request):
                     'character_name': character['character_name'],
                     'realm': character['realm_name']
                 })
-        
-        return web.json_response({'error': 'Character data not available. Try refreshing character data first.'}, status=404)
+            else:
+                return web.json_response({'error': 'Failed to generate SimC string'}, status=500)
+                
+        except Exception as simc_error:
+            logger.error(f"Error in generate_simc_string: {simc_error}")
+            import traceback
+            traceback.print_exc()
+            return web.json_response({'error': f'SimC generation error: {str(simc_error)}'}, status=500)
         
     except Exception as e:
         logger.error(f"Error generating SimC string: {e}")
