@@ -2121,10 +2121,16 @@ async def handle_character_simc_api(request):
         
         # Generate SimC string
         from character_enrichment import generate_simc_string
+        import json
         
         # Use cached data if available and fresh
         if character['enrichment_cache']:
-            simc_string = generate_simc_string(character['enrichment_cache'])
+            # Parse JSON if it's a string
+            cache_data = character['enrichment_cache']
+            if isinstance(cache_data, str):
+                cache_data = json.loads(cache_data)
+            
+            simc_string = generate_simc_string(cache_data)
             
             if simc_string:
                 return web.json_response({
