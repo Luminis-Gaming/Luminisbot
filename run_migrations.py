@@ -431,6 +431,154 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ raid_reminders table ready")
         
+        # ============================================================================
+        # CHARACTER ENRICHMENT CACHE COLUMNS (for detailed character data)
+        # ============================================================================
+        
+        # Add character enrichment cache columns if they don't exist
+        cursor.execute("""
+            DO $$ 
+            BEGIN
+                -- Mythic+ scores
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'mythic_plus_score'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN mythic_plus_score DECIMAL(10,2);
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'mythic_plus_score_tank'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN mythic_plus_score_tank DECIMAL(10,2);
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'mythic_plus_score_healer'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN mythic_plus_score_healer DECIMAL(10,2);
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'mythic_plus_score_dps'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN mythic_plus_score_dps DECIMAL(10,2);
+                END IF;
+                
+                -- Raid progression
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'raid_progress_current'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN raid_progress_current TEXT;
+                END IF;
+                
+                -- Character info
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'achievement_points'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN achievement_points INTEGER;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'active_spec'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN active_spec TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'covenant'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN covenant TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'renown'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN renown INTEGER;
+                END IF;
+                
+                -- External URLs
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'raiderio_url'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN raiderio_url TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'warcraftlogs_url'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN warcraftlogs_url TEXT;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'character_render_url'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN character_render_url TEXT;
+                END IF;
+                
+                -- Cache metadata
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'last_enriched'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN last_enriched TIMESTAMP WITH TIME ZONE;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'wow_characters' AND column_name = 'enrichment_cache'
+                ) THEN
+                    ALTER TABLE wow_characters ADD COLUMN enrichment_cache JSONB;
+                END IF;
+            END $$;
+        """)
+        
+        # Create indexes for enrichment columns
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wow_characters_mythic_score 
+                ON wow_characters(mythic_plus_score DESC NULLS LAST);
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wow_characters_last_enriched 
+                ON wow_characters(last_enriched);
+        """)
+        
+        # Add comments
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wow_characters' AND column_name = 'mythic_plus_score') THEN
+                    COMMENT ON COLUMN wow_characters.mythic_plus_score IS 'Overall Mythic+ rating from Raider.IO';
+                END IF;
+                
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wow_characters' AND column_name = 'raid_progress_current') THEN
+                    COMMENT ON COLUMN wow_characters.raid_progress_current IS 'JSON object with current raid progression';
+                END IF;
+                
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wow_characters' AND column_name = 'enrichment_cache') THEN
+                    COMMENT ON COLUMN wow_characters.enrichment_cache IS 'Full cached API responses for detailed character data';
+                END IF;
+                
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wow_characters' AND column_name = 'last_enriched') THEN
+                    COMMENT ON COLUMN wow_characters.last_enriched IS 'When character data was last fetched from external APIs';
+                END IF;
+            END $$;
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ character enrichment cache columns ready")
+        
         conn.commit()
         cursor.close()
         conn.close()

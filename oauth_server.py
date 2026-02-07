@@ -2026,6 +2026,75 @@ async def handle_refresh_discord_info(request):
 
 
 @require_auth
+async def handle_character_details_api(request):
+    """GET /admin/api/character-details/{character_id} - fetch detailed character info"""
+    character_id = int(request.match_info.get('character_id'))
+    force_refresh = request.query.get('refresh', 'false').lower() == 'true'
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get character info
+        cursor.execute("""
+            SELECT id, character_name, realm_slug, realm_name, character_class, faction,
+                   level, item_level, enrichment_cache, last_enriched, discord_id
+            FROM wow_characters
+            WHERE id = %s
+        """, (character_id,))
+        
+        character = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not character:
+            return web.json_response({'error': 'Character not found'}, status=404)
+        
+        # Check if we need to refresh (cache older than 6 hours or forced)
+        needs_refresh = force_refresh
+        if character['last_enriched']:
+            age = datetime.now() - character['last_enriched']
+            if age > timedelta(hours=6):
+                needs_refresh = True
+        else:
+            needs_refresh = True
+        
+        # Fetch fresh data if needed
+        if needs_refresh:
+            from character_enrichment import enrich_and_cache_character
+            enriched_data = await enrich_and_cache_character(
+                character_id,
+                character['realm_slug'],
+                character['character_name'],
+                'eu'  # TODO: Add region column to database
+            )
+            
+            if enriched_data:
+                return web.json_response({
+                    'success': True,
+                    'data': enriched_data,
+                    'cached': False
+                })
+        
+        # Return cached data
+        if character['enrichment_cache']:
+            return web.json_response({
+                'success': True,
+                'data': character['enrichment_cache'],
+                'cached': True,
+                'cached_at': character['last_enriched'].isoformat() if character['last_enriched'] else None
+            })
+        
+        return web.json_response({'error': 'No data available'}, status=404)
+        
+    except Exception as e:
+        logger.error(f"Error fetching character details: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@require_auth
 async def handle_discord_user_detail(request):
     """GET /admin/discord-users/{discord_id} - show characters for a specific Discord user"""
     session = request['session']
@@ -2038,7 +2107,7 @@ async def handle_discord_user_detail(request):
         # Get all characters for this Discord user
         cursor.execute("""
             SELECT 
-                character_name, realm_name, character_class,
+                id, character_name, realm_name, character_class,
                 character_race, faction, level, item_level,
                 created_at, last_updated
             FROM wow_characters
@@ -2083,23 +2152,29 @@ async def handle_discord_user_detail(request):
             updated = char['last_updated'].strftime('%Y-%m-%d %H:%M') if char['last_updated'] else 'N/A'
             
             chars_html += f"""
-            <div class="card" style="border-left:4px solid {faction_color}">
-                <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:15px">
-                    <div>
-                        <h3 style="margin:0">{faction_emoji} {char['character_name']}</h3>
-                        <p style="margin:5px 0;color:rgba(255,255,255,0.7)">{char['realm_name']}</p>
+            <div class="card character-card" style="border-left:4px solid {faction_color}" data-character-id="{char['id']}">
+                <div class="character-header" onclick="toggleCharacterDetails({char['id']})" style="cursor:pointer">
+                    <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:15px">
+                        <div>
+                            <h3 style="margin:0">{faction_emoji} {char['character_name']}</h3>
+                            <p style="margin:5px 0;color:rgba(255,255,255,0.7)">{char['realm_name']}</p>
+                        </div>
+                        <div style="text-align:right">
+                            <div style="font-size:24px;font-weight:700;color:#5865F2">{ilvl}</div>
+                            <div style="font-size:12px;color:rgba(255,255,255,0.5)">Item Level</div>
+                        </div>
                     </div>
-                    <div style="text-align:right">
-                        <div style="font-size:24px;font-weight:700;color:#5865F2">{ilvl}</div>
-                        <div style="font-size:12px;color:rgba(255,255,255,0.5)">Item Level</div>
+                    <div style="display:flex;gap:20px;margin-top:15px;flex-wrap:wrap;align-items:center">
+                        <div><strong>Class:</strong> {char['character_class'] or 'N/A'}</div>
+                        <div><strong>Race:</strong> {char['character_race'] or 'N/A'}</div>
+                        <div><strong>Level:</strong> {char['level'] or 'N/A'}</div>
+                        <span class="expand-indicator" style="margin-left:auto;color:rgba(255,255,255,0.5);font-size:14px">▼ Click to view details</span>
                     </div>
                 </div>
-                <div style="display:flex;gap:20px;margin-top:15px;flex-wrap:wrap">
-                    <div><strong>Class:</strong> {char['character_class'] or 'N/A'}</div>
-                    <div><strong>Race:</strong> {char['character_race'] or 'N/A'}</div>
-                    <div><strong>Level:</strong> {char['level'] or 'N/A'}</div>
+                
+                <div class="character-details" id="details-{char['id']}" style="display:none;margin-top:15px;padding-top:15px;border-top:1px solid rgba(255,255,255,0.1)">
+                    <div class="loading" style="text-align:center;padding:20px;color:rgba(255,255,255,0.6)">⏳ Loading character data...</div>
                 </div>
-                <p style="margin:15px 0 0 0;font-size:12px;color:rgba(255,255,255,0.4)">Last updated: {updated}</p>
             </div>
             """
         
@@ -2108,7 +2183,54 @@ async def handle_discord_user_detail(request):
         <html>
         <head>
             <title>LuminisBot Admin - User Characters</title>
-            <style>{ADMIN_CSS}</style>
+            <style>
+                {ADMIN_CSS}
+                .character-card {{ transition: all 0.2s; }}
+                .character-card:hover {{ background: rgba(255,255,255,0.02); }}
+                .expand-indicator {{ transition: transform 0.2s; }}
+                .character-card.expanded .expand-indicator {{ transform: rotate(180deg); }}
+                .stat-box {{ 
+                    background: rgba(255,255,255,0.05); 
+                    padding: 12px; 
+                    border-radius: 8px; 
+                    text-align: center;
+                }}
+                .gear-grid {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                    gap: 8px;
+                }}
+                .gear-item {{
+                    padding: 8px;
+                    background: rgba(255,255,255,0.05);
+                    border-radius: 6px;
+                    font-size: 13px;
+                    border-left: 3px solid;
+                }}
+                .talent-choice {{
+                    padding: 6px 10px;
+                    background: rgba(88, 101, 242, 0.2);
+                    border-radius: 4px;
+                    font-size: 13px;
+                    display: inline-block;
+                    margin: 4px;
+                }}
+                .dungeon-run {{
+                    padding: 10px;
+                    background: rgba(255,255,255,0.05);
+                    border-radius: 6px;
+                    font-size: 14px;
+                }}
+                .section-title {{
+                    margin: 20px 0 10px 0;
+                    color: #5865F2;
+                    font-weight: 600;
+                    font-size: 16px;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }}
+            </style>
         </head>
         <body>
             <div class="container">
@@ -2129,6 +2251,260 @@ async def handle_discord_user_detail(request):
                     {chars_html}
                 </div>
             </div>
+            
+            <script>
+                let loadedCharacters = new Set();
+                
+                async function toggleCharacterDetails(characterId) {{
+                    const detailsDiv = document.getElementById('details-' + characterId);
+                    const card = document.querySelector('[data-character-id="' + characterId + '"]');
+                    const indicator = card.querySelector('.expand-indicator');
+                    
+                    if (detailsDiv.style.display === 'none') {{
+                        detailsDiv.style.display = 'block';
+                        card.classList.add('expanded');
+                        indicator.textContent = '▲ Click to collapse';
+                        
+                        if (!loadedCharacters.has(characterId)) {{
+                            await loadCharacterDetails(characterId);
+                        }}
+                    }} else {{
+                        detailsDiv.style.display = 'none';
+                        card.classList.remove('expanded');
+                        indicator.textContent = '▼ Click to view details';
+                    }}
+                }}
+                
+                async function loadCharacterDetails(characterId, forceRefresh = false) {{
+                    const detailsDiv = document.getElementById('details-' + characterId);
+                    
+                    if (!forceRefresh) {{
+                        detailsDiv.innerHTML = '<div class="loading" style="text-align:center;padding:20px;color:rgba(255,255,255,0.6)">⏳ Loading character data...</div>';
+                    }}
+                    
+                    try {{
+                        const url = '/admin/api/character-details/' + characterId + (forceRefresh ? '?refresh=true' : '');
+                        const response = await fetch(url);
+                        const result = await response.json();
+                        
+                        if (!result.success) {{
+                            detailsDiv.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ Failed to load character data: ' + (result.error || 'Unknown error') + '</p>';
+                            return;
+                        }}
+                        
+                        const data = result.data;
+                        loadedCharacters.add(characterId);
+                        
+                        detailsDiv.innerHTML = buildCharacterDetailsHTML(data, characterId, result.cached, result.cached_at);
+                        
+                    }} catch (err) {{
+                        console.error(err);
+                        detailsDiv.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ Error loading data: ' + err.message + '</p>';
+                    }}
+                }}
+                
+                function buildCharacterDetailsHTML(data, characterId, cached, cachedAt) {{
+                    let html = '';
+                    
+                    // M+ Score Section
+                    if (data.mythic_plus_score && data.mythic_plus_score > 0) {{
+                        html += `
+                            <div class="section-title">⚔️ Mythic+ Rating</div>
+                            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:20px">
+                                <div class="stat-box">
+                                    <div style="font-size:24px;font-weight:700;color:#5865F2">\${{Math.round(data.mythic_plus_score)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">Overall</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div style="font-size:18px;font-weight:600">\${{Math.round(data.mythic_plus_score_tank || 0)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">Tank</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div style="font-size:18px;font-weight:600">\${{Math.round(data.mythic_plus_score_healer || 0)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">Healer</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div style="font-size:18px;font-weight:600">\${{Math.round(data.mythic_plus_score_dps || 0)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">DPS</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                    
+                    // Raid Progress Section
+                    if (data.raid_progression && Object.keys(data.raid_progression).length > 0) {{
+                        html += '<div class="section-title">🏰 Raid Progression</div>';
+                        
+                        for (const [raidName, progress] of Object.entries(data.raid_progression)) {{
+                            const normal = progress.normal_bosses_killed || 0;
+                            const heroic = progress.heroic_bosses_killed || 0;
+                            const mythic = progress.mythic_bosses_killed || 0;
+                            const total = progress.total_bosses || 0;
+                            
+                            if (total > 0) {{
+                                const raidDisplayName = raidName.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                                html += `
+                                    <div style="margin-bottom:10px;padding:12px;background:rgba(255,255,255,0.05);border-radius:8px">
+                                        <div style="font-weight:600;margin-bottom:8px">\${{raidDisplayName}}</div>
+                                        <div style="display:flex;gap:20px;font-size:14px;flex-wrap:wrap">
+                                            <span style="color:#00ff00">Normal: \${{normal}}/\${{total}}</span>
+                                            <span style="color:#0088ff">Heroic: \${{heroic}}/\${{total}}</span>
+                                            <span style="color:#ff6b6b">Mythic: \${{mythic}}/\${{total}}</span>
+                                        </div>
+                                    </div>
+                                `;
+                            }}
+                        }}
+                    }}
+                    
+                    // Best M+ Runs
+                    if (data.mythic_plus_best_runs && data.mythic_plus_best_runs.length > 0) {{
+                        html += `
+                            <div class="section-title">🏆 Best Mythic+ Runs (Top 5)</div>
+                            <div style="display:grid;gap:8px;margin-bottom:20px">
+                        `;
+                        
+                        data.mythic_plus_best_runs.slice(0, 5).forEach(run => {{
+                            const upgradeText = run.num_keystone_upgrades > 0 ? `+\${{run.num_keystone_upgrades}} chest` : 'Timed';
+                            html += `
+                                <div class="dungeon-run">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                                        <span style="font-weight:600">\${{run.dungeon}}</span>
+                                        <span style="color:#5865F2;font-weight:700;font-size:16px">+\${{run.mythic_level}}</span>
+                                    </div>
+                                    <div style="color:rgba(255,255,255,0.6);font-size:12px">
+                                        \${{upgradeText}} · Score: \${{Math.round(run.score)}} · \${{new Date(run.completed_at).toLocaleDateString()}}
+                                    </div>
+                                </div>
+                            `;
+                        }});
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Character Info
+                    if (data.active_spec || data.achievement_points || data.covenant) {{
+                        html += '<div class="section-title">📊 Character Info</div>';
+                        html += '<div style="display:grid;gap:10px;margin-bottom:20px;background:rgba(255,255,255,0.05);padding:15px;border-radius:8px">';
+                        
+                        if (data.active_spec) {{
+                            html += `<div><strong>Active Spec:</strong> \${{data.active_spec}}</div>`;
+                        }}
+                        if (data.achievement_points) {{
+                            html += `<div><strong>Achievement Points:</strong> \${{data.achievement_points.toLocaleString()}}</div>`;
+                        }}
+                        if (data.covenant) {{
+                            html += `<div><strong>Covenant:</strong> \${{data.covenant}}\${{data.renown ? ' (Renown ' + data.renown + ')' : ''}}</div>`;
+                        }}
+                        if (data.guild) {{
+                            html += `<div><strong>Guild:</strong> \${{data.guild}}</div>`;
+                        }}
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Equipped Gear
+                    if (data.equipped_items && data.equipped_items.length > 0) {{
+                        html += '<div class="section-title">🎒 Equipped Gear</div>';
+                        html += '<div class="gear-grid" style="margin-bottom:20px">';
+                        
+                        const slotOrder = ['HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST', 'HANDS', 'WAIST', 'LEGS', 'FEET', 'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2', 'MAIN_HAND', 'OFF_HAND'];
+                        const itemsBySlot = {{}};
+                        
+                        data.equipped_items.forEach(item => {{
+                            itemsBySlot[item.slot.type] = item;
+                        }});
+                        
+                        slotOrder.forEach(slotType => {{
+                            const item = itemsBySlot[slotType];
+                            if (item) {{
+                                const qualityColor = getQualityColor(item.quality.type);
+                                const slotName = getSlotName(slotType);
+                                const enchantText = item.enchantments ? ' 🌟' : '';
+                                const socketText = item.sockets ? ' 💎' : '';
+                                
+                                html += `
+                                    <div class="gear-item" style="border-color: \${{qualityColor}}">
+                                        <div style="font-weight:600;color:\${{qualityColor}};margin-bottom:2px">\${{item.name}}\${{enchantText}}\${{socketText}}</div>
+                                        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">\${{slotName}}</div>
+                                        <div style="display:flex;justify-content:space-between;font-size:12px">
+                                            <span>iLvl \${{item.level.value}}</span>
+                                            \${{item.stats ? '<span>' + item.stats.length + ' stats</span>' : ''}}
+                                        </div>
+                                    </div>
+                                `;
+                            }}
+                        }});
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Talents/Specialization
+                    if (data.active_specialization && data.active_specialization.talents) {{
+                        html += '<div class="section-title">🌟 Active Talents</div>';
+                        html += '<div style="margin-bottom:20px">';
+                        
+                        data.active_specialization.talents.forEach(talent => {{
+                            html += `<span class="talent-choice">\${{talent.talent.name}}</span>`;
+                        }});
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Links and Actions
+                    html += '<div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">';
+                    
+                    if (data.raiderio_url) {{
+                        html += `<a href="\${{data.raiderio_url}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Raider.IO</a>`;
+                    }}
+                    
+                    html += `<button onclick="event.stopPropagation(); loadCharacterDetails(\${{characterId}}, true)" class="btn btn-secondary" style="font-size:14px">🔄 Refresh Data</button>`;
+                    html += '</div>';
+                    
+                    if (cached && cachedAt) {{
+                        const cachedTime = new Date(cachedAt).toLocaleString();
+                        html += `<div style="margin-top:15px;padding:10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:12px;color:rgba(255,255,255,0.5)">📦 Cached data from \${{cachedTime}}</div>`;
+                    }}
+                    
+                    return html;
+                }}
+                
+                function getQualityColor(qualityType) {{
+                    const colors = {{
+                        'POOR': '#9d9d9d',
+                        'COMMON': '#ffffff',
+                        'UNCOMMON': '#1eff00',
+                        'RARE': '#0070dd',
+                        'EPIC': '#a335ee',
+                        'LEGENDARY': '#ff8000',
+                        'ARTIFACT': '#e6cc80',
+                        'HEIRLOOM': '#00ccff'
+                    }};
+                    return colors[qualityType] || '#ffffff';
+                }}
+                
+                function getSlotName(slotType) {{
+                    const names = {{
+                        'HEAD': 'Head',
+                        'NECK': 'Neck',
+                        'SHOULDER': 'Shoulder',
+                        'BACK': 'Back',
+                        'CHEST': 'Chest',
+                        'WRIST': 'Wrist',
+                        'HANDS': 'Hands',
+                        'WAIST': 'Waist',
+                        'LEGS': 'Legs',
+                        'FEET': 'Feet',
+                        'FINGER_1': 'Ring 1',
+                        'FINGER_2': 'Ring 2',
+                        'TRINKET_1': 'Trinket 1',
+                        'TRINKET_2': 'Trinket 2',
+                        'MAIN_HAND': 'Main Hand',
+                        'OFF_HAND': 'Off Hand'
+                    }};
+                    return names[slotType] || slotType;
+                }}
+            </script>
         </body>
         </html>
         """
@@ -2988,6 +3364,7 @@ def create_app(bot=None):
     app.router.add_get('/admin/discord-users', handle_discord_users_page)
     app.router.add_get('/admin/discord-users/{discord_id}', handle_discord_user_detail)
     app.router.add_post('/admin/api/refresh-discord-info/{discord_id}', handle_refresh_discord_info)
+    app.router.add_get('/admin/api/character-details/{character_id}', handle_character_details_api)
     app.router.add_get('/admin/events', handle_events_page)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
