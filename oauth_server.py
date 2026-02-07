@@ -2053,7 +2053,9 @@ async def handle_character_details_api(request):
         # Check if we need to refresh (cache older than 6 hours or forced)
         needs_refresh = force_refresh
         if character['last_enriched']:
-            age = datetime.now() - character['last_enriched']
+            # Make datetime timezone-aware if last_enriched is timezone-aware
+            now = datetime.now(character['last_enriched'].tzinfo) if character['last_enriched'].tzinfo else datetime.now()
+            age = now - character['last_enriched']
             if age > timedelta(hours=6):
                 needs_refresh = True
         else:
@@ -2626,6 +2628,25 @@ async def handle_discord_user_detail(request):
                             }}
                         }});
                         tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show spells (on-use, on-equip effects)
+                    if (item.spells && item.spells.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.spells.forEach(spell => {{
+                            const spellText = spell.description || spell.spell.name;
+                            tooltipHTML += `<div style="color:#00ff88;font-size:12px;margin-bottom:4px;line-height:1.4">
+                                ${{spellText}}
+                            </div>`;
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show description
+                    if (item.description) {{
+                        tooltipHTML += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">
+                            <div style="color:#ffd700;font-size:11px;font-style:italic;line-height:1.4">${{item.description}}</div>
+                        </div>`;
                     }}
                     
                     // Show item set
