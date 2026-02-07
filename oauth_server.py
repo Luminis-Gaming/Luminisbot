@@ -3110,10 +3110,6 @@ async def handle_discord_user_detail(request):
                                 <div class="stat-value">${{stats.signed_count || 0}}</div>
                                 <div class="stat-label">Attended</div>
                             </div>
-                            <div class="stat">
-                                <div class="stat-value">${{stats.events_with_logs || 0}}</div>
-                                <div class="stat-label">Boss Kills</div>
-                            </div>
                         `;
                         html += '</div>';
                         
