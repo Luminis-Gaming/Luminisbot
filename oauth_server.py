@@ -2097,6 +2097,53 @@ async def handle_character_details_api(request):
 
 
 @require_auth
+async def handle_character_simc_api(request):
+    """GET /admin/api/character-simc/{character_id} - generate SimulationCraft import string"""
+    character_id = int(request.match_info.get('character_id'))
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get character info
+        cursor.execute("""
+            SELECT id, character_name, realm_slug, realm_name, enrichment_cache, last_enriched
+            FROM wow_characters
+            WHERE id = %s
+        """, (character_id,))
+        
+        character = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not character:
+            return web.json_response({'error': 'Character not found'}, status=404)
+        
+        # Generate SimC string
+        from character_enrichment import generate_simc_string
+        
+        # Use cached data if available and fresh
+        if character['enrichment_cache']:
+            simc_string = generate_simc_string(character['enrichment_cache'])
+            
+            if simc_string:
+                return web.json_response({
+                    'success': True,
+                    'simc': simc_string,
+                    'character_name': character['character_name'],
+                    'realm': character['realm_name']
+                })
+        
+        return web.json_response({'error': 'Character data not available. Try refreshing character data first.'}, status=404)
+        
+    except Exception as e:
+        logger.error(f"Error generating SimC string: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@require_auth
 async def handle_discord_user_detail(request):
     """GET /admin/discord-users/{discord_id} - show characters for a specific Discord user"""
     session = request['session']
@@ -2370,6 +2417,118 @@ async def handle_discord_user_detail(request):
                     }}
                 }}
                 
+                async function getSimcString(characterId) {{
+                    try {{
+                        const response = await fetch('/admin/api/character-simc/' + characterId);
+                        const result = await response.json();
+                        
+                        if (!result.success) {{
+                            alert('Failed to generate SimC string: ' + (result.error || 'Unknown error'));
+                            return;
+                        }}
+                        
+                        // Create modal to display SimC string
+                        const modal = document.createElement('div');
+                        modal.style.cssText = `
+                            position: fixed;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            background: rgba(0,0,0,0.8);
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            z-index: 10000;
+                            padding: 20px;
+                        `;
+                        
+                        const modalContent = document.createElement('div');
+                        modalContent.style.cssText = `
+                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                            border-radius: 12px;
+                            padding: 30px;
+                            max-width: 800px;
+                            width: 100%;
+                            max-height: 80vh;
+                            overflow: auto;
+                            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+                        `;
+                        
+                        modalContent.innerHTML = `
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                                <h2 style="margin:0;color:#5865F2">📊 SimulationCraft String</h2>
+                                <button onclick="this.closest('div[style*=\\'position: fixed\\']').remove()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0;width:30px;height:30px">&times;</button>
+                            </div>
+                            <p style="margin-bottom:15px;color:rgba(255,255,255,0.7)">
+                                Copy this string and paste it into <a href="https://www.raidbots.com/simbot" target="_blank" style="color:#5865F2">Raidbots</a> or SimulationCraft to simulate your character.
+                            </p>
+                            <div style="position:relative">
+                                <textarea readonly id="simc-textarea" style="
+                                    width: 100%;
+                                    height: 400px;
+                                    background: rgba(0,0,0,0.3);
+                                    border: 1px solid rgba(255,255,255,0.2);
+                                    border-radius: 8px;
+                                    padding: 15px;
+                                    color: #fff;
+                                    font-family: 'Courier New', monospace;
+                                    font-size: 13px;
+                                    resize: vertical;
+                                    box-sizing: border-box;
+                                ">${{result.simc}}</textarea>
+                                <button onclick="copySimcToClipboard()" style="
+                                    position: absolute;
+                                    top: 10px;
+                                    right: 10px;
+                                    background: #5865F2;
+                                    color: white;
+                                    border: none;
+                                    padding: 8px 16px;
+                                    border-radius: 6px;
+                                    cursor: pointer;
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                " onmouseover="this.style.background='#4752C4'" onmouseout="this.style.background='#5865F2'">
+                                    📋 Copy to Clipboard
+                                </button>
+                            </div>
+                            <div style="margin-top:15px;padding:12px;background:rgba(88,101,242,0.1);border-radius:6px;font-size:13px">
+                                <strong>Tip:</strong> Visit <a href="https://www.raidbots.com/simbot" target="_blank" style="color:#5865F2">Raidbots.com</a>, select "Quick Sim", paste this string, and click "Run Simulation" to see your DPS potential!
+                            </div>
+                        `;
+                        
+                        modal.appendChild(modalContent);
+                        document.body.appendChild(modal);
+                        
+                        // Focus the textarea and select all text for easy copying
+                        const textarea = document.getElementById('simc-textarea');
+                        textarea.focus();
+                        textarea.select();
+                        
+                    }} catch (err) {{
+                        console.error(err);
+                        alert('Error generating SimC string: ' + err.message);
+                    }}
+                }}
+                
+                function copySimcToClipboard() {{
+                    const textarea = document.getElementById('simc-textarea');
+                    textarea.select();
+                    document.execCommand('copy');
+                    
+                    // Show feedback
+                    const button = event.target;
+                    const originalText = button.textContent;
+                    button.textContent = '✅ Copied!';
+                    button.style.background = '#43b581';
+                    
+                    setTimeout(() => {{
+                        button.textContent = originalText;
+                        button.style.background = '#5865F2';
+                    }}, 2000);
+                }}
+                
                 function buildCharacterDetailsHTML(data, characterId, cached, cachedAt) {{
                     let html = '';
                     
@@ -2565,6 +2724,9 @@ async def handle_discord_user_detail(request):
                         const wclUrl = `https://www.warcraftlogs.com/character/${{wclRegion}}/${{wclRealm}}/${{wclName}}`;
                         html += `<a href="${{wclUrl}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Warcraft Logs</a>`;
                     }}
+                    
+                    // SimC button
+                    html += `<button onclick="event.stopPropagation(); getSimcString(${{characterId}})" class="btn btn-secondary" style="font-size:14px">📊 Get SimC String</button>`;
                     
                     html += `<button onclick="event.stopPropagation(); loadCharacterDetails(${{characterId}}, true)" class="btn btn-secondary" style="font-size:14px">🔄 Refresh Data</button>`;
                     html += '</div>';
@@ -3632,6 +3794,7 @@ def create_app(bot=None):
     app.router.add_get('/admin/discord-users/{discord_id}', handle_discord_user_detail)
     app.router.add_post('/admin/api/refresh-discord-info/{discord_id}', handle_refresh_discord_info)
     app.router.add_get('/admin/api/character-details/{character_id}', handle_character_details_api)
+    app.router.add_get('/admin/api/character-simc/{character_id}', handle_character_simc_api)
     app.router.add_get('/admin/events', handle_events_page)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)

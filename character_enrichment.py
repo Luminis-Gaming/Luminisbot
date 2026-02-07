@@ -381,6 +381,170 @@ class CharacterEnricher:
         return enriched
 
 
+def generate_simc_string(character_data: Dict[str, Any]) -> str:
+    """
+    Generate a SimulationCraft import string from character data.
+    Format based on SimC's addon string format.
+    """
+    lines = []
+    
+    # Character name and server
+    name = character_data.get('character_name', 'Unknown')
+    realm = character_data.get('realm', 'Unknown')
+    region = character_data.get('region', 'EU').upper()
+    
+    # Basic character info
+    char_class = character_data.get('character_class', 'Unknown')
+    race = character_data.get('race', 'Unknown')
+    level = character_data.get('level', 70)
+    
+    # Spec and role
+    spec = character_data.get('active_spec', 'Unknown')
+    active_spec_data = character_data.get('active_specialization', {})
+    spec_name = active_spec_data.get('specialization', {}).get('name', spec)
+    
+    # SimC header
+    lines.append(f"{char_class.lower().replace(' ', '')}=\"{name}\"")
+    lines.append(f"level={level}")
+    lines.append(f"race={race.lower().replace(' ', '_')}")
+    lines.append(f"region={region.lower()}")
+    lines.append(f"server={realm.lower().replace(' ', '_').replace(\"'\", '')}")
+    lines.append(f"role=auto")
+    lines.append(f"spec={spec_name.lower().replace(' ', '_')}")
+    
+    # Talents (if available)
+    if active_spec_data and 'talents' in active_spec_data:
+        talents = active_spec_data['talents']
+        talent_string = ""
+        for talent in talents:
+            talent_name = talent.get('talent', {}).get('name', '')
+            if talent_name:
+                # SimC uses talent names in specific format
+                talent_string += f"{talent_name.lower().replace(' ', '_')},"
+        if talent_string:
+            lines.append(f"talents={talent_string.rstrip(',')}")
+    
+    # Equipment
+    equipped_items = character_data.get('equipped_items', [])
+    if equipped_items:
+        # Slot mapping for SimC
+        slot_map = {
+            'HEAD': 'head',
+            'NECK': 'neck',
+            'SHOULDER': 'shoulder',
+            'BACK': 'back',
+            'CHEST': 'chest',
+            'WRIST': 'wrist',
+            'HANDS': 'hands',
+            'WAIST': 'waist',
+            'LEGS': 'legs',
+            'FEET': 'feet',
+            'FINGER_1': 'finger1',
+            'FINGER_2': 'finger2',
+            'TRINKET_1': 'trinket1',
+            'TRINKET_2': 'trinket2',
+            'MAIN_HAND': 'main_hand',
+            'OFF_HAND': 'off_hand'
+        }
+        
+        for item in equipped_items:
+            slot_type = item.get('slot', {}).get('type')
+            simc_slot = slot_map.get(slot_type)
+            
+            if not simc_slot:
+                continue
+            
+            # Item ID and bonus IDs
+            item_id = item.get('item', {}).get('id', 0)
+            bonus_ids = []
+            
+            # Bonus list
+            if 'bonus_list' in item:
+                bonus_ids = item['bonus_list']
+            
+            # Enchantments
+            enchant_id = 0
+            if 'enchantments' in item:
+                for enchant in item['enchantments']:
+                    if enchant.get('enchantment_id'):
+                        enchant_id = enchant['enchantment_id']
+                        break
+            
+            # Gems/Sockets
+            gem_ids = []
+            if 'sockets' in item:
+                for socket in item['sockets']:
+                    if socket.get('item'):
+                        gem_ids.append(socket['item'].get('id', 0))
+            
+            # Build item string
+            item_str = f"{simc_slot}=,id={item_id}"
+            
+            if bonus_ids:
+                item_str += f",bonus_id={'/'.join(map(str, bonus_ids))}"
+            
+            if enchant_id:
+                item_str += f",enchant_id={enchant_id}"
+            
+            if gem_ids:
+                item_str += f",gem_id={'/'.join(map(str, gem_ids))}"
+            
+            # Item level
+            item_level = item.get('level', {}).get('value', 0)
+            if item_level:
+                item_str += f",ilevel={item_level}"
+            
+            lines.append(item_str)
+    
+    # Join all lines
+    simc_string = "\n".join(lines)
+    
+    return simc_string
+
+
+async def generate_simc_for_character(character_id: int, realm: str, name: str, region: str = 'eu') -> Optional[str]:
+    """
+    Generate SimC string for a character, fetching data if necessary
+    """
+    from database import get_db_connection
+    
+    # Try to get cached data first
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT enrichment_cache, last_enriched
+                FROM wow_characters
+                WHERE id = %s
+            """, (character_id,))
+            result = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            
+            if result and result[0]:
+                # Check if cache is fresh (less than 6 hours old)
+                cache_data, last_enriched = result
+                if last_enriched:
+                    age = datetime.now() - last_enriched
+                    if age < timedelta(hours=6):
+                        # Use cached data
+                        return generate_simc_string(cache_data)
+        except Exception as e:
+            logger.error(f"Error checking cache: {e}")
+            if conn:
+                conn.close()
+    
+    # Fetch fresh data
+    enricher = CharacterEnricher()
+    data = await enricher.enrich_character(realm, name, region)
+    
+    if not data:
+        return None
+    
+    return generate_simc_string(data)
+
+
 async def enrich_and_cache_character(character_id: int, realm: str, name: str, region: str = 'eu'):
     """
     Enrich character data and store in database
