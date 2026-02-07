@@ -2566,17 +2566,27 @@ async def handle_discord_user_detail(request):
                 }}
                 
                 function getItemIconUrl(item) {{
-                    // Try to get icon from media object
-                    if (item.media && item.media.id) {{
-                        // Use Blizzard's render service
-                        return `https://render.worldofwarcraft.com/eu/icons/56/${{item.media.id}}.jpg`;
-                    }}
-                    // Fallback: construct from item ID (less reliable but works)
+                    // Use Wowhead's icon service - much more reliable than Blizzard's
                     if (item.item && item.item.id) {{
-                        return `https://render.worldofwarcraft.com/eu/icons/56/${{item.item.id}}.jpg`;
+                        return `https://wow.zamimg.com/images/wow/icons/large/${{getIconName(item)}}.jpg`;
                     }}
-                    // Last resort: use a placeholder
+                    // Fallback: use a placeholder
                     return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="56" height="56" fill="%23333"/></svg>';
+                }}
+                
+                function getIconName(item) {{
+                    // Try to extract icon name from media key if available
+                    if (item.media && item.media.key && item.media.key.href) {{
+                        const match = item.media.key.href.match(/item-media\\/(\\d+)/);
+                        if (match) {{
+                            return match[1];
+                        }}
+                    }}
+                    // Fallback to item ID
+                    if (item.item && item.item.id) {{
+                        return item.item.id;
+                    }}
+                    return 'inv_misc_questionmark';
                 }}
                 
                 let tooltipElement = null;
