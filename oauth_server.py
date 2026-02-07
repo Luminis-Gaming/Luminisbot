@@ -2230,6 +2230,24 @@ async def handle_discord_user_detail(request):
                     align-items: center;
                     gap: 8px;
                 }}
+                .item-tooltip {{
+                    position: absolute;
+                    background: linear-gradient(to bottom, rgba(20,20,30,0.98), rgba(10,10,20,0.98));
+                    border: 1px solid rgba(255,255,255,0.2);
+                    border-radius: 8px;
+                    padding: 12px;
+                    min-width: 250px;
+                    max-width: 350px;
+                    z-index: 10000;
+                    pointer-events: none;
+                    font-size: 13px;
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+                    display: none;
+                }}
+                .gear-item {{
+                    position: relative;
+                    cursor: help;
+                }}
             </style>
         </head>
         <body>
@@ -2296,6 +2314,18 @@ async def handle_discord_user_detail(request):
                         loadedCharacters.add(characterId);
                         
                         detailsDiv.innerHTML = buildCharacterDetailsHTML(data, characterId, result.cached, result.cached_at);
+                        
+                        // Update item level in the header if available
+                        if (data.average_item_level || data.item_level_equipped) {{
+                            const card = document.querySelector(`[data-character-id="${{characterId}}"]`);
+                            if (card) {{
+                                const ilvlDisplay = card.querySelector('.character-header > div > div:last-child > div:first-child');
+                                if (ilvlDisplay) {{
+                                    const ilvl = Math.round(data.average_item_level || data.item_level_equipped);
+                                    ilvlDisplay.textContent = ilvl;
+                                }}
+                            }}
+                        }}
                         
                     }} catch (err) {{
                         console.error(err);
@@ -2424,7 +2454,9 @@ async def handle_discord_user_detail(request):
                                 const socketText = item.sockets ? ' 💎' : '';
                                 
                                 html += `
-                                    <div class="gear-item" style="border-color: ${{qualityColor}}">
+                                    <div class="gear-item" style="border-color: ${{qualityColor}}" 
+                                         onmouseenter="showItemTooltip(event, ${{JSON.stringify(item).replace(/"/g, '&quot;')}})"
+                                         onmouseleave="hideItemTooltip()">
                                         <div style="font-weight:600;color:${{qualityColor}};margin-bottom:2px">${{item.name}}${{enchantText}}${{socketText}}</div>
                                         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">${{slotName}}</div>
                                         <div style="display:flex;justify-content:space-between;font-size:12px">
@@ -2456,6 +2488,15 @@ async def handle_discord_user_detail(request):
                     
                     if (data.raiderio_url) {{
                         html += `<a href="${{data.raiderio_url}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Raider.IO</a>`;
+                    }}
+                    
+                    // Warcraft Logs link
+                    if (data.character_name && data.realm) {{
+                        const wclRegion = data.region || 'eu';
+                        const wclRealm = data.realm.replace(/'/g, '');
+                        const wclName = data.character_name;
+                        const wclUrl = `https://www.warcraftlogs.com/character/${{wclRegion}}/${{wclRealm}}/${{wclName}}`;
+                        html += `<a href="${{wclUrl}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Warcraft Logs</a>`;
                     }}
                     
                     html += `<button onclick="event.stopPropagation(); loadCharacterDetails(${{characterId}}, true)" class="btn btn-secondary" style="font-size:14px">🔄 Refresh Data</button>`;
@@ -2503,6 +2544,123 @@ async def handle_discord_user_detail(request):
                         'OFF_HAND': 'Off Hand'
                     }};
                     return names[slotType] || slotType;
+                }}
+                
+                let tooltipElement = null;
+                
+                function showItemTooltip(event, itemData) {{
+                    if (!tooltipElement) {{
+                        tooltipElement = document.createElement('div');
+                        tooltipElement.className = 'item-tooltip';
+                        document.body.appendChild(tooltipElement);
+                    }}
+                    
+                    const item = typeof itemData === 'string' ? JSON.parse(itemData) : itemData;
+                    const qualityColor = getQualityColor(item.quality.type);
+                    
+                    let tooltipHTML = `
+                        <div style="color:${{qualityColor}};font-weight:700;font-size:14px;margin-bottom:8px">${{item.name}}</div>
+                        <div style="color:rgba(255,255,255,0.7);font-size:12px;margin-bottom:8px">
+                            Item Level ${{item.level.value}}
+                        </div>
+                    `;
+                    
+                    // Show item binding
+                    if (item.binding && item.binding.name) {{
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.6);font-size:11px;margin-bottom:4px">${{item.binding.name}}</div>`;
+                    }}
+                    
+                    // Show slot
+                    if (item.slot) {{
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.6);font-size:11px;margin-bottom:8px">${{item.slot.name}}</div>`;
+                    }}
+                    
+                    // Show armor/weapon info
+                    if (item.armor) {{
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.8);margin-bottom:4px">${{item.armor.display.display_string}}</div>`;
+                    }}
+                    if (item.weapon) {{
+                        const dmg = item.weapon.damage;
+                        const dps = item.weapon.dps;
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.8);margin-bottom:4px">
+                            ${{dmg.display_string}}<br>
+                            (${{dps.display_string}})
+                        </div>`;
+                    }}
+                    
+                    // Show stats
+                    if (item.stats && item.stats.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.stats.forEach(stat => {{
+                            const statColor = stat.is_negated ? '#ff6b6b' : '#00ff88';
+                            tooltipHTML += `<div style="color:${{statColor}};font-size:12px;margin-bottom:2px">
+                                +${{stat.display.display_string}}
+                            </div>`;
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show enchantments
+                    if (item.enchantments && item.enchantments.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.enchantments.forEach(ench => {{
+                            tooltipHTML += `<div style="color:#00ff88;font-size:12px;margin-bottom:2px">
+                                🌟 ${{ench.display_string}}
+                            </div>`;
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show sockets
+                    if (item.sockets && item.sockets.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.sockets.forEach(socket => {{
+                            if (socket.item) {{
+                                tooltipHTML += `<div style="color:#8888ff;font-size:12px;margin-bottom:2px">
+                                    💎 ${{socket.item.name}}
+                                </div>`;
+                            }} else {{
+                                tooltipHTML += `<div style="color:rgba(255,255,255,0.5);font-size:12px;margin-bottom:2px">
+                                    ◇ Empty Socket
+                                </div>`;
+                            }}
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show item set
+                    if (item.set) {{
+                        tooltipHTML += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">
+                            <div style="color:#ffd700;font-size:12px;margin-bottom:4px">${{item.set.item_set.name}}</div>
+                        </div>`;
+                    }}
+                    
+                    tooltipElement.innerHTML = tooltipHTML;
+                    tooltipElement.style.display = 'block';
+                    
+                    // Position tooltip
+                    const rect = event.target.closest('.gear-item').getBoundingClientRect();
+                    const tooltipRect = tooltipElement.getBoundingClientRect();
+                    
+                    let left = rect.right + 10;
+                    let top = rect.top;
+                    
+                    // Keep tooltip on screen
+                    if (left + tooltipRect.width > window.innerWidth) {{
+                        left = rect.left - tooltipRect.width - 10;
+                    }}
+                    if (top + tooltipRect.height > window.innerHeight) {{
+                        top = window.innerHeight - tooltipRect.height - 10;
+                    }}
+                    
+                    tooltipElement.style.left = left + 'px';
+                    tooltipElement.style.top = top + window.scrollY + 'px';
+                }}
+                
+                function hideItemTooltip() {{
+                    if (tooltipElement) {{
+                        tooltipElement.style.display = 'none';
+                    }}
                 }}
             </script>
         </body>
