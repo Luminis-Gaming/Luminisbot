@@ -391,7 +391,11 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     # Character name and server
     name = character_data.get('character_name', 'Unknown')
     realm = character_data.get('realm', 'Unknown')
-    region = character_data.get('region', 'EU').upper()
+    region = character_data.get('region', 'EU')
+    if isinstance(region, str):
+        region = region.upper()
+    else:
+        region = 'EU'
     
     # Basic character info
     char_class = character_data.get('character_class', 'Unknown')
@@ -401,27 +405,41 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     # Spec and role
     spec = character_data.get('active_spec', 'Unknown')
     active_spec_data = character_data.get('active_specialization', {})
-    spec_name = active_spec_data.get('specialization', {}).get('name', spec)
+    
+    # Ensure active_spec_data is a dict
+    if not isinstance(active_spec_data, dict):
+        active_spec_data = {}
+    
+    # Get spec name safely
+    spec_name = spec
+    spec_info = active_spec_data.get('specialization', {})
+    if isinstance(spec_info, dict):
+        spec_name = spec_info.get('name', spec)
     
     # Get role from specialization
-    role = active_spec_data.get('role', {}).get('type', 'AUTO')
+    role = 'AUTO'
+    role_info = active_spec_data.get('role', {})
+    if isinstance(role_info, dict):
+        role = role_info.get('type', 'AUTO')
+    
     role_clean = role.lower() if role != 'AUTO' else 'auto'
     # Map DPS to proper role names
     if role_clean == 'dps':
         # Check if it's a spell-based spec
-        char_class_lower = char_class.lower()
+        char_class_lower = char_class.lower() if isinstance(char_class, str) else ''
         caster_classes = ['mage', 'warlock', 'priest', 'shaman', 'druid', 'evoker']
         caster_specs = ['balance', 'elemental', 'shadow', 'demonology', 'affliction', 'destruction', 'devastation', 'preservation', 'augmentation', 'devourer']
-        if char_class_lower in caster_classes or spec_name.lower() in caster_specs:
+        spec_name_lower = spec_name.lower() if isinstance(spec_name, str) else ''
+        if char_class_lower in caster_classes or spec_name_lower in caster_specs:
             role_clean = 'spell'
         else:
             role_clean = 'attack'
     
-    # SimC header
-    class_clean = char_class.lower().replace(' ', '')
-    race_clean = race.lower().replace(' ', '_')
-    realm_clean = realm.lower().replace(' ', '_').replace("'", '')
-    spec_clean = spec_name.lower().replace(' ', '_')
+    # SimC header - ensure all values are strings
+    class_clean = char_class.lower().replace(' ', '') if isinstance(char_class, str) else 'unknown'
+    race_clean = race.lower().replace(' ', '_') if isinstance(race, str) else 'unknown'
+    realm_clean = realm.lower().replace(' ', '_').replace("'", '') if isinstance(realm, str) else 'unknown'
+    spec_clean = spec_name.lower().replace(' ', '_') if isinstance(spec_name, str) else 'unknown'
     
     lines.append(f'{class_clean}="{name}"')
     lines.append(f"level={level}")
@@ -435,7 +453,7 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     talent_loadout = None
     
     # Try to get from active_specialization loadout_code
-    if active_spec_data:
+    if isinstance(active_spec_data, dict):
         if 'loadout_code' in active_spec_data:
             talent_loadout = active_spec_data['loadout_code']
         elif 'talent_loadout_code' in active_spec_data:
@@ -446,8 +464,9 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
         raiderio_talents = character_data.get('talents', {})
         if isinstance(raiderio_talents, list) and len(raiderio_talents) > 0:
             for loadout in raiderio_talents:
-                if loadout.get('active'):
+                if isinstance(loadout, dict) and loadout.get('active'):
                     talent_loadout = loadout.get('loadout_text')
+                    break
                     break
     
     if talent_loadout:
@@ -455,7 +474,7 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     
     # Equipment
     equipped_items = character_data.get('equipped_items', [])
-    if equipped_items:
+    if isinstance(equipped_items, list):
         # Slot mapping for SimC
         slot_map = {
             'HEAD': 'head',
@@ -477,34 +496,47 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
         }
         
         for item in equipped_items:
-            slot_type = item.get('slot', {}).get('type')
+            if not isinstance(item, dict):
+                continue
+                
+            slot_info = item.get('slot', {})
+            if not isinstance(slot_info, dict):
+                continue
+                
+            slot_type = slot_info.get('type')
             simc_slot = slot_map.get(slot_type)
             
             if not simc_slot:
                 continue
             
             # Item ID and bonus IDs
-            item_id = item.get('item', {}).get('id', 0)
+            item_info = item.get('item', {})
+            if not isinstance(item_info, dict):
+                continue
+                
+            item_id = item_info.get('id', 0)
             bonus_ids = []
             
             # Bonus list
-            if 'bonus_list' in item:
+            if 'bonus_list' in item and isinstance(item['bonus_list'], list):
                 bonus_ids = item['bonus_list']
             
             # Enchantments
             enchant_id = 0
-            if 'enchantments' in item:
+            if 'enchantments' in item and isinstance(item['enchantments'], list):
                 for enchant in item['enchantments']:
-                    if enchant.get('enchantment_id'):
+                    if isinstance(enchant, dict) and enchant.get('enchantment_id'):
                         enchant_id = enchant['enchantment_id']
                         break
             
             # Gems/Sockets
             gem_ids = []
-            if 'sockets' in item:
+            if 'sockets' in item and isinstance(item['sockets'], list):
                 for socket in item['sockets']:
-                    if socket.get('item'):
-                        gem_ids.append(socket['item'].get('id', 0))
+                    if isinstance(socket, dict) and socket.get('item'):
+                        socket_item = socket['item']
+                        if isinstance(socket_item, dict):
+                            gem_ids.append(socket_item.get('id', 0))
             
             # Build item string
             item_str = f"{simc_slot}=,id={item_id}"
