@@ -2477,10 +2477,13 @@ async def handle_discord_user_detail(request):
                 
                 <!-- Raid Event Attendance Section -->
                 <div class="card" style="margin-bottom:20px" id="raid-stats-section">
-                    <h2 style="margin:0 0 15px 0;color:#5865F2;display:flex;align-items:center;gap:10px">
-                        🗓️ Raid Event Attendance
-                    </h2>
-                    <div id="raid-stats-content">
+                    <div onclick="toggleRaidStats()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+                        <h2 style="margin:0;color:#5865F2;display:flex;align-items:center;gap:10px">
+                            🗓️ Raid Event Attendance
+                        </h2>
+                        <span class="expand-indicator" id="raid-stats-indicator" style="color:rgba(255,255,255,0.5);font-size:14px">▼ Click to view</span>
+                    </div>
+                    <div id="raid-stats-content" style="display:none;margin-top:15px;padding-top:15px;border-top:1px solid rgba(255,255,255,0.1)">
                         <div class="loading" style="text-align:center;padding:40px;color:rgba(255,255,255,0.6)">
                             ⏳ Loading raid statistics...
                         </div>
@@ -3269,10 +3272,29 @@ async def handle_discord_user_detail(request):
                     }}
                 }}
                 
-                // Load raid stats when page loads
-                document.addEventListener('DOMContentLoaded', function() {{
-                    loadRaidStats();
-                }});
+                // Toggle raid stats section
+                let raidStatsLoaded = false;
+                function toggleRaidStats() {{
+                    const content = document.getElementById('raid-stats-content');
+                    const indicator = document.getElementById('raid-stats-indicator');
+                    const section = document.getElementById('raid-stats-section');
+                    
+                    if (content.style.display === 'none') {{
+                        content.style.display = 'block';
+                        section.classList.add('expanded');
+                        indicator.textContent = '▲ Click to collapse';
+                        
+                        // Load data on first expand
+                        if (!raidStatsLoaded) {{
+                            loadRaidStats();
+                            raidStatsLoaded = true;
+                        }}
+                    }} else {{
+                        content.style.display = 'none';
+                        section.classList.remove('expanded');
+                        indicator.textContent = '▼ Click to view';
+                    }}
+                }}
             </script>
         </body>
         </html>
