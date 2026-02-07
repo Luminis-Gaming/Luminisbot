@@ -404,13 +404,18 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
     spec_name = active_spec_data.get('specialization', {}).get('name', spec)
     
     # SimC header
-    lines.append(f"{char_class.lower().replace(' ', '')}=\"{name}\"")
+    class_clean = char_class.lower().replace(' ', '')
+    race_clean = race.lower().replace(' ', '_')
+    realm_clean = realm.lower().replace(' ', '_').replace("'", '')
+    spec_clean = spec_name.lower().replace(' ', '_')
+    
+    lines.append(f'{class_clean}="{name}"')
     lines.append(f"level={level}")
-    lines.append(f"race={race.lower().replace(' ', '_')}")
+    lines.append(f"race={race_clean}")
     lines.append(f"region={region.lower()}")
-    lines.append(f"server={realm.lower().replace(' ', '_').replace(\"'\", '')}")
+    lines.append(f"server={realm_clean}")
     lines.append(f"role=auto")
-    lines.append(f"spec={spec_name.lower().replace(' ', '_')}")
+    lines.append(f"spec={spec_clean}")
     
     # Talents (if available)
     if active_spec_data and 'talents' in active_spec_data:
