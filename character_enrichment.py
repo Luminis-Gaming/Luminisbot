@@ -551,18 +551,26 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
             # Add crafted stats if this is a crafted item
             if 'modified_crafting_stat' in item:
                 crafted_stats = []
-                for stat in item.get('modified_crafting_stat', []):
-                    stat_id = stat.get('type', {}).get('id')
-                    if stat_id:
-                        crafted_stats.append(str(stat_id))
+                modified_stats = item.get('modified_crafting_stat', [])
+                if isinstance(modified_stats, list):
+                    for stat in modified_stats:
+                        if not isinstance(stat, dict):
+                            continue
+                        stat_type = stat.get('type', {})
+                        if isinstance(stat_type, dict):
+                            stat_id = stat_type.get('id')
+                            if stat_id:
+                                crafted_stats.append(str(stat_id))
                 if crafted_stats:
                     item_str += f",crafted_stats={'/'.join(crafted_stats)}"
             
             # Add crafting quality if available
             if 'crafting_quality' in item:
-                quality = item.get('crafting_quality', {}).get('id', 0)
-                if quality:
-                    item_str += f",crafting_quality={quality}"
+                quality_info = item.get('crafting_quality', {})
+                if isinstance(quality_info, dict):
+                    quality = quality_info.get('id', 0)
+                    if quality:
+                        item_str += f",crafting_quality={quality}"
             
             if enchant_id:
                 item_str += f",enchant_id={enchant_id}"
