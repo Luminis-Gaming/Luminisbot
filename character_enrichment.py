@@ -232,6 +232,30 @@ class CharacterEnricher:
                 logger.error(f"Error fetching from Raider.IO: {e}")
                 return None
     
+    async def fetch_item_icon(self, media_href: str) -> Optional[str]:
+        """Fetch item icon URL from Blizzard item media endpoint"""
+        token = await self.get_blizzard_token()
+        if not token:
+            return None
+        
+        async with aiohttp.ClientSession() as session:
+            headers = {'Authorization': f'Bearer {token}'}
+            
+            try:
+                async with session.get(media_href, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Find the icon asset
+                        for asset in data.get('assets', []):
+                            if asset.get('key') == 'icon':
+                                return asset.get('value')
+                        return None
+                    else:
+                        return None
+            except Exception as e:
+                logger.debug(f"Error fetching item icon: {e}")
+                return None
+    
     async def enrich_character(self, realm: str, name: str, region: str = 'eu') -> Dict[str, Any]:
         """
         Fetch all data for a character from multiple sources
@@ -282,12 +306,31 @@ class CharacterEnricher:
         # Equipment Data
         if isinstance(equipment, dict):
             enriched['sources']['equipment'] = equipment
-            enriched['equipped_items'] = equipment.get('equipped_items', [])
+            equipped_items = equipment.get('equipped_items', [])
+            
+            # Fetch icon URLs for each item (in parallel)
+            if equipped_items:
+                icon_tasks = []
+                for item in equipped_items:
+                    if item.get('media') and item['media'].get('key', {}).get('href'):
+                        icon_tasks.append(self.fetch_item_icon(item['media']['key']['href']))
+                    else:
+                        icon_tasks.append(asyncio.sleep(0))  # placeholder task
+                
+                icon_results = await asyncio.gather(*icon_tasks, return_exceptions=True)
+                
+                # Attach icon URLs to items
+                for i, item in enumerate(equipped_items):
+                    if i < len(icon_results) and isinstance(icon_results[i], str):
+                        item['icon_url'] = icon_results[i]
+            
+            enriched['equipped_items'] = equipped_items
         
         # Specializations/Talents
         if isinstance(specializations, dict):
             enriched['sources']['specializations'] = specializations
             enriched['specializations'] = specializations.get('specializations', [])
+            enriched['active_specialization'] = specializations.get('active_specialization', {})
             enriched['active_specialization'] = specializations.get('active_specialization', {})
         
         # M+ Data from Blizzard

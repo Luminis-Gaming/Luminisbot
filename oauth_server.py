@@ -2198,19 +2198,43 @@ async def handle_discord_user_detail(request):
                     text-align: center;
                 }}
                 .gear-grid {{
-                    display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-                    gap: 8px;
+                    display: flex;
+                    gap: 20px;
+                    justify-content: center;
+                    align-items: start;
+                    flex-wrap: wrap;
+                }}
+                .gear-column {{
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                    min-width: 200px;
+                }}
+                .character-model {{
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 10px;
+                }}
+                .weapon-slots {{
+                    display: flex;
+                    gap: 6px;
+                    justify-content: center;
                 }}
                 .gear-item {{
-                    padding: 8px;
+                    padding: 6px 8px;
                     background: rgba(255,255,255,0.05);
                     border-radius: 6px;
                     font-size: 13px;
                     border-left: 3px solid;
                     display: flex;
                     gap: 8px;
-                    align-items: start;
+                    align-items: center;
+                    transition: all 0.2s;
+                }}
+                .gear-item:hover {{
+                    background: rgba(255,255,255,0.1);
+                    transform: translateX(2px);
                 }}
                 .item-icon {{
                     width: 40px;
@@ -2446,46 +2470,70 @@ async def handle_discord_user_detail(request):
                         html += '</div>';
                     }}
                     
-                    // Equipped Gear
+                    // Equipped Gear - WoW Character Panel Layout
                     if (data.equipped_items && data.equipped_items.length > 0) {{
                         html += '<div class="section-title">🎒 Equipped Gear</div>';
                         html += '<div class="gear-grid" style="margin-bottom:20px">';
                         
-                        const slotOrder = ['HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST', 'HANDS', 'WAIST', 'LEGS', 'FEET', 'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2', 'MAIN_HAND', 'OFF_HAND'];
+                        // Organize items by slot
                         const itemsBySlot = {{}};
-                        
                         data.equipped_items.forEach(item => {{
                             itemsBySlot[item.slot.type] = item;
                         }});
                         
-                        slotOrder.forEach(slotType => {{
+                        // Helper function to create gear item HTML
+                        const createGearItem = (slotType) => {{
                             const item = itemsBySlot[slotType];
-                            if (item) {{
-                                const qualityColor = getQualityColor(item.quality.type);
-                                const slotName = getSlotName(slotType);
-                                const enchantText = item.enchantments ? ' 🌟' : '';
-                                const socketText = item.sockets ? ' 💎' : '';
-                                
-                                // Construct item icon URL from Blizzard CDN
-                                const iconUrl = getItemIconUrl(item);
-                                
-                                html += `
-                                    <div class="gear-item" style="border-color: ${{qualityColor}}" 
-                                         onmouseenter="showItemTooltip(event, ${{JSON.stringify(item).replace(/"/g, '&quot;')}})"
-                                         onmouseleave="hideItemTooltip()">
-                                        <img src="${{iconUrl}}" class="item-icon" alt="${{item.name}}" onerror="this.style.display='none'">
-                                        <div style="flex:1;min-width:0">
-                                            <div style="font-weight:600;color:${{qualityColor}};margin-bottom:2px">${{item.name}}${{enchantText}}${{socketText}}</div>
-                                            <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-bottom:4px">${{slotName}}</div>
-                                            <div style="display:flex;justify-content:space-between;font-size:12px">
-                                                <span>iLvl ${{item.level.value}}</span>
-                                                ${{item.stats ? '<span>' + item.stats.length + ' stats</span>' : ''}}
-                                            </div>
-                                        </div>
+                            if (!item) return '';
+                            
+                            const qualityColor = getQualityColor(item.quality.type);
+                            const slotName = getSlotName(slotType);
+                            const enchantText = item.enchantments ? ' 🌟' : '';
+                            const socketText = item.sockets ? ' 💎' : '';
+                            const iconUrl = getItemIconUrl(item);
+                            
+                            return `
+                                <div class="gear-item" style="border-color: ${{qualityColor}}" 
+                                     onmouseenter="showItemTooltip(event, ${{JSON.stringify(item).replace(/"/g, '&quot;')}})"
+                                     onmouseleave="hideItemTooltip()">
+                                    <img src="${{iconUrl}}" class="item-icon" alt="${{item.name}}" onerror="this.style.display='none'">
+                                    <div style="flex:1;min-width:0">
+                                        <div style="font-weight:600;color:${{qualityColor}};font-size:12px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${{item.name}}${{enchantText}}${{socketText}}</div>
+                                        <div style="font-size:10px;color:rgba(255,255,255,0.5)">${{slotName}} · iLvl ${{item.level.value}}</div>
                                     </div>
-                                `;
-                            }}
+                                </div>
+                            `;
+                        }};
+                        
+                        // Left Column (Head -> Wrist)
+                        html += '<div class="gear-column">';
+                        ['HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST'].forEach(slot => {{
+                            html += createGearItem(slot);
                         }});
+                        html += '</div>';
+                        
+                        // Center Column (Character Model + Weapons)
+                        html += '<div class="character-model">';
+                        if (data.character_render_url) {{
+                            html += `<img src="${{data.character_render_url}}" 
+                                         alt="Character" 
+                                         style="max-width:300px;max-height:400px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)"
+                                         onerror="this.style.display='none'">`;
+                        }}
+                        
+                        // Weapon slots at bottom
+                        html += '<div class="weapon-slots">';
+                        html += createGearItem('MAIN_HAND');
+                        html += createGearItem('OFF_HAND');
+                        html += '</div>';
+                        html += '</div>';
+                        
+                        // Right Column (Hands -> Trinkets)
+                        html += '<div class="gear-column">';
+                        ['HANDS', 'WAIST', 'LEGS', 'FEET', 'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2'].forEach(slot => {{
+                            html += createGearItem(slot);
+                        }});
+                        html += '</div>';
                         
                         html += '</div>';
                     }}
@@ -2566,27 +2614,22 @@ async def handle_discord_user_detail(request):
                 }}
                 
                 function getItemIconUrl(item) {{
-                    // Use Wowhead's icon service - much more reliable than Blizzard's
-                    if (item.item && item.item.id) {{
-                        return `https://wow.zamimg.com/images/wow/icons/large/${{getIconName(item)}}.jpg`;
+                    // Use the icon URL we fetched in Python if available
+                    if (item.icon_url) {{
+                        return item.icon_url;
                     }}
-                    // Fallback: use a placeholder
-                    return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56"><rect width="56" height="56" fill="%23333"/></svg>';
-                }}
-                
-                function getIconName(item) {{
-                    // Try to extract icon name from media key if available
-                    if (item.media && item.media.key && item.media.key.href) {{
-                        const match = item.media.key.href.match(/item-media\\/(\\d+)/);
-                        if (match) {{
-                            return match[1];
-                        }}
-                    }}
-                    // Fallback to item ID
-                    if (item.item && item.item.id) {{
-                        return item.item.id;
-                    }}
-                    return 'inv_misc_questionmark';
+                    
+                    // Fallback: create a colored placeholder based on quality
+                    const qualityColor = getQualityColor(item.quality.type);
+                    
+                    // Create SVG placeholder with quality color and item level
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56">
+                        <rect width="56" height="56" fill="${{qualityColor}}" opacity="0.3"/>
+                        <rect width="56" height="56" fill="none" stroke="${{qualityColor}}" stroke-width="2"/>
+                        <text x="28" y="32" text-anchor="middle" fill="${{qualityColor}}" font-size="16" font-weight="bold">${{item.level.value}}</text>
+                    </svg>`;
+                    
+                    return 'data:image/svg+xml,' + encodeURIComponent(svg);
                 }}
                 
                 let tooltipElement = null;
