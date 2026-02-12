@@ -432,13 +432,26 @@ def generate_simc_string(character_data: Dict[str, Any]) -> str:
         role = role_info.get('type', 'AUTO')
     
     role_clean = role.lower() if role != 'AUTO' else 'auto'
-    # Map DPS to proper role names for SimC
+    # Map role names properly for SimC
     if role_clean == 'dps':
-        # SimC expects 'attack' or 'spell', but for compatibility, we can leave as 'dps'
-        # However, tank/healer specs should use the proper role name
         role_clean = 'dps'
     elif role_clean == 'healing':
         role_clean = 'healer'
+    elif role_clean == 'tank':
+        role_clean = 'tank'
+    else:
+        # If role is still 'auto', try to determine from spec name
+        spec_name_lower = spec_name.lower() if isinstance(spec_name, str) else ''
+        
+        # Tank specs
+        if spec_name_lower in ['brewmaster', 'blood', 'protection', 'guardian', 'vengeance']:
+            role_clean = 'tank'
+        # Healer specs
+        elif spec_name_lower in ['restoration', 'holy', 'discipline', 'mistweaver', 'preservation']:
+            role_clean = 'healer'
+        else:
+            # Default to DPS
+            role_clean = 'dps'
     
     # SimC header - ensure all values are strings
     class_clean = char_class.lower().replace(' ', '') if isinstance(char_class, str) else 'unknown'

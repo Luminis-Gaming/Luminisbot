@@ -3640,6 +3640,9 @@ async def handle_events_page(request):
                     <div style="display:flex;align-items:center;gap:10px">
                         <span class="badge" style="background:#5865F2;font-size:14px">{participant_text}</span>
                         {log_html}
+                        <button class="btn btn-sm" style="background:#28a745;color:#fff" onclick="copyEventString({event_id})" title="Copy import string for WoW addon">
+                            🎮 Copy Event String
+                        </button>
                         <button class="btn btn-secondary btn-sm toggle-details" onclick="toggleDetails({event_id})">
                             Show Details ▼
                         </button>
@@ -3721,7 +3724,115 @@ async def handle_events_page(request):
                 </div>
             </div>
             
+            <!-- Modal for Event String -->
+            <div id="eventStringModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:9999;justify-content:center;align-items:center">
+                <div style="background:#1e1e2e;padding:30px;border-radius:10px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                        <h2 style="margin:0">🎮 WoW Addon Import String</h2>
+                        <button onclick="closeEventStringModal()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0;line-height:1">&times;</button>
+                    </div>
+                    <div id="eventStringContent" style="margin-bottom:20px">
+                        <div style="margin-bottom:15px">
+                            <p style="color:rgba(255,255,255,0.8);margin-bottom:10px"><strong>How to use:</strong></p>
+                            <ol style="color:rgba(255,255,255,0.7);margin:0;padding-left:20px">
+                                <li>Click the "Copy to Clipboard" button below</li>
+                                <li>In WoW, type: <code>/luminisbot</code> (or <code>/lb</code>) to open the addon</li>
+                                <li>Go to the "Import String" tab</li>
+                                <li>Paste the string and click "Import Event"</li>
+                            </ol>
+                        </div>
+                        <div style="margin-bottom:15px">
+                            <label style="display:block;margin-bottom:5px;color:rgba(255,255,255,0.8);font-weight:bold">Import String:</label>
+                            <textarea id="eventStringTextarea" readonly style="width:100%;min-height:150px;padding:10px;background:#2a2a3e;color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:5px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
+                        </div>
+                        <div id="eventStringInfo" style="padding:10px;background:rgba(40,167,69,0.2);border-radius:5px;margin-bottom:15px">
+                            <p style="margin:0;color:rgba(255,255,255,0.9);font-size:14px"><strong id="eventStringTitle"></strong></p>
+                            <p style="margin:5px 0 0 0;color:rgba(255,255,255,0.7);font-size:13px" id="eventStringDetails"></p>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:10px;justify-content:flex-end">
+                        <button onclick="closeEventStringModal()" class="btn btn-secondary">Close</button>
+                        <button onclick="copyEventStringToClipboard()" class="btn btn-primary" style="background:#28a745">📋 Copy to Clipboard</button>
+                    </div>
+                </div>
+            </div>
+
             <script>
+                // Event data embedded in page
+                const eventData = {{
+                    {json.dumps({str(e['id']): {'id': e['id'], 'title': e['title'], 'date': e['event_date'].isoformat() if e['event_date'] else None, 'time': e['event_time'].isoformat() if e['event_time'] else None, 'signups': [{'name': s['character_name'], 'realm': s['realm_slug'], 'class': s['character_class'], 'role': s['role'], 'spec': s.get('spec', ''), 'status': s['status']} for s in signups_by_event.get(e['id'], [])]} for e in events})}
+                }};
+
+                function copyEventString(eventId) {{
+                    const event = eventData[eventId];
+                    if (!event) {{
+                        alert('Event data not found!');
+                        return;
+                    }}
+
+                    // Build event data structure (same as Discord bot)
+                    const eventDataForAddon = {{
+                        id: event.id,
+                        title: event.title,
+                        date: event.date,
+                        time: event.time,
+                        signups: event.signups
+                    }};
+
+                    // Encode to base64
+                    const jsonStr = JSON.stringify(eventDataForAddon);
+                    const encoded = btoa(unescape(encodeURIComponent(jsonStr)));
+
+                    // Show modal with the string
+                    document.getElementById('eventStringTextarea').value = encoded;
+                    document.getElementById('eventStringTitle').textContent = event.title;
+                    
+                    const signupCount = event.signups.filter(s => s.status === 'signed').length;
+                    const dateStr = event.date ? new Date(event.date).toLocaleDateString() : 'N/A';
+                    const timeStr = event.time ? event.time.substring(0, 5) : 'N/A';
+                    document.getElementById('eventStringDetails').textContent = `📅 ${{dateStr}} at ${{timeStr}} • ${{signupCount}} signups`;
+                    
+                    document.getElementById('eventStringModal').style.display = 'flex';
+                }}
+
+                function closeEventStringModal() {{
+                    document.getElementById('eventStringModal').style.display = 'none';
+                }}
+
+                function copyEventStringToClipboard() {{
+                    const textarea = document.getElementById('eventStringTextarea');
+                    textarea.select();
+                    textarea.setSelectionRange(0, 99999); // For mobile devices
+                    
+                    try {{
+                        document.execCommand('copy');
+                        const btn = event.target;
+                        const originalText = btn.textContent;
+                        btn.textContent = '✅ Copied!';
+                        btn.style.background = '#28a745';
+                        setTimeout(() => {{
+                            btn.textContent = originalText;
+                            btn.style.background = '#28a745';
+                        }}, 2000);
+                    }} catch (err) {{
+                        alert('Failed to copy. Please select and copy manually.');
+                    }}
+                }}
+
+                // Close modal when clicking outside
+                document.getElementById('eventStringModal').addEventListener('click', function(e) {{
+                    if (e.target === this) {{
+                        closeEventStringModal();
+                    }}
+                }});
+
+                // Close modal with Escape key
+                document.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Escape') {{
+                        closeEventStringModal();
+                    }}
+                }});
+
                 function toggleDetails(eventId) {{
                     const details = document.getElementById('details-' + eventId);
                     const btn = document.querySelector('[data-event-id="' + eventId + '"] .toggle-details');
