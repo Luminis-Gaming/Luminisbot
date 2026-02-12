@@ -3782,9 +3782,9 @@ async def handle_events_page(request):
 
             <script>
                 // Event data embedded in page
-                const eventData = {json.dumps(events_data_for_js)};
+                const eventData = """ + json.dumps(events_data_for_js) + """;
 
-                function copyEventString(eventId) {
+                function copyEventString(eventId) {{
                     const event = eventData[eventId];
                     if (!event) {{
                         alert('Event data not found!');
