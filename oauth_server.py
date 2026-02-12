@@ -3333,6 +3333,8 @@ async def handle_discord_user_detail(request):
 @require_auth
 async def handle_events_page(request):
     """GET /admin/events - show raid events history with filtering"""
+    import json
+    
     session = request['session']
     
     # Get filter parameters
