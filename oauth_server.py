@@ -3680,6 +3680,9 @@ async def handle_events_page(request):
         if not events:
             events_html = '<div class="card"><p style="text-align:center;color:rgba(255,255,255,0.5)">No events found for the selected date range.</p></div>'
         
+        # Convert event data to JSON string for JavaScript
+        events_data_json = json.dumps(events_data_for_js)
+        
         # Set default dates if not provided
         from datetime import timedelta
         if not from_date:
@@ -3782,7 +3785,7 @@ async def handle_events_page(request):
 
             <script>
                 // Event data embedded in page
-                const eventData = """ + json.dumps(events_data_for_js) + """;
+                const eventData = {events_data_json};
 
                 function copyEventString(eventId) {{
                     const event = eventData[eventId];
@@ -3811,7 +3814,7 @@ async def handle_events_page(request):
                     const signupCount = event.signups.filter(s => s.status === 'signed').length;
                     const dateStr = event.date ? new Date(event.date).toLocaleDateString() : 'N/A';
                     const timeStr = event.time ? event.time.substring(0, 5) : 'N/A';
-                    document.getElementById('eventStringDetails').textContent = `📅 ${{dateStr}} at ${{timeStr}} • ${{signupCount}} signups`;
+                    document.getElementById('eventStringDetails').textContent = '📅 ' + dateStr + ' at ' + timeStr + ' • ' + signupCount + ' signups';
                     
                     document.getElementById('eventStringModal').style.display = 'flex';
                 }}
