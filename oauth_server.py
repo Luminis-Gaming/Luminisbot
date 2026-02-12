@@ -3511,6 +3511,27 @@ async def handle_events_page(request):
         cursor.close()
         conn.close()
         
+        # Build event data for JavaScript (for addon export)
+        events_data_for_js = {}
+        for event in events:
+            events_data_for_js[str(event['id'])] = {
+                'id': event['id'],
+                'title': event['title'],
+                'date': event['event_date'].isoformat() if event['event_date'] else None,
+                'time': event['event_time'].isoformat() if event['event_time'] else None,
+                'signups': [
+                    {
+                        'name': s['character_name'],
+                        'realm': s['realm_slug'],
+                        'class': s['character_class'],
+                        'role': s['role'],
+                        'spec': s.get('spec', ''),
+                        'status': s['status']
+                    }
+                    for s in signups_by_event.get(event['id'], [])
+                ]
+            }
+        
         # Build events HTML
         events_html = ""
         for event in events:
@@ -3761,11 +3782,9 @@ async def handle_events_page(request):
 
             <script>
                 // Event data embedded in page
-                const eventData = {{
-                    {json.dumps({str(e['id']): {'id': e['id'], 'title': e['title'], 'date': e['event_date'].isoformat() if e['event_date'] else None, 'time': e['event_time'].isoformat() if e['event_time'] else None, 'signups': [{'name': s['character_name'], 'realm': s['realm_slug'], 'class': s['character_class'], 'role': s['role'], 'spec': s.get('spec', ''), 'status': s['status']} for s in signups_by_event.get(e['id'], [])]} for e in events})}
-                }};
+                const eventData = {json.dumps(events_data_for_js)};
 
-                function copyEventString(eventId) {{
+                function copyEventString(eventId) {
                     const event = eventData[eventId];
                     if (!event) {{
                         alert('Event data not found!');
