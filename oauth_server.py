@@ -2029,6 +2029,272 @@ async def handle_refresh_discord_info(request):
 
 
 @require_auth
+async def handle_character_details_api(request):
+    """GET /admin/api/character-details/{character_id} - fetch detailed character info"""
+    character_id = int(request.match_info.get('character_id'))
+    force_refresh = request.query.get('refresh', 'false').lower() == 'true'
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get character info
+        cursor.execute("""
+            SELECT id, character_name, realm_slug, realm_name, character_class, faction,
+                   level, item_level, enrichment_cache, last_enriched, discord_id
+            FROM wow_characters
+            WHERE id = %s
+        """, (character_id,))
+        
+        character = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not character:
+            return web.json_response({'error': 'Character not found'}, status=404)
+        
+        # Check if we need to refresh (cache older than 6 hours or forced)
+        needs_refresh = force_refresh
+        if character['last_enriched']:
+            # Make datetime timezone-aware if last_enriched is timezone-aware
+            now = datetime.now(character['last_enriched'].tzinfo) if character['last_enriched'].tzinfo else datetime.now()
+            age = now - character['last_enriched']
+            if age > timedelta(hours=6):
+                needs_refresh = True
+        else:
+            needs_refresh = True
+        
+        # Fetch fresh data if needed
+        if needs_refresh:
+            from character_enrichment import enrich_and_cache_character
+            enriched_data = await enrich_and_cache_character(
+                character_id,
+                character['realm_slug'],
+                character['character_name'],
+                'eu'  # TODO: Add region column to database
+            )
+            
+            if enriched_data:
+                return web.json_response({
+                    'success': True,
+                    'data': enriched_data,
+                    'cached': False
+                })
+        
+        # Return cached data
+        if character['enrichment_cache']:
+            return web.json_response({
+                'success': True,
+                'data': character['enrichment_cache'],
+                'cached': True,
+                'cached_at': character['last_enriched'].isoformat() if character['last_enriched'] else None
+            })
+        
+        return web.json_response({'error': 'No data available'}, status=404)
+        
+    except Exception as e:
+        logger.error(f"Error fetching character details: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@require_auth
+async def handle_character_simc_api(request):
+    """GET /admin/api/character-simc/{character_id} - generate SimulationCraft import string"""
+    character_id = int(request.match_info.get('character_id'))
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get character info
+        cursor.execute("""
+            SELECT id, character_name, realm_slug, realm_name, character_class, 
+                   enrichment_cache, last_enriched, region
+            FROM wow_characters
+            WHERE id = %s
+        """, (character_id,))
+        
+        character = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not character:
+            return web.json_response({'error': 'Character not found'}, status=404)
+        
+        # Check if we have cached data
+        if not character['enrichment_cache']:
+            return web.json_response({'error': 'Character data not available. Please refresh character data first.'}, status=404)
+        
+        # Generate SimC string
+        from character_enrichment import generate_simc_string
+        import json
+        
+        # Parse JSON if it's a string
+        cache_data = character['enrichment_cache']
+        if isinstance(cache_data, str):
+            try:
+                cache_data = json.loads(cache_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse enrichment_cache JSON: {e}")
+                return web.json_response({'error': 'Invalid character data format'}, status=500)
+        
+        # Ensure cache_data is a dict
+        if not isinstance(cache_data, dict):
+            logger.error(f"enrichment_cache is not a dict, it's a {type(cache_data)}")
+            return web.json_response({'error': 'Invalid character data structure'}, status=500)
+        
+        # Log the keys for debugging
+        logger.info(f"Cache data keys: {list(cache_data.keys())}")
+        
+        try:
+            simc_string = generate_simc_string(cache_data)
+            
+            if simc_string:
+                return web.json_response({
+                    'success': True,
+                    'simc': simc_string,
+                    'character_name': character['character_name'],
+                    'realm': character['realm_name']
+                })
+            else:
+                return web.json_response({'error': 'Failed to generate SimC string'}, status=500)
+                
+        except Exception as simc_error:
+            logger.error(f"Error in generate_simc_string: {simc_error}")
+            import traceback
+            traceback.print_exc()
+            return web.json_response({'error': f'SimC generation error: {str(simc_error)}'}, status=500)
+        
+    except Exception as e:
+        logger.error(f"Error generating SimC string: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@require_auth
+async def handle_user_raid_stats_api(request):
+    """GET /admin/api/user-raid-stats/{discord_id} - fetch raid event statistics for a Discord user"""
+    discord_id = request.match_info.get('discord_id')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all raid signups for this user with event details
+        cursor.execute("""
+            SELECT 
+                rs.id,
+                rs.event_id,
+                rs.character_name,
+                rs.realm_slug,
+                rs.character_class,
+                rs.role,
+                rs.spec,
+                rs.status,
+                rs.signed_at,
+                re.title as event_title,
+                re.event_date,
+                re.event_time,
+                re.log_url,
+                re.guild_id
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+            ORDER BY re.event_date DESC, re.event_time DESC
+            LIMIT 100
+        """, (discord_id,))
+        
+        signups = cursor.fetchall()
+        
+        # Get total event count and statistics
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_events,
+                COUNT(CASE WHEN status = 'signed' THEN 1 END) as signed_count,
+                COUNT(CASE WHEN status = 'late' THEN 1 END) as late_count,
+                COUNT(CASE WHEN status = 'tentative' THEN 1 END) as tentative_count,
+                COUNT(CASE WHEN status = 'absent' THEN 1 END) as absent_count,
+                COUNT(CASE WHEN status = 'benched' THEN 1 END) as benched_count,
+                COUNT(CASE WHEN re.log_url IS NOT NULL THEN 1 END) as events_with_logs
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+        """, (discord_id,))
+        
+        stats = cursor.fetchone()
+        
+        # Get role distribution
+        cursor.execute("""
+            SELECT 
+                role,
+                COUNT(*) as count
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+            GROUP BY role
+            ORDER BY count DESC
+        """, (discord_id,))
+        
+        role_distribution = cursor.fetchall()
+        
+        # Get most played characters
+        cursor.execute("""
+            SELECT 
+                character_name,
+                realm_slug,
+                character_class,
+                COUNT(*) as event_count
+            FROM raid_signups rs
+            JOIN raid_events re ON rs.event_id = re.id
+            WHERE rs.discord_id = %s
+            GROUP BY character_name, realm_slug, character_class
+            ORDER BY event_count DESC
+            LIMIT 5
+        """, (discord_id,))
+        
+        top_characters = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Convert to serializable format
+        signups_list = []
+        for signup in signups:
+            signups_list.append({
+                'id': signup['id'],
+                'event_id': signup['event_id'],
+                'character_name': signup['character_name'],
+                'realm_slug': signup['realm_slug'],
+                'character_class': signup['character_class'],
+                'role': signup['role'],
+                'spec': signup['spec'],
+                'status': signup['status'],
+                'signed_at': signup['signed_at'].isoformat() if signup['signed_at'] else None,
+                'event_title': signup['event_title'],
+                'event_date': signup['event_date'].isoformat() if signup['event_date'] else None,
+                'event_time': signup['event_time'].strftime('%H:%M') if signup['event_time'] else None,
+                'log_url': signup['log_url']
+            })
+        
+        return web.json_response({
+            'success': True,
+            'stats': dict(stats),
+            'signups': signups_list,
+            'role_distribution': [dict(r) for r in role_distribution],
+            'top_characters': [dict(c) for c in top_characters]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error fetching user raid stats: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@require_auth
 async def handle_discord_user_detail(request):
     """GET /admin/discord-users/{discord_id} - show characters for a specific Discord user"""
     session = request['session']
@@ -2041,7 +2307,7 @@ async def handle_discord_user_detail(request):
         # Get all characters for this Discord user
         cursor.execute("""
             SELECT 
-                character_name, realm_name, character_class,
+                id, character_name, realm_name, character_class,
                 character_race, faction, level, item_level,
                 created_at, last_updated
             FROM wow_characters
@@ -2086,23 +2352,29 @@ async def handle_discord_user_detail(request):
             updated = char['last_updated'].strftime('%Y-%m-%d %H:%M') if char['last_updated'] else 'N/A'
             
             chars_html += f"""
-            <div class="card" style="border-left:4px solid {faction_color}">
-                <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:15px">
-                    <div>
-                        <h3 style="margin:0">{faction_emoji} {char['character_name']}</h3>
-                        <p style="margin:5px 0;color:rgba(255,255,255,0.7)">{char['realm_name']}</p>
+            <div class="card character-card" style="border-left:4px solid {faction_color}" data-character-id="{char['id']}">
+                <div class="character-header" onclick="toggleCharacterDetails({char['id']})" style="cursor:pointer">
+                    <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:15px">
+                        <div>
+                            <h3 style="margin:0">{faction_emoji} {char['character_name']}</h3>
+                            <p style="margin:5px 0;color:rgba(255,255,255,0.7)">{char['realm_name']}</p>
+                        </div>
+                        <div style="text-align:right">
+                            <div style="font-size:24px;font-weight:700;color:#5865F2">{ilvl}</div>
+                            <div style="font-size:12px;color:rgba(255,255,255,0.5)">Item Level</div>
+                        </div>
                     </div>
-                    <div style="text-align:right">
-                        <div style="font-size:24px;font-weight:700;color:#5865F2">{ilvl}</div>
-                        <div style="font-size:12px;color:rgba(255,255,255,0.5)">Item Level</div>
+                    <div style="display:flex;gap:20px;margin-top:15px;flex-wrap:wrap;align-items:center">
+                        <div><strong>Class:</strong> {char['character_class'] or 'N/A'}</div>
+                        <div><strong>Race:</strong> {char['character_race'] or 'N/A'}</div>
+                        <div><strong>Level:</strong> {char['level'] or 'N/A'}</div>
+                        <span class="expand-indicator" style="margin-left:auto;color:rgba(255,255,255,0.5);font-size:14px">▼ Click to view details</span>
                     </div>
                 </div>
-                <div style="display:flex;gap:20px;margin-top:15px;flex-wrap:wrap">
-                    <div><strong>Class:</strong> {char['character_class'] or 'N/A'}</div>
-                    <div><strong>Race:</strong> {char['character_race'] or 'N/A'}</div>
-                    <div><strong>Level:</strong> {char['level'] or 'N/A'}</div>
+                
+                <div class="character-details" id="details-{char['id']}" style="display:none;margin-top:15px;padding-top:15px;border-top:1px solid rgba(255,255,255,0.1)">
+                    <div class="loading" style="text-align:center;padding:20px;color:rgba(255,255,255,0.6)">⏳ Loading character data...</div>
                 </div>
-                <p style="margin:15px 0 0 0;font-size:12px;color:rgba(255,255,255,0.4)">Last updated: {updated}</p>
             </div>
             """
         
@@ -2111,7 +2383,107 @@ async def handle_discord_user_detail(request):
         <html>
         <head>
             <title>LuminisBot Admin - User Characters</title>
-            <style>{ADMIN_CSS}</style>
+            <style>
+                {ADMIN_CSS}
+                .character-card {{ transition: all 0.2s; }}
+                .character-card:hover {{ background: rgba(255,255,255,0.02); }}
+                .expand-indicator {{ transition: transform 0.2s; }}
+                .character-card.expanded .expand-indicator {{ transform: rotate(180deg); }}
+                .stat-box {{ 
+                    background: rgba(255,255,255,0.05); 
+                    padding: 12px; 
+                    border-radius: 8px; 
+                    text-align: center;
+                }}
+                .gear-grid {{
+                    display: flex;
+                    gap: 20px;
+                    justify-content: center;
+                    align-items: start;
+                    flex-wrap: wrap;
+                }}
+                .gear-column {{
+                    display: flex;
+                    flex-direction: column;
+                    gap: 6px;
+                    min-width: 200px;
+                }}
+                .character-model {{
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 10px;
+                }}
+                .weapon-slots {{
+                    display: flex;
+                    gap: 6px;
+                    justify-content: center;
+                }}
+                .gear-item {{
+                    padding: 6px 8px;
+                    background: rgba(255,255,255,0.05);
+                    border-radius: 6px;
+                    font-size: 13px;
+                    border-left: 3px solid;
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                    transition: all 0.2s;
+                }}
+                .gear-item:hover {{
+                    background: rgba(255,255,255,0.1);
+                    transform: translateX(2px);
+                }}
+                .item-icon {{
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 4px;
+                    border: 1px solid rgba(255,255,255,0.3);
+                    flex-shrink: 0;
+                    background: rgba(0,0,0,0.5);
+                }}
+                .talent-choice {{
+                    padding: 6px 10px;
+                    background: rgba(88, 101, 242, 0.2);
+                    border-radius: 4px;
+                    font-size: 13px;
+                    display: inline-block;
+                    margin: 4px;
+                }}
+                .dungeon-run {{
+                    padding: 10px;
+                    background: rgba(255,255,255,0.05);
+                    border-radius: 6px;
+                    font-size: 14px;
+                }}
+                .section-title {{
+                    margin: 20px 0 10px 0;
+                    color: #5865F2;
+                    font-weight: 600;
+                    font-size: 16px;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }}
+                .item-tooltip {{
+                    position: absolute;
+                    background: linear-gradient(to bottom, rgba(20,20,30,0.98), rgba(10,10,20,0.98));
+                    border: 1px solid rgba(255,255,255,0.2);
+                    border-radius: 8px;
+                    padding: 12px;
+                    min-width: 250px;
+                    max-width: 350px;
+                    z-index: 10000;
+                    pointer-events: none;
+                    font-size: 13px;
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+                    display: none;
+                }}
+                .gear-item {{
+                    position: relative;
+                    cursor: help;
+                }}
+            </style>
         </head>
         <body>
             <div class="container">
@@ -2128,10 +2500,823 @@ async def handle_discord_user_detail(request):
                     </div>
                 </div>
                 
+                <!-- Raid Event Attendance Section -->
+                <div class="card" style="margin-bottom:20px" id="raid-stats-section">
+                    <div onclick="toggleRaidStats()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">
+                        <h2 style="margin:0;color:#5865F2;display:flex;align-items:center;gap:10px">
+                            🗓️ Raid Event Attendance
+                        </h2>
+                        <span class="expand-indicator" id="raid-stats-indicator" style="color:rgba(255,255,255,0.5);font-size:14px">▼ Click to view</span>
+                    </div>
+                    <div id="raid-stats-content" style="display:none;margin-top:15px;padding-top:15px;border-top:1px solid rgba(255,255,255,0.1)">
+                        <div class="loading" style="text-align:center;padding:40px;color:rgba(255,255,255,0.6)">
+                            ⏳ Loading raid statistics...
+                        </div>
+                    </div>
+                </div>
+                
                 <div style="display:grid;gap:15px">
                     {chars_html}
                 </div>
             </div>
+            
+            <script>
+                let loadedCharacters = new Set();
+                
+                async function toggleCharacterDetails(characterId) {{
+                    const detailsDiv = document.getElementById('details-' + characterId);
+                    const card = document.querySelector('[data-character-id="' + characterId + '"]');
+                    const indicator = card.querySelector('.expand-indicator');
+                    
+                    if (detailsDiv.style.display === 'none') {{
+                        detailsDiv.style.display = 'block';
+                        card.classList.add('expanded');
+                        indicator.textContent = '▲ Click to collapse';
+                        
+                        if (!loadedCharacters.has(characterId)) {{
+                            await loadCharacterDetails(characterId);
+                        }}
+                    }} else {{
+                        detailsDiv.style.display = 'none';
+                        card.classList.remove('expanded');
+                        indicator.textContent = '▼ Click to view details';
+                    }}
+                }}
+                
+                async function loadCharacterDetails(characterId, forceRefresh = false) {{
+                    const detailsDiv = document.getElementById('details-' + characterId);
+                    
+                    if (!forceRefresh) {{
+                        detailsDiv.innerHTML = '<div class="loading" style="text-align:center;padding:20px;color:rgba(255,255,255,0.6)">⏳ Loading character data...</div>';
+                    }}
+                    
+                    try {{
+                        const url = '/admin/api/character-details/' + characterId + (forceRefresh ? '?refresh=true' : '');
+                        const response = await fetch(url);
+                        const result = await response.json();
+                        
+                        if (!result.success) {{
+                            detailsDiv.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ Failed to load character data: ' + (result.error || 'Unknown error') + '</p>';
+                            return;
+                        }}
+                        
+                        const data = result.data;
+                        loadedCharacters.add(characterId);
+                        
+                        detailsDiv.innerHTML = buildCharacterDetailsHTML(data, characterId, result.cached, result.cached_at);
+                        
+                        // Update item level in the header if available
+                        if (data.average_item_level || data.item_level_equipped) {{
+                            const card = document.querySelector(`[data-character-id="${{characterId}}"]`);
+                            if (card) {{
+                                const ilvlDisplay = card.querySelector('.character-header > div > div:last-child > div:first-child');
+                                if (ilvlDisplay) {{
+                                    const ilvl = Math.round(data.average_item_level || data.item_level_equipped);
+                                    ilvlDisplay.textContent = ilvl;
+                                }}
+                            }}
+                        }}
+                        
+                    }} catch (err) {{
+                        console.error(err);
+                        detailsDiv.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ Error loading data: ' + err.message + '</p>';
+                    }}
+                }}
+                
+                async function getSimcString(characterId) {{
+                    try {{
+                        const response = await fetch('/admin/api/character-simc/' + characterId);
+                        const result = await response.json();
+                        
+                        if (!result.success) {{
+                            alert('Failed to generate SimC string: ' + (result.error || 'Unknown error'));
+                            return;
+                        }}
+                        
+                        // Create modal to display SimC string
+                        const modal = document.createElement('div');
+                        modal.id = 'simc-modal';
+                        modal.style.cssText = `
+                            position: fixed;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            background: rgba(0,0,0,0.8);
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            z-index: 10000;
+                            padding: 20px;
+                        `;
+                        
+                        const modalContent = document.createElement('div');
+                        modalContent.style.cssText = `
+                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                            border-radius: 12px;
+                            padding: 30px;
+                            max-width: 800px;
+                            width: 100%;
+                            max-height: 80vh;
+                            overflow: auto;
+                            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+                        `;
+                        
+                        modalContent.innerHTML = `
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                                <h2 style="margin:0;color:#5865F2">📊 SimulationCraft String</h2>
+                                <button onclick="closeSimcModal()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0;width:30px;height:30px">&times;</button>
+                            </div>
+                            <p style="margin-bottom:15px;color:rgba(255,255,255,0.7)">
+                                Copy this string and paste it into <a href="https://www.raidbots.com/simbot" target="_blank" style="color:#5865F2">Raidbots</a> or SimulationCraft to simulate your character.
+                            </p>
+                            <div style="position:relative">
+                                <textarea readonly id="simc-textarea" style="
+                                    width: 100%;
+                                    height: 400px;
+                                    background: rgba(0,0,0,0.3);
+                                    border: 1px solid rgba(255,255,255,0.2);
+                                    border-radius: 8px;
+                                    padding: 15px;
+                                    color: #fff;
+                                    font-family: 'Courier New', monospace;
+                                    font-size: 13px;
+                                    resize: vertical;
+                                    box-sizing: border-box;
+                                ">${{result.simc}}</textarea>
+                                <button onclick="copySimcToClipboard()" style="
+                                    position: absolute;
+                                    top: 10px;
+                                    right: 10px;
+                                    background: #5865F2;
+                                    color: white;
+                                    border: none;
+                                    padding: 8px 16px;
+                                    border-radius: 6px;
+                                    cursor: pointer;
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                " onmouseover="this.style.background='#4752C4'" onmouseout="this.style.background='#5865F2'">
+                                    📋 Copy to Clipboard
+                                </button>
+                            </div>
+                            <div style="margin-top:15px;padding:12px;background:rgba(88,101,242,0.1);border-radius:6px;font-size:13px">
+                                <strong>Tip:</strong> Visit <a href="https://www.raidbots.com/simbot" target="_blank" style="color:#5865F2">Raidbots.com</a>, select "Quick Sim", paste this string, and click "Run Simulation" to see your DPS potential!
+                            </div>
+                        `;
+                        
+                        modal.appendChild(modalContent);
+                        document.body.appendChild(modal);
+                        
+                        // Focus the textarea and select all text for easy copying
+                        const textarea = document.getElementById('simc-textarea');
+                        textarea.focus();
+                        textarea.select();
+                        
+                    }} catch (err) {{
+                        console.error(err);
+                        alert('Error generating SimC string: ' + err.message);
+                    }}
+                }}
+                
+                function copySimcToClipboard() {{
+                    const textarea = document.getElementById('simc-textarea');
+                    textarea.select();
+                    document.execCommand('copy');
+                    
+                    // Show feedback
+                    const button = event.target;
+                    const originalText = button.textContent;
+                    button.textContent = '✅ Copied!';
+                    button.style.background = '#43b581';
+                    
+                    setTimeout(() => {{
+                        button.textContent = originalText;
+                        button.style.background = '#5865F2';
+                    }}, 2000);
+                }}
+                
+                function closeSimcModal() {{
+                    const modal = document.getElementById('simc-modal');
+                    if (modal) {{
+                        modal.remove();
+                    }}
+                }}
+                
+                function buildCharacterDetailsHTML(data, characterId, cached, cachedAt) {{
+                    let html = '';
+                    
+                    // M+ Score Section
+                    if (data.mythic_plus_score && data.mythic_plus_score > 0) {{
+                        html += `
+                            <div class="section-title">⚔️ Mythic+ Rating</div>
+                            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:20px">
+                                <div class="stat-box">
+                                    <div style="font-size:24px;font-weight:700;color:#5865F2">${{Math.round(data.mythic_plus_score)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">Overall</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div style="font-size:18px;font-weight:600">${{Math.round(data.mythic_plus_score_tank || 0)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">Tank</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div style="font-size:18px;font-weight:600">${{Math.round(data.mythic_plus_score_healer || 0)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">Healer</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div style="font-size:18px;font-weight:600">${{Math.round(data.mythic_plus_score_dps || 0)}}</div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,0.6)">DPS</div>
+                                </div>
+                            </div>
+                        `;
+                    }}
+                    
+                    // Raid Progress Section
+                    if (data.raid_progression && Object.keys(data.raid_progression).length > 0) {{
+                        html += '<div class="section-title">🏰 Raid Progression</div>';
+                        
+                        for (const [raidName, progress] of Object.entries(data.raid_progression)) {{
+                            const normal = progress.normal_bosses_killed || 0;
+                            const heroic = progress.heroic_bosses_killed || 0;
+                            const mythic = progress.mythic_bosses_killed || 0;
+                            const total = progress.total_bosses || 0;
+                            
+                            if (total > 0) {{
+                                const raidDisplayName = raidName.replace(/-/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                                html += `
+                                    <div style="margin-bottom:10px;padding:12px;background:rgba(255,255,255,0.05);border-radius:8px">
+                                        <div style="font-weight:600;margin-bottom:8px">${{raidDisplayName}}</div>
+                                        <div style="display:flex;gap:20px;font-size:14px;flex-wrap:wrap">
+                                            <span style="color:#00ff00">Normal: ${{normal}}/${{total}}</span>
+                                            <span style="color:#0088ff">Heroic: ${{heroic}}/${{total}}</span>
+                                            <span style="color:#ff6b6b">Mythic: ${{mythic}}/${{total}}</span>
+                                        </div>
+                                    </div>
+                                `;
+                            }}
+                        }}
+                    }}
+                    
+                    // Best M+ Runs
+                    if (data.mythic_plus_best_runs && data.mythic_plus_best_runs.length > 0) {{
+                        html += `
+                            <div class="section-title">🏆 Best Mythic+ Runs (Top 5)</div>
+                            <div style="display:grid;gap:8px;margin-bottom:20px">
+                        `;
+                        
+                        data.mythic_plus_best_runs.slice(0, 5).forEach(run => {{
+                            const upgradeText = run.num_keystone_upgrades > 0 ? `+${{run.num_keystone_upgrades}} chest` : 'Timed';
+                            html += `
+                                <div class="dungeon-run">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                                        <span style="font-weight:600">${{run.dungeon}}</span>
+                                        <span style="color:#5865F2;font-weight:700;font-size:16px">+${{run.mythic_level}}</span>
+                                    </div>
+                                    <div style="color:rgba(255,255,255,0.6);font-size:12px">
+                                        ${{upgradeText}} · Score: ${{Math.round(run.score)}} · ${{new Date(run.completed_at).toLocaleDateString()}}
+                                    </div>
+                                </div>
+                            `;
+                        }});
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Character Info
+                    if (data.active_spec || data.achievement_points || data.covenant) {{
+                        html += '<div class="section-title">📊 Character Info</div>';
+                        html += '<div style="display:grid;gap:10px;margin-bottom:20px;background:rgba(255,255,255,0.05);padding:15px;border-radius:8px">';
+                        
+                        if (data.active_spec) {{
+                            html += `<div><strong>Active Spec:</strong> ${{data.active_spec}}</div>`;
+                        }}
+                        if (data.achievement_points) {{
+                            html += `<div><strong>Achievement Points:</strong> ${{data.achievement_points.toLocaleString()}}</div>`;
+                        }}
+                        if (data.covenant) {{
+                            html += `<div><strong>Covenant:</strong> ${{data.covenant}}${{data.renown ? ' (Renown ' + data.renown + ')' : ''}}</div>`;
+                        }}
+                        if (data.guild) {{
+                            html += `<div><strong>Guild:</strong> ${{data.guild}}</div>`;
+                        }}
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Equipped Gear - WoW Character Panel Layout
+                    if (data.equipped_items && data.equipped_items.length > 0) {{
+                        html += '<div class="section-title">🎒 Equipped Gear</div>';
+                        html += '<div class="gear-grid" style="margin-bottom:20px">';
+                        
+                        // Organize items by slot
+                        const itemsBySlot = {{}};
+                        data.equipped_items.forEach(item => {{
+                            itemsBySlot[item.slot.type] = item;
+                        }});
+                        
+                        // Helper function to create gear item HTML
+                        const createGearItem = (slotType) => {{
+                            const item = itemsBySlot[slotType];
+                            if (!item) return '';
+                            
+                            const qualityColor = getQualityColor(item.quality.type);
+                            const slotName = getSlotName(slotType);
+                            const enchantText = item.enchantments ? ' 🌟' : '';
+                            const socketText = item.sockets ? ' 💎' : '';
+                            const iconUrl = getItemIconUrl(item);
+                            
+                            return `
+                                <div class="gear-item" style="border-color: ${{qualityColor}}" 
+                                     onmouseenter="showItemTooltip(event, ${{JSON.stringify(item).replace(/"/g, '&quot;')}})"
+                                     onmouseleave="hideItemTooltip()">
+                                    <img src="${{iconUrl}}" class="item-icon" alt="${{item.name}}" onerror="this.style.display='none'">
+                                    <div style="flex:1;min-width:0">
+                                        <div style="font-weight:600;color:${{qualityColor}};font-size:12px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${{item.name}}${{enchantText}}${{socketText}}</div>
+                                        <div style="font-size:10px;color:rgba(255,255,255,0.5)">${{slotName}} · iLvl ${{item.level.value}}</div>
+                                    </div>
+                                </div>
+                            `;
+                        }};
+                        
+                        // Left Column (Head -> Wrist)
+                        html += '<div class="gear-column">';
+                        ['HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST'].forEach(slot => {{
+                            html += createGearItem(slot);
+                        }});
+                        html += '</div>';
+                        
+                        // Center Column (Character Model + Weapons)
+                        html += '<div class="character-model">';
+                        if (data.character_render_url) {{
+                            html += `<img src="${{data.character_render_url}}" 
+                                         alt="Character" 
+                                         style="max-width:300px;max-height:400px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)"
+                                         onerror="this.style.display='none'">`;
+                        }}
+                        
+                        // Weapon slots at bottom
+                        html += '<div class="weapon-slots">';
+                        html += createGearItem('MAIN_HAND');
+                        html += createGearItem('OFF_HAND');
+                        html += '</div>';
+                        html += '</div>';
+                        
+                        // Right Column (Hands -> Trinkets)
+                        html += '<div class="gear-column">';
+                        ['HANDS', 'WAIST', 'LEGS', 'FEET', 'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2'].forEach(slot => {{
+                            html += createGearItem(slot);
+                        }});
+                        html += '</div>';
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Talents/Specialization
+                    if (data.active_specialization && data.active_specialization.talents) {{
+                        html += '<div class="section-title">🌟 Active Talents</div>';
+                        html += '<div style="margin-bottom:20px">';
+                        
+                        data.active_specialization.talents.forEach(talent => {{
+                            html += `<span class="talent-choice">${{talent.talent.name}}</span>`;
+                        }});
+                        
+                        html += '</div>';
+                    }}
+                    
+                    // Links and Actions
+                    html += '<div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">';
+                    
+                    if (data.raiderio_url) {{
+                        html += `<a href="${{data.raiderio_url}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Raider.IO</a>`;
+                    }}
+                    
+                    // Warcraft Logs link
+                    if (data.character_name && data.realm) {{
+                        const wclRegion = data.region || 'eu';
+                        const wclRealm = data.realm.replace(/'/g, '');
+                        const wclName = data.character_name;
+                        const wclUrl = `https://www.warcraftlogs.com/character/${{wclRegion}}/${{wclRealm}}/${{wclName}}`;
+                        html += `<a href="${{wclUrl}}" target="_blank" class="btn btn-secondary" style="font-size:14px">View on Warcraft Logs</a>`;
+                    }}
+                    
+                    // SimC button
+                    html += `<button onclick="event.stopPropagation(); getSimcString(${{characterId}})" class="btn btn-secondary" style="font-size:14px">📊 Get SimC String</button>`;
+                    
+                    html += `<button onclick="event.stopPropagation(); loadCharacterDetails(${{characterId}}, true)" class="btn btn-secondary" style="font-size:14px">🔄 Refresh Data</button>`;
+                    html += '</div>';
+                    
+                    if (cached && cachedAt) {{
+                        const cachedTime = new Date(cachedAt).toLocaleString();
+                        html += `<div style="margin-top:15px;padding:10px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:12px;color:rgba(255,255,255,0.5)">📦 Cached data from ${{cachedTime}}</div>`;
+                    }}
+                    
+                    return html;
+                }}
+                
+                function getQualityColor(qualityType) {{
+                    const colors = {{
+                        'POOR': '#9d9d9d',
+                        'COMMON': '#ffffff',
+                        'UNCOMMON': '#1eff00',
+                        'RARE': '#0070dd',
+                        'EPIC': '#a335ee',
+                        'LEGENDARY': '#ff8000',
+                        'ARTIFACT': '#e6cc80',
+                        'HEIRLOOM': '#00ccff'
+                    }};
+                    return colors[qualityType] || '#ffffff';
+                }}
+                
+                function getSlotName(slotType) {{
+                    const names = {{
+                        'HEAD': 'Head',
+                        'NECK': 'Neck',
+                        'SHOULDER': 'Shoulder',
+                        'BACK': 'Back',
+                        'CHEST': 'Chest',
+                        'WRIST': 'Wrist',
+                        'HANDS': 'Hands',
+                        'WAIST': 'Waist',
+                        'LEGS': 'Legs',
+                        'FEET': 'Feet',
+                        'FINGER_1': 'Ring 1',
+                        'FINGER_2': 'Ring 2',
+                        'TRINKET_1': 'Trinket 1',
+                        'TRINKET_2': 'Trinket 2',
+                        'MAIN_HAND': 'Main Hand',
+                        'OFF_HAND': 'Off Hand'
+                    }};
+                    return names[slotType] || slotType;
+                }}
+                
+                function getItemIconUrl(item) {{
+                    // Use the icon URL we fetched in Python if available
+                    if (item.icon_url) {{
+                        return item.icon_url;
+                    }}
+                    
+                    // Fallback: create a colored placeholder based on quality
+                    const qualityColor = getQualityColor(item.quality.type);
+                    
+                    // Create SVG placeholder with quality color and item level
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56">
+                        <rect width="56" height="56" fill="${{qualityColor}}" opacity="0.3"/>
+                        <rect width="56" height="56" fill="none" stroke="${{qualityColor}}" stroke-width="2"/>
+                        <text x="28" y="32" text-anchor="middle" fill="${{qualityColor}}" font-size="16" font-weight="bold">${{item.level.value}}</text>
+                    </svg>`;
+                    
+                    return 'data:image/svg+xml,' + encodeURIComponent(svg);
+                }}
+                
+                let tooltipElement = null;
+                
+                function showItemTooltip(event, itemData) {{
+                    if (!tooltipElement) {{
+                        tooltipElement = document.createElement('div');
+                        tooltipElement.className = 'item-tooltip';
+                        document.body.appendChild(tooltipElement);
+                    }}
+                    
+                    const item = typeof itemData === 'string' ? JSON.parse(itemData) : itemData;
+                    const qualityColor = getQualityColor(item.quality.type);
+                    const iconUrl = getItemIconUrl(item);
+                    
+                    let tooltipHTML = `
+                        <div style="display:flex;gap:10px;margin-bottom:10px;align-items:start">
+                            <img src="${{iconUrl}}" style="width:48px;height:48px;border-radius:6px;border:2px solid ${{qualityColor}};flex-shrink:0" alt="${{item.name}}" onerror="this.style.display='none'">
+                            <div style="flex:1">
+                                <div style="color:${{qualityColor}};font-weight:700;font-size:14px;margin-bottom:4px">${{item.name}}</div>
+                                <div style="color:rgba(255,255,255,0.7);font-size:12px">Item Level ${{item.level.value}}</div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Show item binding
+                    if (item.binding && item.binding.name) {{
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.6);font-size:11px;margin-bottom:4px">${{item.binding.name}}</div>`;
+                    }}
+                    
+                    // Show slot
+                    if (item.slot) {{
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.6);font-size:11px;margin-bottom:8px">${{item.slot.name}}</div>`;
+                    }}
+                    
+                    // Show armor/weapon info
+                    if (item.armor) {{
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.8);margin-bottom:4px">${{item.armor.display.display_string}}</div>`;
+                    }}
+                    if (item.weapon) {{
+                        const dmg = item.weapon.damage;
+                        const dps = item.weapon.dps;
+                        tooltipHTML += `<div style="color:rgba(255,255,255,0.8);margin-bottom:4px">
+                            ${{dmg.display_string}}<br>
+                            (${{dps.display_string}})
+                        </div>`;
+                    }}
+                    
+                    // Show stats
+                    if (item.stats && item.stats.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.stats.forEach(stat => {{
+                            const statColor = stat.is_negated ? '#ff6b6b' : '#00ff88';
+                            tooltipHTML += `<div style="color:${{statColor}};font-size:12px;margin-bottom:2px">
+                                +${{stat.display.display_string}}
+                            </div>`;
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show enchantments
+                    if (item.enchantments && item.enchantments.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.enchantments.forEach(ench => {{
+                            tooltipHTML += `<div style="color:#00ff88;font-size:12px;margin-bottom:2px">
+                                🌟 ${{ench.display_string}}
+                            </div>`;
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show sockets
+                    if (item.sockets && item.sockets.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.sockets.forEach(socket => {{
+                            if (socket.item) {{
+                                tooltipHTML += `<div style="color:#8888ff;font-size:12px;margin-bottom:2px">
+                                    💎 ${{socket.item.name}}
+                                </div>`;
+                            }} else {{
+                                tooltipHTML += `<div style="color:rgba(255,255,255,0.5);font-size:12px;margin-bottom:2px">
+                                    ◇ Empty Socket
+                                </div>`;
+                            }}
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show spells (on-use, on-equip effects)
+                    if (item.spells && item.spells.length > 0) {{
+                        tooltipHTML += '<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">';
+                        item.spells.forEach(spell => {{
+                            const spellText = spell.description || spell.spell.name;
+                            tooltipHTML += `<div style="color:#00ff88;font-size:12px;margin-bottom:4px;line-height:1.4">
+                                ${{spellText}}
+                            </div>`;
+                        }});
+                        tooltipHTML += '</div>';
+                    }}
+                    
+                    // Show description
+                    if (item.description) {{
+                        tooltipHTML += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">
+                            <div style="color:#ffd700;font-size:11px;font-style:italic;line-height:1.4">${{item.description}}</div>
+                        </div>`;
+                    }}
+                    
+                    // Show item set
+                    if (item.set) {{
+                        tooltipHTML += `<div style="border-top:1px solid rgba(255,255,255,0.2);margin:8px 0;padding-top:8px">
+                            <div style="color:#ffd700;font-size:12px;margin-bottom:4px">${{item.set.item_set.name}}</div>
+                        </div>`;
+                    }}
+                    
+                    tooltipElement.innerHTML = tooltipHTML;
+                    tooltipElement.style.display = 'block';
+                    
+                    // Position tooltip
+                    const rect = event.target.closest('.gear-item').getBoundingClientRect();
+                    const tooltipRect = tooltipElement.getBoundingClientRect();
+                    
+                    let left = rect.right + 10;
+                    let top = rect.top;
+                    
+                    // Keep tooltip on screen
+                    if (left + tooltipRect.width > window.innerWidth) {{
+                        left = rect.left - tooltipRect.width - 10;
+                    }}
+                    if (top + tooltipRect.height > window.innerHeight) {{
+                        top = window.innerHeight - tooltipRect.height - 10;
+                    }}
+                    
+                    tooltipElement.style.left = left + 'px';
+                    tooltipElement.style.top = top + window.scrollY + 'px';
+                }}
+                
+                function hideItemTooltip() {{
+                    if (tooltipElement) {{
+                        tooltipElement.style.display = 'none';
+                    }}
+                }}
+                
+                // Load raid statistics
+                async function loadRaidStats() {{
+                    const discordId = '{discord_id}';
+                    const container = document.getElementById('raid-stats-content');
+                    
+                    try {{
+                        const response = await fetch('/admin/api/user-raid-stats/' + discordId);
+                        const result = await response.json();
+                        
+                        if (!result.success) {{
+                            container.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ No raid event data found</p>';
+                            return;
+                        }}
+                        
+                        const {{ stats, signups, role_distribution, top_characters }} = result;
+                        
+                        // Build stats overview
+                        let html = '<div class="stats" style="margin-bottom:20px">';
+                        html += `
+                            <div class="stat">
+                                <div class="stat-value">${{stats.total_events || 0}}</div>
+                                <div class="stat-label">Total Events</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-value">${{stats.signed_count || 0}}</div>
+                                <div class="stat-label">Attended</div>
+                            </div>
+                        `;
+                        html += '</div>';
+                        
+                        // Status breakdown
+                        if (stats.total_events > 0) {{
+                            html += '<div style="margin-bottom:20px">';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Status Breakdown</h3>';
+                            html += '<div style="display:flex;gap:10px;flex-wrap:wrap">';
+                            
+                            const statusColors = {{
+                                signed: '#28a745',
+                                late: '#ffc107',
+                                tentative: '#17a2b8',
+                                absent: '#dc3545',
+                                benched: '#6c757d'
+                            }};
+                            
+                            const statusLabels = {{
+                                signed: 'Signed',
+                                late: 'Late',
+                                tentative: 'Tentative',
+                                absent: 'Absent',
+                                benched: 'Benched'
+                            }};
+                            
+                            ['signed', 'late', 'tentative', 'benched', 'absent'].forEach(status => {{
+                                const count = stats[status + '_count'] || 0;
+                                if (count > 0) {{
+                                    const percentage = Math.round((count / stats.total_events) * 100);
+                                    html += `
+                                        <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:6px;border-left:3px solid ${{statusColors[status]}}">
+                                            <div style="font-weight:600;color:${{statusColors[status]}}">${{count}} ${{statusLabels[status]}}</div>
+                                            <div style="font-size:11px;color:rgba(255,255,255,0.5)">${{percentage}}%</div>
+                                        </div>
+                                    `;
+                                }}
+                            }});
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }}
+                        
+                        // Role distribution
+                        if (role_distribution.length > 0) {{
+                            html += '<div style="margin-bottom:20px">';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Role Distribution</h3>';
+                            html += '<div style="display:flex;gap:10px;flex-wrap:wrap">';
+                            
+                            const roleEmojis = {{
+                                tank: '🛡️',
+                                healer: '💚',
+                                melee: '⚔️',
+                                ranged: '🏹',
+                                dps: '⚔️'
+                            }};
+                            
+                            role_distribution.forEach(role => {{
+                                const emoji = roleEmojis[role.role] || '⚔️';
+                                const percentage = Math.round((role.count / stats.total_events) * 100);
+                                html += `
+                                    <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:6px">
+                                        <div style="font-weight:600">${{emoji}} ${{role.role.charAt(0).toUpperCase() + role.role.slice(1)}}</div>
+                                        <div style="font-size:11px;color:rgba(255,255,255,0.5)">${{role.count}} events (${{percentage}}%)</div>
+                                    </div>
+                                `;
+                            }});
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }}
+                        
+                        // Top characters
+                        if (top_characters.length > 0) {{
+                            html += '<div style="margin-bottom:20px">';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Most Played Characters</h3>';
+                            html += '<div style="display:flex;gap:10px;flex-wrap:wrap">';
+                            
+                            top_characters.forEach(char => {{
+                                html += `
+                                    <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:6px">
+                                        <div style="font-weight:600">${{char.character_name}}</div>
+                                        <div style="font-size:11px;color:rgba(255,255,255,0.5)">${{char.character_class}} • ${{char.event_count}} events</div>
+                                    </div>
+                                `;
+                            }});
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }}
+                        
+                        // Recent events
+                        if (signups.length > 0) {{
+                            html += '<div>';
+                            html += '<h3 style="margin:0 0 10px 0;color:rgba(255,255,255,0.8);font-size:14px">Recent Events</h3>';
+                            html += '<div style="display:grid;gap:10px">';
+                            
+                            const statusColors = {{
+                                signed: '#28a745',
+                                late: '#ffc107',
+                                tentative: '#17a2b8',
+                                absent: '#dc3545',
+                                benched: '#6c757d'
+                            }};
+                            
+                            const statusEmojis = {{
+                                signed: '✅',
+                                late: '🕐',
+                                tentative: '⚖️',
+                                absent: '❌',
+                                benched: '📋'
+                            }};
+                            
+                            signups.slice(0, 10).forEach(signup => {{
+                                const statusColor = statusColors[signup.status] || '#888';
+                                const statusEmoji = statusEmojis[signup.status] || '✓';
+                                const hasLog = signup.log_url ? '📊' : '';
+                                
+                                html += `
+                                    <div style="background:rgba(255,255,255,0.05);padding:10px;border-radius:6px;border-left:3px solid ${{statusColor}}">
+                                        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap">
+                                            <div>
+                                                <div style="font-weight:600;margin-bottom:4px">${{signup.event_title}}</div>
+                                                <div style="font-size:12px;color:rgba(255,255,255,0.6)">
+                                                    ${{signup.character_name}} • ${{signup.character_class}} • ${{signup.role}}${{signup.spec ? ' (' + signup.spec + ')' : ''}}
+                                                </div>
+                                            </div>
+                                            <div style="text-align:right">
+                                                <div style="font-size:12px;color:rgba(255,255,255,0.7)">${{signup.event_date}} ${{signup.event_time}}</div>
+                                                <div style="font-size:12px;margin-top:4px">
+                                                    <span style="background:${{statusColor}};padding:2px 8px;border-radius:4px;color:#fff">
+                                                        ${{statusEmoji}} ${{signup.status}}
+                                                    </span>
+                                                    ${{hasLog ? '<span style="margin-left:4px">' + hasLog + '</span>' : ''}}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        ${{signup.log_url ? '<div style="margin-top:8px"><a href="' + signup.log_url + '" target="_blank" style="color:#5865F2;font-size:12px">View Logs →</a></div>' : ''}}
+                                    </div>
+                                `;
+                            }});
+                            
+                            html += '</div>';
+                            
+                            if (signups.length > 10) {{
+                                html += `<p style="margin-top:10px;color:rgba(255,255,255,0.5);font-size:12px;text-align:center">Showing 10 of ${{signups.length}} events</p>`;
+                            }}
+                            
+                            html += '</div>';
+                        }}
+                        
+                        container.innerHTML = html;
+                        
+                    }} catch (err) {{
+                        console.error(err);
+                        container.innerHTML = '<p style="color:#ff6b6b;padding:20px;text-align:center">❌ Error loading raid data: ' + err.message + '</p>';
+                    }}
+                }}
+                
+                // Toggle raid stats section
+                let raidStatsLoaded = false;
+                function toggleRaidStats() {{
+                    const content = document.getElementById('raid-stats-content');
+                    const indicator = document.getElementById('raid-stats-indicator');
+                    const section = document.getElementById('raid-stats-section');
+                    
+                    if (content.style.display === 'none') {{
+                        content.style.display = 'block';
+                        section.classList.add('expanded');
+                        indicator.textContent = '▲ Click to collapse';
+                        
+                        // Load data on first expand
+                        if (!raidStatsLoaded) {{
+                            loadRaidStats();
+                            raidStatsLoaded = true;
+                        }}
+                    }} else {{
+                        content.style.display = 'none';
+                        section.classList.remove('expanded');
+                        indicator.textContent = '▼ Click to view';
+                    }}
+                }}
+            </script>
         </body>
         </html>
         """
@@ -2151,6 +3336,8 @@ async def handle_discord_user_detail(request):
 @require_auth
 async def handle_events_page(request):
     """GET /admin/events - show raid events history with filtering"""
+    import json
+    
     session = request['session']
     
     # Get filter parameters
@@ -2327,6 +3514,27 @@ async def handle_events_page(request):
         cursor.close()
         conn.close()
         
+        # Build event data for JavaScript (for addon export)
+        events_data_for_js = {}
+        for event in events:
+            events_data_for_js[str(event['id'])] = {
+                'id': event['id'],
+                'title': event['title'],
+                'date': event['event_date'].isoformat() if event['event_date'] else None,
+                'time': event['event_time'].isoformat() if event['event_time'] else None,
+                'signups': [
+                    {
+                        'name': s['character_name'],
+                        'realm': s['realm_slug'],
+                        'class': s['character_class'],
+                        'role': s['role'],
+                        'spec': s.get('spec', ''),
+                        'status': s['status']
+                    }
+                    for s in signups_by_event.get(event['id'], [])
+                ]
+            }
+        
         # Build events HTML
         events_html = ""
         for event in events:
@@ -2458,6 +3666,9 @@ async def handle_events_page(request):
                     <div style="display:flex;align-items:center;gap:10px">
                         <span class="badge" style="background:#5865F2;font-size:14px">{participant_text}</span>
                         {log_html}
+                        <button class="btn btn-sm" style="background:#28a745;color:#fff" onclick="copyEventString({event_id})" title="Copy import string for WoW addon">
+                            🎮 Copy Event String
+                        </button>
                         <button class="btn btn-secondary btn-sm toggle-details" onclick="toggleDetails({event_id})">
                             Show Details ▼
                         </button>
@@ -2471,6 +3682,9 @@ async def handle_events_page(request):
         
         if not events:
             events_html = '<div class="card"><p style="text-align:center;color:rgba(255,255,255,0.5)">No events found for the selected date range.</p></div>'
+        
+        # Convert event data to JSON string for JavaScript
+        events_data_json = json.dumps(events_data_for_js)
         
         # Set default dates if not provided
         from datetime import timedelta
@@ -2539,7 +3753,113 @@ async def handle_events_page(request):
                 </div>
             </div>
             
+            <!-- Modal for Event String -->
+            <div id="eventStringModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:9999;justify-content:center;align-items:center">
+                <div style="background:#1e1e2e;padding:30px;border-radius:10px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+                        <h2 style="margin:0">🎮 WoW Addon Import String</h2>
+                        <button onclick="closeEventStringModal()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:0;line-height:1">&times;</button>
+                    </div>
+                    <div id="eventStringContent" style="margin-bottom:20px">
+                        <div style="margin-bottom:15px">
+                            <p style="color:rgba(255,255,255,0.8);margin-bottom:10px"><strong>How to use:</strong></p>
+                            <ol style="color:rgba(255,255,255,0.7);margin:0;padding-left:20px">
+                                <li>Click the "Copy to Clipboard" button below</li>
+                                <li>In WoW, type: <code>/luminisbot</code> (or <code>/lb</code>) to open the addon</li>
+                                <li>Go to the "Import String" tab</li>
+                                <li>Paste the string and click "Import Event"</li>
+                            </ol>
+                        </div>
+                        <div style="margin-bottom:15px">
+                            <label style="display:block;margin-bottom:5px;color:rgba(255,255,255,0.8);font-weight:bold">Import String:</label>
+                            <textarea id="eventStringTextarea" readonly style="width:100%;min-height:150px;padding:10px;background:#2a2a3e;color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:5px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
+                        </div>
+                        <div id="eventStringInfo" style="padding:10px;background:rgba(40,167,69,0.2);border-radius:5px;margin-bottom:15px">
+                            <p style="margin:0;color:rgba(255,255,255,0.9);font-size:14px"><strong id="eventStringTitle"></strong></p>
+                            <p style="margin:5px 0 0 0;color:rgba(255,255,255,0.7);font-size:13px" id="eventStringDetails"></p>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:10px;justify-content:flex-end">
+                        <button onclick="closeEventStringModal()" class="btn btn-secondary">Close</button>
+                        <button onclick="copyEventStringToClipboard()" class="btn btn-primary" style="background:#28a745">📋 Copy to Clipboard</button>
+                    </div>
+                </div>
+            </div>
+
             <script>
+                // Event data embedded in page
+                const eventData = {events_data_json};
+
+                function copyEventString(eventId) {{
+                    const event = eventData[eventId];
+                    if (!event) {{
+                        alert('Event data not found!');
+                        return;
+                    }}
+
+                    // Build event data structure (same as Discord bot)
+                    const eventDataForAddon = {{
+                        id: event.id,
+                        title: event.title,
+                        date: event.date,
+                        time: event.time,
+                        signups: event.signups
+                    }};
+
+                    // Encode to base64
+                    const jsonStr = JSON.stringify(eventDataForAddon);
+                    const encoded = btoa(unescape(encodeURIComponent(jsonStr)));
+
+                    // Show modal with the string
+                    document.getElementById('eventStringTextarea').value = encoded;
+                    document.getElementById('eventStringTitle').textContent = event.title;
+                    
+                    const signupCount = event.signups.filter(s => s.status === 'signed').length;
+                    const dateStr = event.date ? new Date(event.date).toLocaleDateString() : 'N/A';
+                    const timeStr = event.time ? event.time.substring(0, 5) : 'N/A';
+                    document.getElementById('eventStringDetails').textContent = '📅 ' + dateStr + ' at ' + timeStr + ' • ' + signupCount + ' signups';
+                    
+                    document.getElementById('eventStringModal').style.display = 'flex';
+                }}
+
+                function closeEventStringModal() {{
+                    document.getElementById('eventStringModal').style.display = 'none';
+                }}
+
+                function copyEventStringToClipboard() {{
+                    const textarea = document.getElementById('eventStringTextarea');
+                    textarea.select();
+                    textarea.setSelectionRange(0, 99999); // For mobile devices
+                    
+                    try {{
+                        document.execCommand('copy');
+                        const btn = event.target;
+                        const originalText = btn.textContent;
+                        btn.textContent = '✅ Copied!';
+                        btn.style.background = '#28a745';
+                        setTimeout(() => {{
+                            btn.textContent = originalText;
+                            btn.style.background = '#28a745';
+                        }}, 2000);
+                    }} catch (err) {{
+                        alert('Failed to copy. Please select and copy manually.');
+                    }}
+                }}
+
+                // Close modal when clicking outside
+                document.getElementById('eventStringModal').addEventListener('click', function(e) {{
+                    if (e.target === this) {{
+                        closeEventStringModal();
+                    }}
+                }});
+
+                // Close modal with Escape key
+                document.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Escape') {{
+                        closeEventStringModal();
+                    }}
+                }});
+
                 function toggleDetails(eventId) {{
                     const details = document.getElementById('details-' + eventId);
                     const btn = document.querySelector('[data-event-id="' + eventId + '"] .toggle-details');
@@ -2991,6 +4311,9 @@ def create_app(bot=None):
     app.router.add_get('/admin/discord-users', handle_discord_users_page)
     app.router.add_get('/admin/discord-users/{discord_id}', handle_discord_user_detail)
     app.router.add_post('/admin/api/refresh-discord-info/{discord_id}', handle_refresh_discord_info)
+    app.router.add_get('/admin/api/character-details/{character_id}', handle_character_details_api)
+    app.router.add_get('/admin/api/character-simc/{character_id}', handle_character_simc_api)
+    app.router.add_get('/admin/api/user-raid-stats/{discord_id}', handle_user_raid_stats_api)
     app.router.add_get('/admin/events', handle_events_page)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)

@@ -1510,12 +1510,14 @@ def create_raid_buttons_view(log_url: str = None):
 class CharacterSelectDropdown(Select):
     """Dropdown for selecting a WoW character"""
     
-    def __init__(self, characters, event_id, show_all=False, status='signed'):
+    def __init__(self, characters, event_id, show_all=False, status='signed', page=0):
         self.event_id = event_id
         self.all_characters = characters
         self.show_all = show_all
         self.status = status
+        self.page = page
         
+        # Characters are already sorted by level DESC from database
         # Filter to max-level characters first (unless show_all is True)
         if not show_all:
             # Filter to max level characters
@@ -1530,17 +1532,42 @@ class CharacterSelectDropdown(Select):
                 else:
                     max_level_chars = characters  # Fallback to all if no levels
             
-            # If still too many, take first 24 (leave room for "Show All" option)
-            if len(max_level_chars) > 24:
-                display_chars = max_level_chars[:24]
-            else:
-                display_chars = max_level_chars
+            characters_to_display = max_level_chars
         else:
-            # Show all - take first 25
-            display_chars = characters[:25]
+            characters_to_display = characters
         
-        # Create options from characters
+        # Calculate pagination
+        chars_per_page = 18  # Leave room for Previous/Next navigation
+        total_chars = len(characters_to_display)
+        total_pages = (total_chars + chars_per_page - 1) // chars_per_page  # Ceiling division
+        
+        # Determine if we need navigation
+        has_previous = page > 0
+        has_next = page < total_pages - 1
+        
+        # If on first page and we have <= 20 characters total, show all without navigation
+        if total_chars <= 20 and page == 0:
+            display_chars = characters_to_display
+            has_previous = False
+            has_next = False
+        else:
+            # Calculate slice for this page
+            start_idx = page * chars_per_page
+            end_idx = start_idx + chars_per_page
+            display_chars = characters_to_display[start_idx:end_idx]
+        
+        # Create options
         options = []
+        
+        # Add "Previous" option if needed
+        if has_previous:
+            options.append(discord.SelectOption(
+                label="⬅️ Previous Characters",
+                description=f"Go back to page {page}",
+                value="__PREVIOUS__"
+            ))
+        
+        # Add character options
         for char in display_chars:
             label = f"{char['character_name']} - {char.get('realm_name', 'Unknown')}"
             level = char.get('level')
@@ -1558,12 +1585,13 @@ class CharacterSelectDropdown(Select):
                 value=f"{char['character_name']}|{char['realm_slug']}|{char_class}"
             ))
         
-        # Add "Show All Characters" option if we filtered and have more
-        if not show_all and len(characters) > len(display_chars):
+        # Add "Next" option if needed
+        if has_next:
+            remaining_chars = total_chars - end_idx
             options.append(discord.SelectOption(
-                label="🔍 Show All Characters...",
-                description=f"View all {len(characters)} characters",
-                value="__SHOW_ALL__"
+                label="➡️ More Characters...",
+                description=f"View next page ({remaining_chars} more characters)",
+                value="__NEXT__"
             ))
         
         super().__init__(
@@ -1574,12 +1602,21 @@ class CharacterSelectDropdown(Select):
     
     async def callback(self, interaction: discord.Interaction):
         """Handle character selection"""
-        # Check if user wants to show all characters
-        if self.values[0] == "__SHOW_ALL__":
-            # Show all characters view
-            view = CharacterSelectView(self.all_characters, self.event_id, show_all=True, status=self.status)
+        # Check if user wants to navigate pages
+        if self.values[0] == "__PREVIOUS__":
+            # Show previous page
+            view = CharacterSelectView(self.all_characters, self.event_id, show_all=self.show_all, status=self.status, page=self.page - 1)
             await interaction.response.edit_message(
-                content="🎮 Showing all characters:",
+                content=f"🎮 Showing characters (Page {self.page}):",
+                view=view
+            )
+            return
+        
+        if self.values[0] == "__NEXT__":
+            # Show next page
+            view = CharacterSelectView(self.all_characters, self.event_id, show_all=self.show_all, status=self.status, page=self.page + 1)
+            await interaction.response.edit_message(
+                content=f"🎮 Showing characters (Page {self.page + 2}):",
                 view=view
             )
             return
@@ -1650,9 +1687,9 @@ class CharacterSelectDropdown(Select):
 class CharacterSelectView(View):
     """View containing character selection dropdown"""
     
-    def __init__(self, characters, event_id, show_all=False, status='signed'):
+    def __init__(self, characters, event_id, show_all=False, status='signed', page=0):
         super().__init__(timeout=180)  # 3 minute timeout
-        self.add_item(CharacterSelectDropdown(characters, event_id, show_all, status))
+        self.add_item(CharacterSelectDropdown(characters, event_id, show_all, status, page))
 
 
 class RoleSelectDropdown(Select):
@@ -2605,7 +2642,8 @@ async def handle_signup_click(interaction: discord.Interaction):
         # No characters - prompt to connect account
         await interaction.response.send_message(
             "❌ You haven't connected your Battle.net account yet!\n\n"
-            "Please use the `/connectwow` command to link your WoW characters first.",
+            "Please use the `/connectwow` command to link your WoW characters first.\n"
+            "You can use this command in any channel (e.g., #general) or in a DM to the bot.",
             ephemeral=True
         )
         return
@@ -2651,7 +2689,8 @@ async def handle_status_change(interaction: discord.Interaction, new_status: str
             # No characters - prompt to connect account
             await interaction.response.send_message(
                 "❌ You haven't connected your Battle.net account yet!\n\n"
-                "Please use the `/connectwow` command to link your WoW characters first.",
+                "Please use the `/connectwow` command to link your WoW characters first.\n"
+                "You can use this command in any channel (e.g., #general) or in a DM to the bot.",
                 ephemeral=True
             )
             return
