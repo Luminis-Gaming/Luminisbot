@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================================
 
+# Current WoW max level - update this when a new expansion launches
+WOW_MAX_LEVEL = 90
+
 # Default timezone for raid events
 # When users create events, they enter times in this timezone
 # Discord will then automatically show the correct time for each user's local timezone
@@ -1515,10 +1518,10 @@ class CharacterSelectDropdown(Select):
         
         # Filter to max-level characters first (unless show_all is True)
         if not show_all:
-            # Filter to level 80 characters
-            max_level_chars = [char for char in characters if char.get('level') == 80]
+            # Filter to max level characters
+            max_level_chars = [char for char in characters if char.get('level') == WOW_MAX_LEVEL]
             
-            # If no level 80s, find actual max level
+            # If no max level chars, find actual max level
             if not max_level_chars:
                 levels = [char.get('level', 0) for char in characters if char.get('level') is not None]
                 if levels:

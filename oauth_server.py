@@ -87,6 +87,9 @@ DB_NAME = os.getenv('DB_NAME', 'luminisbot')
 DB_USER = os.getenv('DB_USER', 'postgres')
 DB_PASSWORD = os.getenv('DB_PASSWORD')
 
+# Current WoW max level - update this when a new expansion launches
+WOW_MAX_LEVEL = 90
+
 # Blizzard API endpoints (EU region)
 BLIZZARD_OAUTH_AUTHORIZE = "https://oauth.battle.net/authorize"
 BLIZZARD_OAUTH_TOKEN = "https://oauth.battle.net/token"
@@ -1680,13 +1683,13 @@ async def handle_characters_page(request):
                         </select>
                         <select id="filterLevel" onchange="applyFilters()">
                             <option value="0">All Levels</option>
-                            <option value="80">Level 80+</option>
-                            <option value="70">Level 70+</option>
-                            <option value="60">Level 60+</option>
+                            <option value="{WOW_MAX_LEVEL}">Level {WOW_MAX_LEVEL}+</option>
+                            <option value="{WOW_MAX_LEVEL - 10}">Level {WOW_MAX_LEVEL - 10}+</option>
+                            <option value="{WOW_MAX_LEVEL - 20}">Level {WOW_MAX_LEVEL - 20}+</option>
                         </select>
                         <label>
                             <input type="checkbox" id="filterMaxLevel" onchange="applyFilters()">
-                            Max Level Only (80)
+                            Max Level Only ({WOW_MAX_LEVEL})
                         </label>
                     </div>
                     <div class="table-wrapper">
@@ -1726,7 +1729,7 @@ async def handle_characters_page(request):
                         if (filterLevel > 0 && level < filterLevel) show = false;
                         
                         // Max level only
-                        if (maxLevelOnly && level < 80) show = false;
+                        if (maxLevelOnly && level < {WOW_MAX_LEVEL}) show = false;
                         
                         row.style.display = show ? '' : 'none';
                         if (show) visibleCount++;
