@@ -3023,6 +3023,27 @@ async def show_spec_selection(interaction: discord.Interaction, character_name: 
     )
 
 
+async def _enrich_character_background(discord_id: str, character_name: str, realm_slug: str):
+    """Background task to refresh character data (level, spec, etc.) on raid signup"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT id, region FROM wow_characters
+            WHERE discord_id = %s AND character_name = %s AND realm_slug = %s
+        """, (discord_id, character_name, realm_slug))
+        char = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if char:
+            from character_enrichment import enrich_and_cache_character
+            await enrich_and_cache_character(char['id'], realm_slug, character_name, char.get('region', 'eu'))
+            logger.info(f"Background enrichment completed for {character_name}-{realm_slug}")
+    except Exception as e:
+        logger.warning(f"Background enrichment failed for {character_name}-{realm_slug}: {e}")
+
+
 async def finalize_signup(interaction: discord.Interaction, event_id: int, character_name: str,
                          realm_slug: str, character_class: str, role: str, spec: str, status: str = 'signed'):
     """Finalize the signup and update the embed"""
@@ -3033,6 +3054,10 @@ async def finalize_signup(interaction: discord.Interaction, event_id: int, chara
     
     # Add signup
     add_raid_signup(event_id, discord_id, character_name, realm_slug, character_class, role, spec, status)
+
+    # Trigger background enrichment to keep character data fresh
+    import asyncio
+    asyncio.create_task(_enrich_character_background(discord_id, character_name, realm_slug))
 
     # Remove any existing emoji-based reservation for this user
     try:
