@@ -2367,7 +2367,7 @@ async def handle_discord_user_detail(request):
                     <div style="display:flex;gap:20px;margin-top:15px;flex-wrap:wrap;align-items:center">
                         <div><strong>Class:</strong> {char['character_class'] or 'N/A'}</div>
                         <div><strong>Race:</strong> {char['character_race'] or 'N/A'}</div>
-                        <div><strong>Level:</strong> {char['level'] or 'N/A'}</div>
+                        <div id="level-{char['id']}"><strong>Level:</strong> {char['level'] or 'N/A'}</div>
                         <span class="expand-indicator" style="margin-left:auto;color:rgba(255,255,255,0.5);font-size:14px">▼ Click to view details</span>
                     </div>
                 </div>
@@ -2574,6 +2574,14 @@ async def handle_discord_user_detail(request):
                                     const ilvl = Math.round(data.average_item_level || data.item_level_equipped);
                                     ilvlDisplay.textContent = ilvl;
                                 }}
+                            }}
+                        }}
+                        
+                        // Update level in the header if available
+                        if (data.level) {{
+                            const levelEl = document.getElementById('level-' + characterId);
+                            if (levelEl) {{
+                                levelEl.innerHTML = '<strong>Level:</strong> ' + data.level;
                             }}
                         }}
                         
