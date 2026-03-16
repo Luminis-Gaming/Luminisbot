@@ -2006,19 +2006,54 @@ class EventStringModal(discord.ui.Modal):
 class MovePlayerSelectView(View):
     """View for selecting a player to move"""
     
-    def __init__(self, event_id, signups):
+    def __init__(self, event_id, signups, page=0):
         super().__init__(timeout=60)
         self.event_id = event_id
+        self.all_signups = signups
+        self.page = page
         
-        # Create dropdown with players (max 25 options)
+        # Calculate pagination
+        items_per_page = 18  # Leave room for Previous/Next navigation
+        total_items = len(signups)
+        total_pages = (total_items + items_per_page - 1) // items_per_page
+        
+        has_previous = page > 0
+        has_next = page < total_pages - 1
+        
+        # If on first page and we have <= 20 players, show all without navigation
+        if total_items <= 20 and page == 0:
+            display_signups = signups
+            has_previous = False
+            has_next = False
+        else:
+            start_idx = page * items_per_page
+            end_idx = start_idx + items_per_page
+            display_signups = signups[start_idx:end_idx]
+        
         options = []
-        for signup in signups[:25]:
+        
+        if has_previous:
+            options.append(discord.SelectOption(
+                label="⬅️ Previous Players",
+                description=f"Go back to page {page}",
+                value="__PREVIOUS__"
+            ))
+        
+        for signup in display_signups:
             status_emoji = {'signed': '✅', 'late': '🕐', 'tentative': '⚖️', 'benched': '🪑', 'absent': '❌'}.get(signup['status'], '❓')
             options.append(discord.SelectOption(
                 label=f"{signup['character_name']} ({signup['status'].title()})",
                 description=f"{signup['character_class']} - {signup['role']}",
                 value=f"{signup['discord_id']}|{signup['character_name']}|{signup['status']}",
                 emoji=status_emoji
+            ))
+        
+        if has_next:
+            remaining = total_items - end_idx
+            options.append(discord.SelectOption(
+                label="➡️ More Players...",
+                description=f"View next page ({remaining} more players)",
+                value="__NEXT__"
             ))
         
         self.player_select = Select(
@@ -2031,7 +2066,25 @@ class MovePlayerSelectView(View):
     
     async def player_selected(self, interaction: discord.Interaction):
         """Handle player selection"""
-        discord_id, char_name, current_status = self.player_select.values[0].split('|')
+        selected = self.player_select.values[0]
+        
+        if selected == "__PREVIOUS__":
+            view = MovePlayerSelectView(self.event_id, self.all_signups, page=self.page - 1)
+            await interaction.response.edit_message(
+                content=f"Select a player to move (Page {self.page}):",
+                view=view
+            )
+            return
+        
+        if selected == "__NEXT__":
+            view = MovePlayerSelectView(self.event_id, self.all_signups, page=self.page + 1)
+            await interaction.response.edit_message(
+                content=f"Select a player to move (Page {self.page + 2}):",
+                view=view
+            )
+            return
+        
+        discord_id, char_name, current_status = selected.split('|')
         
         # Show status options
         view = MovePlayerStatusView(self.event_id, discord_id, char_name, current_status)
@@ -2106,19 +2159,54 @@ class MovePlayerStatusView(View):
 class RemovePlayerSelectView(View):
     """View for selecting a player to remove"""
     
-    def __init__(self, event_id, signups):
+    def __init__(self, event_id, signups, page=0):
         super().__init__(timeout=60)
         self.event_id = event_id
+        self.all_signups = signups
+        self.page = page
         
-        # Create dropdown with players (max 25 options)
+        # Calculate pagination
+        items_per_page = 18  # Leave room for Previous/Next navigation
+        total_items = len(signups)
+        total_pages = (total_items + items_per_page - 1) // items_per_page
+        
+        has_previous = page > 0
+        has_next = page < total_pages - 1
+        
+        # If on first page and we have <= 20 players, show all without navigation
+        if total_items <= 20 and page == 0:
+            display_signups = signups
+            has_previous = False
+            has_next = False
+        else:
+            start_idx = page * items_per_page
+            end_idx = start_idx + items_per_page
+            display_signups = signups[start_idx:end_idx]
+        
         options = []
-        for signup in signups[:25]:
+        
+        if has_previous:
+            options.append(discord.SelectOption(
+                label="⬅️ Previous Players",
+                description=f"Go back to page {page}",
+                value="__PREVIOUS__"
+            ))
+        
+        for signup in display_signups:
             status_emoji = {'signed': '✅', 'late': '🕐', 'tentative': '⚖️', 'benched': '🪑', 'absent': '❌'}.get(signup['status'], '❓')
             options.append(discord.SelectOption(
                 label=f"{signup['character_name']} ({signup['status'].title()})",
                 description=f"{signup['character_class']} - {signup['role']}",
                 value=f"{signup['discord_id']}|{signup['character_name']}",
                 emoji=status_emoji
+            ))
+        
+        if has_next:
+            remaining = total_items - end_idx
+            options.append(discord.SelectOption(
+                label="➡️ More Players...",
+                description=f"View next page ({remaining} more players)",
+                value="__NEXT__"
             ))
         
         self.player_select = Select(
@@ -2131,7 +2219,25 @@ class RemovePlayerSelectView(View):
     
     async def player_selected(self, interaction: discord.Interaction):
         """Handle player selection - confirm removal"""
-        discord_id, char_name = self.player_select.values[0].split('|')
+        selected = self.player_select.values[0]
+        
+        if selected == "__PREVIOUS__":
+            view = RemovePlayerSelectView(self.event_id, self.all_signups, page=self.page - 1)
+            await interaction.response.edit_message(
+                content=f"Select a player to remove (Page {self.page}):",
+                view=view
+            )
+            return
+        
+        if selected == "__NEXT__":
+            view = RemovePlayerSelectView(self.event_id, self.all_signups, page=self.page + 1)
+            await interaction.response.edit_message(
+                content=f"Select a player to remove (Page {self.page + 2}):",
+                view=view
+            )
+            return
+        
+        discord_id, char_name = selected.split('|')
         
         # Confirm removal
         view = ConfirmRemovePlayerView(self.event_id, discord_id, char_name)
