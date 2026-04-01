@@ -1080,7 +1080,7 @@ class SimTypeSelect(discord.ui.Select):
                     if dps:
                         embed.add_field(name="DPS", value=f"**{dps:,.0f}**" if isinstance(dps, (int, float)) else str(dps), inline=True)
                     embed.add_field(name="Results", value=f"[View Full Results]({result_url})", inline=False)
-                    embed.set_footer(text="SimHammer")
+                    embed.set_footer(text="Luminis sim service, powered by Luminis Plus")
 
                     await interaction.followup.send(
                         content=f"{interaction.user.mention}",
