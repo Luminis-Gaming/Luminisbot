@@ -17,6 +17,13 @@ from database import get_db_connection, setup_database
 from wcl_api import get_wcl_token, get_latest_log, get_fights_from_report
 from discord_ui import LogButtonsView, send_message_with_auto_delete
 
+# --- Import SimCraft integration ---
+from simcraft_integration import (
+    submit_sim, poll_sim_status, build_result_url, fetch_text_from_url,
+    has_active_sim, get_active_sim_id, set_active_sim, clear_active_sim,
+    SIMCRAFT_API_KEY,
+)
+
 # --- Import OAuth server ---
 from oauth_server import start_oauth_server
 
@@ -925,6 +932,194 @@ async def createraid_command(interaction: discord.Interaction):
     """Create a raid event with interactive signup system."""
     modal = CreateRaidModal()
     await interaction.response.send_modal(modal)
+
+
+# --- SimCraft Sim Command ---
+
+SIM_TYPE_LABELS = {
+    "quick": "⚔️ Quick Sim",
+    "vault": "🏦 Sim Vault",
+    "crest_upgrades": "💎 Crest Upgrades",
+}
+
+
+class SimTypeSelect(discord.ui.Select):
+    """Dropdown for choosing sim type."""
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Quick Sim", value="quick", emoji="⚔️",
+                description="Sim your current gear for DPS + stat weights"),
+            discord.SelectOption(label="Sim Vault", value="vault", emoji="🏦",
+                description="Find the best Great Vault pick"),
+            discord.SelectOption(label="Crest Upgrades", value="crest_upgrades", emoji="💎",
+                description="Find the best item to spend crests on"),
+        ]
+        super().__init__(placeholder="Choose a sim type...", options=options, min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        sim_type = self.values[0]
+        label = SIM_TYPE_LABELS.get(sim_type, sim_type)
+        self.view.stop()
+
+        await interaction.response.edit_message(
+            content=f"Selected: **{label}**\n\n📋 **Paste your SimC string below.** "
+                    f"I'll grab it automatically.\n"
+                    f"*(You have 2 minutes. The message will be deleted to keep the channel clean.)*",
+            view=None,
+        )
+
+        # Wait for the user to paste their SimC string in the channel
+        def check(m: discord.Message):
+            if m.author.id != interaction.user.id or m.channel.id != interaction.channel.id:
+                return False
+            # Accept messages with text content or .txt attachments
+            if m.attachments:
+                return any(a.filename.endswith('.txt') for a in m.attachments)
+            return len(m.content) > 50 or m.content.strip().startswith('http')
+
+        try:
+            msg = await client.wait_for('message', check=check, timeout=120.0)
+        except asyncio.TimeoutError:
+            await interaction.edit_original_response(
+                content="⏰ Timed out waiting for SimC string. Use `/sim` to try again."
+            )
+            return
+
+        # Extract SimC string from message
+        simc_input = None
+        try:
+            if msg.attachments:
+                for att in msg.attachments:
+                    if att.filename.endswith('.txt'):
+                        raw = await att.read()
+                        simc_input = raw.decode('utf-8', errors='replace')
+                        break
+            elif msg.content.strip().startswith('http'):
+                simc_input = await fetch_text_from_url(msg.content.strip())
+            else:
+                simc_input = msg.content
+        except Exception as e:
+            await interaction.edit_original_response(
+                content=f"❌ Failed to read SimC input: {e}"
+            )
+            try:
+                await msg.delete()
+            except discord.errors.Forbidden:
+                pass
+            return
+
+        # Delete the user's paste message to keep channel clean
+        try:
+            await msg.delete()
+        except discord.errors.Forbidden:
+            pass
+
+        if not simc_input or len(simc_input.strip()) < 50:
+            await interaction.edit_original_response(
+                content="❌ SimC string is too short. Make sure you copied the full output from the SimC addon."
+            )
+            return
+
+        # Submit to SimCraft API
+        await interaction.edit_original_response(
+            content=f"🔄 Starting **{label}** simulation..."
+        )
+
+        try:
+            result = await submit_sim(simc_input, sim_type)
+            job_id = result['id']
+            set_active_sim(interaction.user.id, job_id)
+        except ValueError as e:
+            await interaction.edit_original_response(
+                content=f"❌ Failed to start simulation: {e}"
+            )
+            return
+
+        result_url = build_result_url(job_id)
+        await interaction.edit_original_response(
+            content=f"⏳ **{label}** simulation running...\n🔗 Live progress: {result_url}"
+        )
+
+        # Poll in background and send result when done
+        async def _poll_and_notify():
+            try:
+                status = await poll_sim_status(job_id, timeout_seconds=600, interval=5.0)
+                clear_active_sim(interaction.user.id)
+
+                if status.get('status') == 'done':
+                    dps = None
+                    result_data = status.get('result')
+                    if result_data and isinstance(result_data, dict):
+                        dps = result_data.get('dps')
+
+                    embed = discord.Embed(
+                        title=f"✅ {label} Complete",
+                        url=result_url,
+                        color=0xC8992A,  # SimHammer gold
+                    )
+                    if dps:
+                        embed.add_field(name="DPS", value=f"**{dps:,.0f}**" if isinstance(dps, (int, float)) else str(dps), inline=True)
+                    embed.add_field(name="Results", value=f"[View Full Results]({result_url})", inline=False)
+                    embed.set_footer(text="SimHammer")
+
+                    await interaction.followup.send(
+                        content=f"{interaction.user.mention}",
+                        embed=embed,
+                    )
+                elif status.get('status') == 'failed':
+                    error_msg = status.get('error', 'Unknown error')
+                    await interaction.followup.send(
+                        content=f"{interaction.user.mention} ❌ Simulation failed: {error_msg}",
+                    )
+                else:
+                    await interaction.followup.send(
+                        content=f"{interaction.user.mention} ⚠️ Simulation ended with status: {status.get('status')}",
+                    )
+            except TimeoutError:
+                clear_active_sim(interaction.user.id)
+                await interaction.followup.send(
+                    content=f"{interaction.user.mention} ⏰ Simulation timed out (10 min). Check status: {result_url}",
+                )
+            except Exception as e:
+                clear_active_sim(interaction.user.id)
+                print(f"[SIMCRAFT] Polling error for job {job_id}: {e}")
+                await interaction.followup.send(
+                    content=f"{interaction.user.mention} ⚠️ Lost track of simulation. Check results: {result_url}",
+                )
+
+        asyncio.create_task(_poll_and_notify())
+
+
+class SimTypeView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(SimTypeSelect())
+
+
+@tree.command(name="sim", description="Run a SimulationCraft simulation")
+async def sim_command(interaction: discord.Interaction):
+    if not SIMCRAFT_API_KEY:
+        await interaction.response.send_message(
+            "❌ SimCraft integration is not configured. Ask an admin to set `SIMCRAFT_API_KEY`.",
+            ephemeral=True,
+        )
+        return
+
+    if has_active_sim(interaction.user.id):
+        active_id = get_active_sim_id(interaction.user.id)
+        url = build_result_url(active_id)
+        await interaction.response.send_message(
+            f"⏳ You already have a simulation running.\n🔗 {url}\n\nWait for it to finish before starting another.",
+            ephemeral=True,
+        )
+        return
+
+    view = SimTypeView()
+    await interaction.response.send_message(
+        "**SimHammer** — Choose a simulation type:",
+        view=view,
+        ephemeral=True,
+    )
 
 
 # --- Main Execution Block ---
