@@ -940,8 +940,28 @@ async def createraid_command(interaction: discord.Interaction):
 SIM_TYPE_LABELS = {
     "quick": "⚔️ Quick Sim",
     "vault": "🏦 Sim Vault",
+    "top_gear": "🎯 Top Gear",
     "crest_upgrades": "💎 Crest Upgrades",
 }
+
+GEAR_SLOT_OPTIONS = [
+    discord.SelectOption(label="Head", value="head"),
+    discord.SelectOption(label="Neck", value="neck"),
+    discord.SelectOption(label="Shoulders", value="shoulder"),
+    discord.SelectOption(label="Back", value="back"),
+    discord.SelectOption(label="Chest", value="chest"),
+    discord.SelectOption(label="Wrists", value="wrist"),
+    discord.SelectOption(label="Hands", value="hands"),
+    discord.SelectOption(label="Waist", value="waist"),
+    discord.SelectOption(label="Legs", value="legs"),
+    discord.SelectOption(label="Feet", value="feet"),
+    discord.SelectOption(label="Ring 1", value="finger1"),
+    discord.SelectOption(label="Ring 2", value="finger2"),
+    discord.SelectOption(label="Trinket 1", value="trinket1"),
+    discord.SelectOption(label="Trinket 2", value="trinket2"),
+    discord.SelectOption(label="Main Hand", value="main_hand"),
+    discord.SelectOption(label="Off Hand", value="off_hand"),
+]
 
 
 class SimTypeSelect(discord.ui.Select):
@@ -952,6 +972,8 @@ class SimTypeSelect(discord.ui.Select):
                 description="Sim your current gear for DPS + stat weights"),
             discord.SelectOption(label="Sim Vault", value="vault", emoji="🏦",
                 description="Find the best Great Vault pick"),
+            discord.SelectOption(label="Top Gear", value="top_gear", emoji="🎯",
+                description="Find the best gear combo from your bags"),
             discord.SelectOption(label="Crest Upgrades", value="crest_upgrades", emoji="💎",
                 description="Find the best item to spend crests on"),
         ]
@@ -1040,13 +1062,39 @@ class SimTypeSelect(discord.ui.Select):
             )
             return
 
-        # Submit to SimCraft API
-        await interaction.edit_original_response(
-            content=f"🔄 Starting **{label}** simulation..."
-        )
+        # For top_gear, show slot picker before submitting
+        selected_slots = None
+        if sim_type == "top_gear":
+            slot_view = GearSlotPickerView()
+            await interaction.edit_original_response(
+                content="🎯 **Select which gear slots to compare:**\n"
+                        "⚠️ *Only pick slots where you have alternative items you want to test. "
+                        "More slots = exponentially slower simulation.*",
+                view=slot_view,
+            )
+
+            timed_out = await slot_view.wait()
+            if timed_out or not slot_view.selected_slots:
+                await interaction.edit_original_response(
+                    content="⏰ No slots selected. Use `/sim` to try again.",
+                    view=None,
+                )
+                return
+
+            selected_slots = slot_view.selected_slots
+            slot_names = ", ".join(selected_slots)
+            await interaction.edit_original_response(
+                content=f"🔄 Starting **{label}** for: {slot_names}...",
+                view=None,
+            )
+        else:
+            # Submit to SimCraft API
+            await interaction.edit_original_response(
+                content=f"🔄 Starting **{label}** simulation..."
+            )
 
         try:
-            result = await submit_sim(simc_input, sim_type)
+            result = await submit_sim(simc_input, sim_type, selected_slots=selected_slots)
             job_id = result['id']
             set_active_sim(interaction.user.id, job_id)
         except ValueError as e:
@@ -1113,6 +1161,29 @@ class SimTypeSelect(discord.ui.Select):
                 )
 
         asyncio.create_task(_poll_and_notify())
+
+
+class GearSlotSelect(discord.ui.Select):
+    """Multi-select dropdown for gear slots."""
+    def __init__(self):
+        super().__init__(
+            placeholder="Select gear slots...",
+            options=GEAR_SLOT_OPTIONS,
+            min_values=1,
+            max_values=len(GEAR_SLOT_OPTIONS),
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_slots = self.values
+        self.view.stop()
+        await interaction.response.defer()
+
+
+class GearSlotPickerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.selected_slots = []
+        self.add_item(GearSlotSelect())
 
 
 class SimTypeView(discord.ui.View):

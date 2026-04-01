@@ -32,6 +32,7 @@ def clear_active_sim(user_id: int):
 
 
 async def submit_sim(simc_input: str, sim_type: str) -> dict:
+async def submit_sim(simc_input: str, sim_type: str, selected_slots: list[str] | None = None) -> dict:
     """Submit a simulation to the SimCraft backend.
 
     Returns dict with 'id', 'status', 'created_at' on success.
@@ -45,6 +46,8 @@ async def submit_sim(simc_input: str, sim_type: str) -> dict:
         "sim_type": sim_type,
         "api_key": SIMCRAFT_API_KEY,
     }
+    if selected_slots:
+        payload["selected_slots"] = selected_slots
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
