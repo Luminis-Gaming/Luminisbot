@@ -31,7 +31,6 @@ def clear_active_sim(user_id: int):
     _active_sims.pop(user_id, None)
 
 
-async def submit_sim(simc_input: str, sim_type: str) -> dict:
 async def submit_sim(simc_input: str, sim_type: str, selected_slots: list[str] | None = None) -> dict:
     """Submit a simulation to the SimCraft backend.
 
