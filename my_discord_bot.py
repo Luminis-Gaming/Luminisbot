@@ -1085,26 +1085,31 @@ class SimTypeSelect(discord.ui.Select):
                     await interaction.followup.send(
                         content=f"{interaction.user.mention}",
                         embed=embed,
+                        ephemeral=True,
                     )
                 elif status.get('status') == 'failed':
                     error_msg = status.get('error', 'Unknown error')
                     await interaction.followup.send(
                         content=f"{interaction.user.mention} ❌ Simulation failed: {error_msg}",
+                        ephemeral=True,
                     )
                 else:
                     await interaction.followup.send(
                         content=f"{interaction.user.mention} ⚠️ Simulation ended with status: {status.get('status')}",
+                        ephemeral=True,
                     )
             except TimeoutError:
                 clear_active_sim(interaction.user.id)
                 await interaction.followup.send(
                     content=f"{interaction.user.mention} ⏰ Simulation timed out (10 min). Check status: {result_url}",
+                    ephemeral=True,
                 )
             except Exception as e:
                 clear_active_sim(interaction.user.id)
                 print(f"[SIMCRAFT] Polling error for job {job_id}: {e}")
                 await interaction.followup.send(
                     content=f"{interaction.user.mention} ⚠️ Lost track of simulation. Check results: {result_url}",
+                    ephemeral=True,
                 )
 
         asyncio.create_task(_poll_and_notify())
