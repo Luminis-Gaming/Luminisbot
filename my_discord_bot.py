@@ -55,6 +55,7 @@ WCL_GUILD_ID = 771376 # Example Guild ID
 
 # --- Bot and Command Tree Setup ---
 intents = discord.Intents.default()
+intents.message_content = True  # Required to read message content in guild channels (enable in Developer Portal too)
 client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
@@ -969,13 +970,24 @@ class SimTypeSelect(discord.ui.Select):
         )
 
         # Wait for the user to paste their SimC string in the channel
+        channel = interaction.channel
+        user_id = interaction.user.id
+        print(f"[SIMCRAFT] Waiting for SimC paste from user {user_id} in channel {channel.id if channel else 'None'}")
+
         def check(m: discord.Message):
-            if m.author.id != interaction.user.id or m.channel.id != interaction.channel.id:
+            if m.author.id != user_id:
                 return False
-            # Accept messages with text content or .txt attachments
+            if channel and m.channel.id != channel.id:
+                return False
+            print(f"[SIMCRAFT] Got message from user: content_len={len(m.content)}, attachments={[a.filename for a in m.attachments]}")
+            # Accept any message with attachments or non-trivial content
             if m.attachments:
-                return any(a.filename.endswith('.txt') for a in m.attachments)
-            return len(m.content) > 50 or m.content.strip().startswith('http')
+                return True
+            if len(m.content) > 30:
+                return True
+            if m.content.strip().startswith('http'):
+                return True
+            return False
 
         try:
             msg = await client.wait_for('message', check=check, timeout=120.0)
@@ -989,11 +1001,19 @@ class SimTypeSelect(discord.ui.Select):
         simc_input = None
         try:
             if msg.attachments:
+                # Read first text-like attachment (Discord auto-converts long pastes to .txt)
                 for att in msg.attachments:
-                    if att.filename.endswith('.txt'):
+                    if att.filename.endswith('.txt') or att.content_type and 'text' in att.content_type:
                         raw = await att.read()
                         simc_input = raw.decode('utf-8', errors='replace')
                         break
+                # Fallback: try reading any attachment as text
+                if not simc_input and msg.attachments:
+                    try:
+                        raw = await msg.attachments[0].read()
+                        simc_input = raw.decode('utf-8', errors='replace')
+                    except Exception:
+                        pass
             elif msg.content.strip().startswith('http'):
                 simc_input = await fetch_text_from_url(msg.content.strip())
             else:
