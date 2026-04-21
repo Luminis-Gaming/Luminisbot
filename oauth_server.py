@@ -4553,8 +4553,8 @@ async def handle_event_manage_page(request):
                 
                 /* Class grid inside roster */
                 .class-grid {{
-                    display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                    display: flex;
+                    flex-wrap: wrap;
                     gap: 12px;
                 }}
                 .class-group {{
@@ -4562,6 +4562,9 @@ async def handle_event_manage_page(request):
                     border-radius: 10px;
                     padding: 10px;
                     min-height: 50px;
+                    flex: 1 1 calc(33.333% - 8px);
+                    min-width: 0;
+                    max-width: calc(33.333% - 8px);
                 }}
                 .class-group-header {{
                     font-size: 13px;
