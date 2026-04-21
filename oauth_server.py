@@ -1294,6 +1294,20 @@ def require_admin(func):
         return await func(request)
     return wrapper
 
+def require_event_manager(func):
+    """Decorator to require event manager permission"""
+    async def wrapper(request):
+        session = get_session(request)
+        if not session:
+            raise web.HTTPFound('/admin/login')
+        
+        if not session.get('is_event_manager'):
+            return web.Response(text="Access denied. Event Manager permission required.", status=403)
+        
+        request['session'] = session
+        return await func(request)
+    return wrapper
+
 
 # ============================================================================
 # Shared CSS Styles
@@ -1461,6 +1475,7 @@ async def handle_admin_login(request):
             'user_id': user['id'],
             'username': user['username'],
             'role': user['role'],
+            'is_event_manager': user.get('is_event_manager', False),
             'must_change_password': user['must_change_password'],
             'created': datetime.now(),
             'expires': datetime.now() + timedelta(hours=24)
@@ -1591,6 +1606,8 @@ async def handle_admin_logout(request):
 def render_nav(session, active='characters'):
     """Render navigation bar"""
     is_admin = session.get('role') == 'admin'
+    is_event_manager = session.get('is_event_manager', False)
+    em_badge = ' <span class="badge" style="background:#f97316;font-size:10px">EM</span>' if is_event_manager else ''
     return f"""
     <nav class="nav">
         <a href="/admin/characters" class="{'active' if active == 'characters' else ''}">🎮 All Characters</a>
@@ -1599,7 +1616,7 @@ def render_nav(session, active='characters'):
         {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">⚙️ Admin Users</a>' if is_admin else ''}
         <a href="/admin/change-password" class="{'active' if active == 'password' else ''}">🔑 Password</a>
         <div class="spacer"></div>
-        <span class="user-info">👤 {session['username']} <span class="badge badge-{session['role']}">{session['role']}</span></span>
+        <span class="user-info">👤 {session['username']} <span class="badge badge-{session['role']}">{session['role']}</span>{em_badge}</span>
         <a href="/admin/logout">🚪 Logout</a>
     </nav>
     """
@@ -3698,6 +3715,11 @@ async def handle_events_page(request):
             if reservations:
                 participant_text += f" + {len(reservations)} interested"
             
+            # Edit event button (event managers only)
+            edit_event_btn = ''
+            if session.get('is_event_manager'):
+                edit_event_btn = f'<a href="/admin/events/{event_id}/manage" class="btn btn-sm" style="background:#f97316;color:#fff" title="Manage signups">✏️ Edit Event</a>'
+            
             events_html += f"""
             <div class="card event-card" data-event-id="{event_id}">
                 <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:10px">
@@ -3710,6 +3732,7 @@ async def handle_events_page(request):
                     <div style="display:flex;align-items:center;gap:10px">
                         <span class="badge" style="background:#5865F2;font-size:14px">{participant_text}</span>
                         {log_html}
+                        {edit_event_btn}
                         <button class="btn btn-sm" style="background:#28a745;color:#fff" onclick="copyEventString({event_id})" title="Copy import string for WoW addon">
                             🎮 Copy Event String
                         </button>
@@ -3951,7 +3974,7 @@ async def handle_users_page(request):
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        cursor.execute("SELECT id, username, role, must_change_password, created_at, last_login, created_by FROM admin_users ORDER BY created_at")
+        cursor.execute("SELECT id, username, role, must_change_password, is_event_manager, created_at, last_login, created_by FROM admin_users ORDER BY created_at")
         users = cursor.fetchall()
         
         cursor.close()
@@ -3977,7 +4000,7 @@ async def handle_users_page(request):
             rows_html += f"""
             <tr>
                 <td>{user['username']} {must_change}</td>
-                <td><span class="badge badge-{user['role']}">{user['role']}</span></td>
+                <td><span class="badge badge-{user['role']}">{user['role']}</span>{' <span class="badge" style="background:#f97316">EM</span>' if user.get('is_event_manager') else ''}</td>
                 <td>{user['created_by'] or 'system'}</td>
                 <td>{created}</td>
                 <td>{last_login}</td>
@@ -4066,6 +4089,9 @@ async def handle_new_user_page(request):
                     <div class="form-group">
                         <label><input type="checkbox" name="must_change" checked> Require password change on first login</label>
                     </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" name="is_event_manager"> Event Manager (can manage raid signups)</label>
+                    </div>
                     <div class="actions">
                         <button type="submit" class="btn btn-primary">Create User</button>
                         <a href="/admin/users" class="btn btn-secondary">Cancel</a>
@@ -4090,6 +4116,7 @@ async def handle_new_user(request):
         password = data.get('password', '')
         role = data.get('role', 'user')
         must_change = 'must_change' in data
+        is_event_manager = 'is_event_manager' in data
         
         if not username or not password:
             raise web.HTTPFound('/admin/users/new?error=Username and password required')
@@ -4113,9 +4140,9 @@ async def handle_new_user(request):
         # Create user
         password_hash = hash_password(password)
         cursor.execute("""
-            INSERT INTO admin_users (username, password_hash, role, must_change_password, created_by)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (username, password_hash, role, must_change, session['username']))
+            INSERT INTO admin_users (username, password_hash, role, must_change_password, is_event_manager, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (username, password_hash, role, must_change, is_event_manager, session['username']))
         
         conn.commit()
         cursor.close()
@@ -4185,6 +4212,9 @@ async def handle_edit_user_page(request):
                         <div class="form-group">
                             <label><input type="checkbox" name="must_change" {'checked' if user['must_change_password'] else ''}> Require password change on next login</label>
                         </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" name="is_event_manager" {'checked' if user.get('is_event_manager') else ''}> Event Manager (can manage raid signups)</label>
+                        </div>
                         <div class="actions">
                             <button type="submit" class="btn btn-primary">Save Changes</button>
                             <a href="/admin/users" class="btn btn-secondary">Cancel</a>
@@ -4215,6 +4245,7 @@ async def handle_edit_user(request):
         password = data.get('password', '')
         role = data.get('role', 'user')
         must_change = 'must_change' in data
+        is_event_manager = 'is_event_manager' in data
         
         if role not in ('user', 'admin'):
             role = 'user'
@@ -4240,15 +4271,15 @@ async def handle_edit_user(request):
             password_hash = hash_password(password)
             cursor.execute("""
                 UPDATE admin_users 
-                SET password_hash = %s, role = %s, must_change_password = %s, updated_at = NOW()
+                SET password_hash = %s, role = %s, must_change_password = %s, is_event_manager = %s, updated_at = NOW()
                 WHERE id = %s
-            """, (password_hash, role, must_change, user_id))
+            """, (password_hash, role, must_change, is_event_manager, user_id))
         else:
             cursor.execute("""
                 UPDATE admin_users 
-                SET role = %s, must_change_password = %s, updated_at = NOW()
+                SET role = %s, must_change_password = %s, is_event_manager = %s, updated_at = NOW()
                 WHERE id = %s
-            """, (role, must_change, user_id))
+            """, (role, must_change, is_event_manager, user_id))
         
         conn.commit()
         cursor.close()
@@ -4319,6 +4350,772 @@ async def handle_delete_user(request):
         raise web.HTTPFound('/admin/users?error=Failed to delete user')
 
 
+# ============================================================================
+# EVENT MANAGER - Drag & Drop Signup Management
+# ============================================================================
+
+# WoW class colors for the web UI
+WEB_CLASS_COLORS = {
+    'Death Knight': '#C41E3A',
+    'Demon Hunter': '#A330C9',
+    'Druid': '#FF7C0A',
+    'Evoker': '#33937F',
+    'Hunter': '#AAD372',
+    'Mage': '#3FC7EB',
+    'Monk': '#00FF98',
+    'Paladin': '#F48CBA',
+    'Priest': '#FFFFFF',
+    'Rogue': '#FFF468',
+    'Shaman': '#0070DD',
+    'Warlock': '#8788EE',
+    'Warrior': '#C69B6D',
+}
+
+WEB_CLASS_ORDER = [
+    'Death Knight', 'Demon Hunter', 'Druid', 'Evoker', 'Hunter', 'Mage',
+    'Monk', 'Paladin', 'Priest', 'Rogue', 'Shaman', 'Warlock', 'Warrior',
+]
+
+WEB_ROLE_EMOJIS = {'tank': '🛡️', 'healer': '💚', 'dps': '⚔️'}
+
+
+@require_event_manager
+async def handle_event_manage_page(request):
+    """GET /admin/events/{event_id}/manage - event manager drag & drop page"""
+    import json
+    session = request['session']
+    event_id = request.match_info.get('event_id')
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get event details
+        cursor.execute("""
+            SELECT id, title, event_date, event_time, signups_closed
+            FROM raid_events WHERE id = %s
+        """, (event_id,))
+        event = cursor.fetchone()
+        
+        if not event:
+            cursor.close()
+            conn.close()
+            return web.Response(text="Event not found", status=404)
+        
+        # Get all signups with discord info
+        cursor.execute("""
+            SELECT 
+                rs.id, rs.discord_id, rs.character_name, rs.realm_slug,
+                rs.character_class, rs.role, rs.spec, rs.status,
+                wc.discord_display_name, wc.discord_username
+            FROM raid_signups rs
+            LEFT JOIN wow_connections wc ON rs.discord_id = wc.discord_id
+            WHERE rs.event_id = %s
+            ORDER BY rs.character_class, rs.character_name
+        """, (event_id,))
+        signups = [dict(s) for s in cursor.fetchall()]
+        
+        # Get reservations
+        cursor.execute("""
+            SELECT 
+                rr.discord_id, rr.added_at,
+                wc.discord_display_name, wc.discord_username
+            FROM raid_reservations rr
+            LEFT JOIN wow_connections wc ON rr.discord_id = wc.discord_id
+            WHERE rr.event_id = %s
+            ORDER BY rr.added_at
+        """, (event_id,))
+        reservations = [dict(r) for r in cursor.fetchall()]
+        
+        cursor.close()
+        conn.close()
+        
+        # Fetch missing discord names from bot
+        discord_ids_to_fetch = set()
+        for s in signups:
+            if not s.get('discord_display_name') and not s.get('discord_username'):
+                discord_ids_to_fetch.add(s['discord_id'])
+        for r in reservations:
+            if not r.get('discord_display_name') and not r.get('discord_username'):
+                discord_ids_to_fetch.add(r['discord_id'])
+        
+        if discord_bot and discord_ids_to_fetch:
+            for did in discord_ids_to_fetch:
+                try:
+                    user = discord_bot.get_user(int(did))
+                    if not user:
+                        user = await asyncio.wait_for(discord_bot.fetch_user(int(did)), timeout=2.0)
+                    if user:
+                        for s in signups:
+                            if s['discord_id'] == did:
+                                s['discord_display_name'] = user.display_name
+                                s['discord_username'] = user.name
+                        for r in reservations:
+                            if r['discord_id'] == did:
+                                r['discord_display_name'] = user.display_name
+                                r['discord_username'] = user.name
+                except Exception:
+                    pass
+        
+        # Build JSON data for JavaScript
+        signups_json = json.dumps([{
+            'id': s['id'],
+            'discord_id': s['discord_id'],
+            'character_name': s['character_name'],
+            'realm_slug': s['realm_slug'],
+            'character_class': s['character_class'] or 'Unknown',
+            'role': s['role'] or 'dps',
+            'spec': s.get('spec') or '',
+            'status': s['status'] or 'signed',
+            'discord_display_name': s.get('discord_display_name') or s.get('discord_username') or s['discord_id'],
+        } for s in signups])
+        
+        reservations_json = json.dumps([{
+            'discord_id': r['discord_id'],
+            'discord_display_name': r.get('discord_display_name') or r.get('discord_username') or r['discord_id'],
+        } for r in reservations])
+        
+        event_date = event['event_date'].strftime('%Y-%m-%d') if event['event_date'] else 'N/A'
+        event_time = event['event_time'].strftime('%H:%M') if event['event_time'] else 'N/A'
+        class_colors_json = json.dumps(WEB_CLASS_COLORS)
+        class_order_json = json.dumps(WEB_CLASS_ORDER)
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>LuminisBot - Manage Event: {event['title']}</title>
+            <style>
+                {ADMIN_CSS}
+                
+                .event-header {{
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 15px;
+                    margin-bottom: 25px;
+                }}
+                .event-header h1 {{ margin: 0; }}
+                .event-meta {{ color: rgba(255,255,255,0.7); font-size: 16px; }}
+                
+                .save-bar {{
+                    position: sticky;
+                    top: 0;
+                    z-index: 100;
+                    background: rgba(26, 26, 46, 0.95);
+                    backdrop-filter: blur(10px);
+                    padding: 15px 20px;
+                    border-radius: 12px;
+                    margin-bottom: 20px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    border: 2px solid transparent;
+                    transition: border-color 0.3s;
+                }}
+                .save-bar.has-changes {{
+                    border-color: #f97316;
+                }}
+                .save-bar .change-indicator {{
+                    color: rgba(255,255,255,0.5);
+                    font-size: 14px;
+                }}
+                .save-bar.has-changes .change-indicator {{
+                    color: #f97316;
+                    font-weight: 600;
+                }}
+                
+                /* Main roster zone */
+                .roster-zone {{
+                    background: rgba(255,255,255,0.05);
+                    border: 2px dashed rgba(88,101,242,0.3);
+                    border-radius: 16px;
+                    padding: 20px;
+                    margin-bottom: 25px;
+                    min-height: 100px;
+                    transition: border-color 0.2s, background 0.2s;
+                }}
+                .roster-zone.drag-over {{
+                    border-color: #5865F2;
+                    background: rgba(88,101,242,0.1);
+                }}
+                .roster-zone-title {{
+                    font-size: 20px;
+                    font-weight: 700;
+                    margin-bottom: 5px;
+                }}
+                .roster-stats {{
+                    color: rgba(255,255,255,0.7);
+                    font-size: 14px;
+                    margin-bottom: 15px;
+                }}
+                
+                /* Class grid inside roster */
+                .class-grid {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                    gap: 12px;
+                }}
+                .class-group {{
+                    background: rgba(0,0,0,0.2);
+                    border-radius: 10px;
+                    padding: 10px;
+                    min-height: 50px;
+                }}
+                .class-group-header {{
+                    font-size: 13px;
+                    font-weight: 700;
+                    margin-bottom: 8px;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }}
+                
+                /* Status columns below roster */
+                .status-columns {{
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                    gap: 15px;
+                    margin-bottom: 25px;
+                }}
+                .status-column {{
+                    background: rgba(255,255,255,0.05);
+                    border: 2px dashed rgba(255,255,255,0.15);
+                    border-radius: 12px;
+                    padding: 15px;
+                    min-height: 80px;
+                    transition: border-color 0.2s, background 0.2s;
+                }}
+                .status-column.drag-over {{
+                    border-color: #5865F2;
+                    background: rgba(88,101,242,0.1);
+                }}
+                .status-column-header {{
+                    font-size: 16px;
+                    font-weight: 700;
+                    margin-bottom: 10px;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }}
+                .status-count {{
+                    font-size: 13px;
+                    color: rgba(255,255,255,0.5);
+                    font-weight: 400;
+                }}
+                
+                /* Player cards */
+                .player-card {{
+                    background: rgba(255,255,255,0.08);
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                    margin-bottom: 6px;
+                    cursor: grab;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 14px;
+                    transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+                    user-select: none;
+                    border-left: 3px solid transparent;
+                }}
+                .player-card:hover {{
+                    background: rgba(255,255,255,0.12);
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                }}
+                .player-card.dragging {{
+                    opacity: 0.4;
+                    transform: scale(0.95);
+                }}
+                .player-card .char-name {{
+                    font-weight: 600;
+                }}
+                .player-card .char-spec {{
+                    font-size: 12px;
+                    color: rgba(255,255,255,0.5);
+                }}
+                .player-card .char-role {{
+                    font-size: 12px;
+                }}
+                .player-card .discord-name {{
+                    font-size: 11px;
+                    color: rgba(255,255,255,0.4);
+                    margin-left: auto;
+                }}
+                
+                /* Reserve section (read-only) */
+                .reserve-section {{
+                    background: rgba(255,255,255,0.03);
+                    border-radius: 12px;
+                    padding: 15px;
+                    margin-bottom: 25px;
+                }}
+                .reserve-section h3 {{
+                    margin: 0 0 10px 0;
+                    font-size: 16px;
+                    color: rgba(255,255,255,0.7);
+                }}
+                .reserve-list {{
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }}
+                .reserve-badge {{
+                    background: rgba(255,255,255,0.1);
+                    padding: 6px 14px;
+                    border-radius: 20px;
+                    font-size: 13px;
+                }}
+                
+                .empty-placeholder {{
+                    color: rgba(255,255,255,0.3);
+                    font-style: italic;
+                    font-size: 13px;
+                    padding: 10px;
+                    text-align: center;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                {render_nav(session, 'events')}
+                
+                <div class="event-header">
+                    <div>
+                        <h1>✏️ Manage Event</h1>
+                        <div class="event-meta">
+                            <strong>{event['title']}</strong> &mdash; 📅 {event_date} at {event_time}
+                        </div>
+                    </div>
+                    <a href="/admin/events" class="btn btn-secondary">← Back to Events</a>
+                </div>
+                
+                <div class="save-bar" id="saveBar">
+                    <span class="change-indicator" id="changeIndicator">No unsaved changes</span>
+                    <div style="display:flex;gap:10px;align-items:center">
+                        <button class="btn btn-secondary" id="resetBtn" onclick="resetChanges()" style="display:none">↩️ Reset</button>
+                        <button class="btn btn-primary" id="saveBtn" onclick="saveChanges()" disabled style="opacity:0.5">💾 Save Changes</button>
+                    </div>
+                </div>
+                
+                <!-- Main Roster Drop Zone -->
+                <div class="roster-zone" id="roster-signed"
+                     ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'signed')">
+                    <div class="roster-zone-title">✅ Main Roster <span class="status-count" id="count-signed">(0)</span></div>
+                    <div class="roster-stats" id="rosterStats"></div>
+                    <div class="class-grid" id="classGrid">
+                        <!-- Class groups populated by JS -->
+                    </div>
+                </div>
+                
+                <!-- Status Columns -->
+                <div class="status-columns">
+                    <div class="status-column" id="column-late"
+                         ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'late')">
+                        <div class="status-column-header">🕐 Late <span class="status-count" id="count-late">(0)</span></div>
+                        <div class="player-list" id="list-late"></div>
+                    </div>
+                    <div class="status-column" id="column-tentative"
+                         ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'tentative')">
+                        <div class="status-column-header">⚖️ Tentative <span class="status-count" id="count-tentative">(0)</span></div>
+                        <div class="player-list" id="list-tentative"></div>
+                    </div>
+                    <div class="status-column" id="column-benched"
+                         ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'benched')">
+                        <div class="status-column-header">🪑 Benched <span class="status-count" id="count-benched">(0)</span></div>
+                        <div class="player-list" id="list-benched"></div>
+                    </div>
+                    <div class="status-column" id="column-absent"
+                         ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event, 'absent')">
+                        <div class="status-column-header">❌ Absence <span class="status-count" id="count-absent">(0)</span></div>
+                        <div class="player-list" id="list-absent"></div>
+                    </div>
+                </div>
+                
+                <!-- Reservations (read-only) -->
+                <div class="reserve-section" id="reserveSection" style="display:none">
+                    <h3>🤓 Reserve (interested, no character selected)</h3>
+                    <div class="reserve-list" id="reserveList"></div>
+                </div>
+            </div>
+            
+            <script>
+                const CLASS_COLORS = {class_colors_json};
+                const CLASS_ORDER = {class_order_json};
+                const ROLE_EMOJIS = {{'tank': '🛡️', 'healer': '💚', 'dps': '⚔️'}};
+                const EVENT_ID = {event_id};
+                
+                let signups = {signups_json};
+                const reservations = {reservations_json};
+                
+                // Track original state for reset
+                const originalSignups = JSON.parse(JSON.stringify(signups));
+                let hasChanges = false;
+                
+                // ---- Rendering ----
+                
+                function renderAll() {{
+                    renderRoster();
+                    renderStatusColumn('late');
+                    renderStatusColumn('tentative');
+                    renderStatusColumn('benched');
+                    renderStatusColumn('absent');
+                    renderReservations();
+                    updateCounts();
+                    updateChangeState();
+                }}
+                
+                function createPlayerCard(signup) {{
+                    const color = CLASS_COLORS[signup.character_class] || '#888';
+                    const roleEmoji = ROLE_EMOJIS[signup.role] || '⚔️';
+                    const specText = signup.spec ? signup.spec : '';
+                    
+                    const card = document.createElement('div');
+                    card.className = 'player-card';
+                    card.draggable = true;
+                    card.dataset.signupId = signup.id;
+                    card.style.borderLeftColor = color;
+                    
+                    card.innerHTML = `
+                        <span class="char-role">${{roleEmoji}}</span>
+                        <span class="char-name" style="color:${{color}}">${{signup.character_name}}</span>
+                        ${{specText ? '<span class="char-spec">' + specText + '</span>' : ''}}
+                        <span class="discord-name">${{signup.discord_display_name}}</span>
+                    `;
+                    
+                    card.addEventListener('dragstart', (e) => {{
+                        e.dataTransfer.setData('text/plain', signup.id.toString());
+                        e.dataTransfer.effectAllowed = 'move';
+                        card.classList.add('dragging');
+                    }});
+                    card.addEventListener('dragend', () => {{
+                        card.classList.remove('dragging');
+                        // Clean up all drag-over states
+                        document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                    }});
+                    
+                    return card;
+                }}
+                
+                function renderRoster() {{
+                    const grid = document.getElementById('classGrid');
+                    grid.innerHTML = '';
+                    
+                    const signed = signups.filter(s => s.status === 'signed');
+                    
+                    // Group by class
+                    const groups = {{}};
+                    for (const s of signed) {{
+                        if (!groups[s.character_class]) groups[s.character_class] = [];
+                        groups[s.character_class].push(s);
+                    }}
+                    
+                    // Render in class order
+                    for (const className of CLASS_ORDER) {{
+                        const members = groups[className];
+                        if (!members || members.length === 0) continue;
+                        
+                        const color = CLASS_COLORS[className] || '#888';
+                        const group = document.createElement('div');
+                        group.className = 'class-group';
+                        
+                        // Short display name for class header
+                        const shortName = className.replace('Death Knight', 'DK').replace('Demon Hunter', 'DH');
+                        group.innerHTML = '<div class="class-group-header"><span style="color:' + color + '">' + shortName + '</span> <span class="status-count">(' + members.length + ')</span></div>';
+                        
+                        for (const m of members) {{
+                            group.appendChild(createPlayerCard(m));
+                        }}
+                        
+                        grid.appendChild(group);
+                    }}
+                    
+                    if (signed.length === 0) {{
+                        grid.innerHTML = '<div class="empty-placeholder">Drag players here to add to main roster</div>';
+                    }}
+                    
+                    // Update stats line
+                    let tanks = 0, healers = 0, melee = 0, ranged = 0;
+                    for (const s of signed) {{
+                        if (s.role === 'tank') tanks++;
+                        else if (s.role === 'healer') healers++;
+                        else {{
+                            // We'll approximate melee/ranged based on known specs
+                            const meleeSpecs = {{
+                                'Death Knight': ['Frost', 'Unholy'],
+                                'Demon Hunter': ['Havoc'],
+                                'Druid': ['Feral'],
+                                'Evoker': ['Augmentation'],
+                                'Hunter': ['Survival'],
+                                'Monk': ['Windwalker'],
+                                'Paladin': ['Retribution'],
+                                'Rogue': ['Assassination', 'Outlaw', 'Subtlety'],
+                                'Shaman': ['Enhancement'],
+                                'Warrior': ['Arms', 'Fury'],
+                            }};
+                            const isMelee = meleeSpecs[s.character_class] && meleeSpecs[s.character_class].includes(s.spec);
+                            if (isMelee) melee++;
+                            else ranged++;
+                        }}
+                    }}
+                    document.getElementById('rosterStats').textContent = 
+                        `🛡️ ${{tanks}} Tanks | ⚔️ ${{melee}} Melee | 🏹 ${{ranged}} Ranged | 💚 ${{healers}} Healers`;
+                }}
+                
+                function renderStatusColumn(status) {{
+                    const list = document.getElementById('list-' + status);
+                    list.innerHTML = '';
+                    
+                    const filtered = signups.filter(s => s.status === status);
+                    if (filtered.length === 0) {{
+                        list.innerHTML = '<div class="empty-placeholder">Drag players here</div>';
+                        return;
+                    }}
+                    
+                    for (const s of filtered) {{
+                        list.appendChild(createPlayerCard(s));
+                    }}
+                }}
+                
+                function renderReservations() {{
+                    const section = document.getElementById('reserveSection');
+                    const list = document.getElementById('reserveList');
+                    
+                    if (reservations.length === 0) {{
+                        section.style.display = 'none';
+                        return;
+                    }}
+                    
+                    section.style.display = 'block';
+                    list.innerHTML = '';
+                    for (const r of reservations) {{
+                        const badge = document.createElement('span');
+                        badge.className = 'reserve-badge';
+                        badge.textContent = r.discord_display_name;
+                        list.appendChild(badge);
+                    }}
+                }}
+                
+                function updateCounts() {{
+                    const statuses = ['signed', 'late', 'tentative', 'benched', 'absent'];
+                    for (const s of statuses) {{
+                        const count = signups.filter(su => su.status === s).length;
+                        document.getElementById('count-' + s).textContent = '(' + count + ')';
+                    }}
+                }}
+                
+                function updateChangeState() {{
+                    hasChanges = false;
+                    for (const s of signups) {{
+                        const orig = originalSignups.find(o => o.id === s.id);
+                        if (orig && orig.status !== s.status) {{
+                            hasChanges = true;
+                            break;
+                        }}
+                    }}
+                    
+                    const bar = document.getElementById('saveBar');
+                    const indicator = document.getElementById('changeIndicator');
+                    const saveBtn = document.getElementById('saveBtn');
+                    const resetBtn = document.getElementById('resetBtn');
+                    
+                    if (hasChanges) {{
+                        bar.classList.add('has-changes');
+                        const changeCount = signups.filter(s => {{
+                            const orig = originalSignups.find(o => o.id === s.id);
+                            return orig && orig.status !== s.status;
+                        }}).length;
+                        indicator.textContent = `⚠️ ${{changeCount}} unsaved change${{changeCount > 1 ? 's' : ''}}`;
+                        saveBtn.disabled = false;
+                        saveBtn.style.opacity = '1';
+                        resetBtn.style.display = 'inline-block';
+                    }} else {{
+                        bar.classList.remove('has-changes');
+                        indicator.textContent = 'No unsaved changes';
+                        saveBtn.disabled = true;
+                        saveBtn.style.opacity = '0.5';
+                        resetBtn.style.display = 'none';
+                    }}
+                }}
+                
+                // ---- Drag & Drop ----
+                
+                function handleDragOver(e) {{
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    const zone = e.currentTarget;
+                    zone.classList.add('drag-over');
+                }}
+                
+                function handleDragLeave(e) {{
+                    // Only remove if we're actually leaving the zone
+                    const zone = e.currentTarget;
+                    const rect = zone.getBoundingClientRect();
+                    const x = e.clientX, y = e.clientY;
+                    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {{
+                        zone.classList.remove('drag-over');
+                    }}
+                }}
+                
+                function handleDrop(e, newStatus) {{
+                    e.preventDefault();
+                    const zone = e.currentTarget;
+                    zone.classList.remove('drag-over');
+                    
+                    const signupId = parseInt(e.dataTransfer.getData('text/plain'));
+                    if (!signupId) return;
+                    
+                    const signup = signups.find(s => s.id === signupId);
+                    if (!signup || signup.status === newStatus) return;
+                    
+                    signup.status = newStatus;
+                    renderAll();
+                }}
+                
+                // ---- Save / Reset ----
+                
+                function resetChanges() {{
+                    for (const s of signups) {{
+                        const orig = originalSignups.find(o => o.id === s.id);
+                        if (orig) s.status = orig.status;
+                    }}
+                    renderAll();
+                }}
+                
+                async function saveChanges() {{
+                    if (!hasChanges) return;
+                    
+                    const saveBtn = document.getElementById('saveBtn');
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = '⏳ Saving...';
+                    
+                    // Build list of changed signups only
+                    const changes = [];
+                    for (const s of signups) {{
+                        const orig = originalSignups.find(o => o.id === s.id);
+                        if (orig && orig.status !== s.status) {{
+                            changes.push({{ signup_id: s.id, status: s.status }});
+                        }}
+                    }}
+                    
+                    try {{
+                        const resp = await fetch('/admin/api/events/' + EVENT_ID + '/manage', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ changes: changes }})
+                        }});
+                        
+                        const result = await resp.json();
+                        
+                        if (result.success) {{
+                            // Update original state to match current
+                            for (const s of signups) {{
+                                const orig = originalSignups.find(o => o.id === s.id);
+                                if (orig) orig.status = s.status;
+                            }}
+                            renderAll();
+                            
+                            saveBtn.textContent = '✅ Saved!';
+                            setTimeout(() => {{ saveBtn.textContent = '💾 Save Changes'; }}, 2000);
+                        }} else {{
+                            alert('Error saving: ' + (result.error || 'Unknown error'));
+                            saveBtn.textContent = '💾 Save Changes';
+                            saveBtn.disabled = false;
+                        }}
+                    }} catch (err) {{
+                        alert('Network error: ' + err.message);
+                        saveBtn.textContent = '💾 Save Changes';
+                        saveBtn.disabled = false;
+                    }}
+                }}
+                
+                // Warn before leaving with unsaved changes
+                window.addEventListener('beforeunload', (e) => {{
+                    if (hasChanges) {{
+                        e.preventDefault();
+                        e.returnValue = '';
+                    }}
+                }});
+                
+                // Initial render
+                renderAll();
+            </script>
+        </body>
+        </html>
+        """
+        return web.Response(text=html, content_type='text/html')
+        
+    except Exception as e:
+        logger.error(f"Error loading event manage page: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.Response(text=f"Error: {e}", status=500)
+
+
+@require_event_manager
+async def handle_event_manage_save(request):
+    """POST /admin/api/events/{event_id}/manage - save signup status changes"""
+    import json
+    session = request['session']
+    event_id = request.match_info.get('event_id')
+    
+    try:
+        data = await request.json()
+        changes = data.get('changes', [])
+        
+        if not changes:
+            return web.json_response({'success': True, 'message': 'No changes to save'})
+        
+        # Validate statuses
+        valid_statuses = {'signed', 'late', 'tentative', 'benched', 'absent'}
+        for change in changes:
+            if change.get('status') not in valid_statuses:
+                return web.json_response({'success': False, 'error': f"Invalid status: {change.get('status')}"}, status=400)
+            if not isinstance(change.get('signup_id'), int):
+                return web.json_response({'success': False, 'error': 'Invalid signup_id'}, status=400)
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Verify event exists
+        cursor.execute("SELECT id FROM raid_events WHERE id = %s", (event_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return web.json_response({'success': False, 'error': 'Event not found'}, status=404)
+        
+        # Apply changes
+        for change in changes:
+            cursor.execute("""
+                UPDATE raid_signups 
+                SET status = %s 
+                WHERE id = %s AND event_id = %s
+            """, (change['status'], change['signup_id'], event_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"[EVENT MANAGER] {session['username']} updated {len(changes)} signups for event {event_id}")
+        
+        # Refresh Discord embed
+        if discord_bot:
+            from raid_system import refresh_event_embed
+            asyncio.create_task(refresh_event_embed(discord_bot, int(event_id)))
+        
+        return web.json_response({'success': True, 'message': f'Updated {len(changes)} signups'})
+        
+    except json.JSONDecodeError:
+        return web.json_response({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"Error saving event changes: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+
 # Legacy redirect for old /characters URL
 async def handle_characters_redirect(request):
     """Redirect old /characters URL to new /admin/characters"""
@@ -4359,6 +5156,8 @@ def create_app(bot=None):
     app.router.add_get('/admin/api/character-simc/{character_id}', handle_character_simc_api)
     app.router.add_get('/admin/api/user-raid-stats/{discord_id}', handle_user_raid_stats_api)
     app.router.add_get('/admin/events', handle_events_page)
+    app.router.add_get('/admin/events/{event_id}/manage', handle_event_manage_page)
+    app.router.add_post('/admin/api/events/{event_id}/manage', handle_event_manage_save)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
     app.router.add_post('/admin/users/new', handle_new_user)

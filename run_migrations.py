@@ -593,6 +593,24 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ character enrichment cache columns ready")
         
+        # ============================================================================
+        # EVENT MANAGER PERMISSION (additional permission flag on admin_users)
+        # ============================================================================
+        
+        cursor.execute("""
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'admin_users' AND column_name = 'is_event_manager'
+                ) THEN
+                    ALTER TABLE admin_users ADD COLUMN is_event_manager BOOLEAN NOT NULL DEFAULT FALSE;
+                END IF;
+            END $$;
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ admin_users event manager column ready")
+        
         conn.commit()
         cursor.close()
         conn.close()
