@@ -880,7 +880,7 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
         self.add_item(self.time_input)
         
         self.signup_deadline_input = discord.ui.TextInput(
-            label="Signup Deadline (optional, HH:MM on event day)",
+            label="Signup Deadline (optional, HH:MM event day)",
             placeholder="e.g., 18:00 to close signups at 6 PM on event day",
             max_length=5,
             required=False
