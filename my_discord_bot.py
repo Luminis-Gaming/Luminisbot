@@ -179,6 +179,13 @@ async def update_started_events():
     await update_started_events(client)
 
 
+@tasks.loop(minutes=1)
+async def close_expired_signups():
+    """Close signups for events whose signup deadline has passed."""
+    from raid_system import close_expired_signups
+    await close_expired_signups(client)
+
+
 @tasks.loop(minutes=2)
 async def check_raid_reminders():
     """Check for pending raid reminders and send DMs to users."""
@@ -274,6 +281,8 @@ async def on_ready():
         cleanup_old_raid_events.start()
     if not update_started_events.is_running():
         update_started_events.start()
+    if not close_expired_signups.is_running():
+        close_expired_signups.start()
     if not check_raid_reminders.is_running():
         check_raid_reminders.start()
     
@@ -869,18 +878,35 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             required=True
         )
         self.add_item(self.time_input)
+        
+        self.signup_deadline_input = discord.ui.TextInput(
+            label="Signup Deadline (optional, HH:MM on event day)",
+            placeholder="e.g., 18:00 to close signups at 6 PM on event day",
+            max_length=5,
+            required=False
+        )
+        self.add_item(self.signup_deadline_input)
     
     async def on_submit(self, interaction: discord.Interaction):
         """Handle modal submission"""
         try:
             # Import parse functions from raid_system
-            from raid_system import parse_date, parse_time, create_raid_event, RaidButtonsView
+            from raid_system import parse_date, parse_time, create_raid_event, RaidButtonsView, DEFAULT_TIMEZONE
             from datetime import datetime
+            from zoneinfo import ZoneInfo
             
             # Parse date and time
             event_date = parse_date(self.date_input.value)
             event_time = parse_time(self.time_input.value)
             title = self.title_input.value
+            
+            # Parse optional signup deadline
+            signup_deadline = None
+            deadline_value = self.signup_deadline_input.value.strip()
+            if deadline_value:
+                deadline_time = parse_time(deadline_value)
+                tz = ZoneInfo(DEFAULT_TIMEZONE)
+                signup_deadline = datetime.combine(event_date, deadline_time, tzinfo=tz)
             
         except ValueError as e:
             await interaction.response.send_message(
@@ -910,7 +936,8 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             title=title,
             event_date=event_date,
             event_time=event_time,
-            created_by=interaction.user.id
+            created_by=interaction.user.id,
+            signup_deadline=signup_deadline
         )
         
         # Now generate the proper embed using generate_raid_embed

@@ -541,16 +541,16 @@ def get_dps_type(character_class: str, spec: str):
 # ============================================================================
 
 def create_raid_event(guild_id: int, channel_id: int, message_id: int, title: str, 
-                     event_date: date, event_time: time, created_by: int):
+                     event_date: date, event_time: time, created_by: int, signup_deadline=None):
     """Create a new raid event in the database"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute("""
-        INSERT INTO raid_events (guild_id, channel_id, message_id, title, event_date, event_time, created_by)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO raid_events (guild_id, channel_id, message_id, title, event_date, event_time, created_by, signup_deadline)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
-    """, (guild_id, channel_id, message_id, title, event_date, event_time, created_by))
+    """, (guild_id, channel_id, message_id, title, event_date, event_time, created_by, signup_deadline))
     
     event_id = cursor.fetchone()[0]
     conn.commit()
@@ -746,6 +746,43 @@ def is_event_admin(event_id: int, discord_id: str) -> bool:
     conn.close()
     
     return is_assistant
+
+def set_signups_closed(event_id: int, closed: bool):
+    """Set whether signups are closed for an event"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE raid_events SET signups_closed = %s WHERE id = %s
+    """, (closed, event_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def are_signups_closed(event_id: int) -> bool:
+    """Check if signups are closed for an event (either manually or by deadline)"""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT signups_closed, signup_deadline FROM raid_events WHERE id = %s
+    """, (event_id,))
+    event = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if not event:
+        return False
+    
+    # Manually closed
+    if event['signups_closed']:
+        return True
+    
+    # Auto-closed by deadline
+    if event['signup_deadline']:
+        now = datetime.now(timezone.utc)
+        if now >= event['signup_deadline']:
+            return True
+    
+    return False
 
 def get_event_assistants(event_id: int):
     """Get all assistants for an event"""
@@ -1108,6 +1145,23 @@ def generate_raid_embed(event_id: int):
             inline=False
         )
     
+    # Check if signups are closed
+    signups_closed = are_signups_closed(event_id)
+    
+    if signups_closed:
+        embed.add_field(
+            name="\u200b",
+            value="```ansi\n\033[31m🔒 SIGNUPS CLOSED\033[0m\n```",
+            inline=False
+        )
+    elif event.get('signup_deadline'):
+        deadline_unix = int(event['signup_deadline'].timestamp())
+        embed.add_field(
+            name="\u200b",
+            value=f"📝 Signups close: <t:{deadline_unix}:F> (<t:{deadline_unix}:R>)",
+            inline=False
+        )
+    
     # Get all signup counts for overview
     signed_signups = get_raid_signups(event_id, 'signed')
     late_signups = get_raid_signups(event_id, 'late')
@@ -1305,7 +1359,7 @@ def generate_raid_embed(event_id: int):
             absence_text = absence_text[:1000] + f"... +{len(absent_signups) - absence_text[:1000].count(',') - 1} more"
         embed.add_field(name=f"❌ Absence ({len(absent_signups)})", value=absence_text, inline=False)
 
-    embed.set_footer(text="Click a button below to sign up or change your status")
+    embed.set_footer(text="🔒 Signups are closed" if signups_closed else "Click a button below to sign up or change your status")
     view = create_raid_buttons_view(event.get('log_url'))
     return embed, view
 
@@ -2425,6 +2479,52 @@ class AdminPanelView(View):
         self.event = event
         self.admin_id = admin_id
         self.is_owner = str(event['created_by']) == str(admin_id)
+        
+        # Dynamically add End/Reopen Signups button based on current state
+        signups_closed = are_signups_closed(event_id)
+        if signups_closed:
+            btn = Button(label="Reopen Signups", style=discord.ButtonStyle.success, emoji="🔓", row=2)
+            btn.callback = self._reopen_signups_callback
+        else:
+            btn = Button(label="End Signups", style=discord.ButtonStyle.danger, emoji="🔒", row=2)
+            btn.callback = self._end_signups_callback
+        self.add_item(btn)
+    
+    async def _end_signups_callback(self, interaction: discord.Interaction):
+        """Close signups for this event"""
+        set_signups_closed(self.event_id, True)
+        
+        # Update the event embed
+        try:
+            channel = interaction.guild.get_channel(self.event['channel_id'])
+            if channel:
+                message = await channel.fetch_message(self.event['message_id'])
+                await update_raid_message(message)
+        except Exception:
+            pass
+        
+        await interaction.response.send_message(
+            "🔒 Signups have been closed for this event!",
+            ephemeral=True
+        )
+    
+    async def _reopen_signups_callback(self, interaction: discord.Interaction):
+        """Reopen signups for this event"""
+        set_signups_closed(self.event_id, False)
+        
+        # Update the event embed
+        try:
+            channel = interaction.guild.get_channel(self.event['channel_id'])
+            if channel:
+                message = await channel.fetch_message(self.event['message_id'])
+                await update_raid_message(message)
+        except Exception:
+            pass
+        
+        await interaction.response.send_message(
+            "🔓 Signups have been reopened for this event!",
+            ephemeral=True
+        )
     
     @discord.ui.button(label="Edit Event", style=discord.ButtonStyle.secondary, emoji="✏️", row=0)
     async def edit_event_button(self, interaction: discord.Interaction, button: Button):
@@ -2741,6 +2841,22 @@ async def handle_signup_click(interaction: discord.Interaction):
     """Handle sign up button click"""
     discord_id = str(interaction.user.id)
     
+    # Get event ID from message
+    event = get_raid_event(interaction.message.id)
+    if not event:
+        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
+        return
+    
+    event_id = event['id']
+    
+    # Check if signups are closed
+    if are_signups_closed(event_id):
+        await interaction.response.send_message(
+            "🔒 Signups are closed for this event!",
+            ephemeral=True
+        )
+        return
+    
     # Get user's characters
     characters = get_user_characters(discord_id)
     
@@ -2753,14 +2869,6 @@ async def handle_signup_click(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-    
-    # Get event ID from message
-    event = get_raid_event(interaction.message.id)
-    if not event:
-        await interaction.response.send_message("❌ Raid event not found!", ephemeral=True)
-        return
-    
-    event_id = event['id']
     
     # Show character selection
     view = CharacterSelectView(characters, event_id)
@@ -2783,8 +2891,17 @@ async def handle_status_change(interaction: discord.Interaction, new_status: str
     
     event_id = event['id']
     
-    # Check if user is signed up
+    # Check if signups are closed (allow status changes for already signed-up users, block new signups)
     signup = get_user_signup(event_id, discord_id)
+    
+    if are_signups_closed(event_id) and not signup:
+        await interaction.response.send_message(
+            "🔒 Signups are closed for this event!",
+            ephemeral=True
+        )
+        return
+    
+    # Check if user is signed up
     
     if not signup:
         # User is not signed up - initiate signup flow with the desired status
@@ -3088,7 +3205,7 @@ async def handle_admin_panel_click(interaction: discord.Interaction):
     
     embed.add_field(
         name="📝 Available Actions",
-        value="• **Move Player** - Change a player's status\n• **Remove Player** - Remove a player from the event\n• **Manage Assistants** - Grant/revoke admin rights\n• **Edit Event** - Change event details\n• **Delete Event** - Remove the entire event\n• **Invite Macro** - Generate WoW invite commands",
+        value="• **Move Player** - Change a player's status\n• **Remove Player** - Remove a player from the event\n• **Manage Assistants** - Grant/revoke admin rights\n• **Edit Event** - Change event details\n• **Delete Event** - Remove the entire event\n• **Invite Macro** - Generate WoW invite commands\n• **End/Reopen Signups** - Close or reopen signups",
         inline=False
     )
     
@@ -3272,6 +3389,59 @@ async def update_started_events(bot):
             
     except Exception as e:
         print(f"[ERROR] TASK: Exception during started event updates: {e}")
+
+
+async def close_expired_signups(bot):
+    """Check for events with signup deadlines that have passed and close their signups"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Find events where signup_deadline has passed but signups_closed is still false
+        cursor.execute("""
+            SELECT id, guild_id, channel_id, message_id
+            FROM raid_events
+            WHERE signup_deadline IS NOT NULL
+              AND signup_deadline <= NOW()
+              AND (signups_closed IS NULL OR signups_closed = FALSE)
+        """)
+        
+        expired = cursor.fetchall()
+        
+        for event in expired:
+            event_id, guild_id, channel_id, message_id = event
+            
+            # Mark signups as closed
+            cursor.execute("""
+                UPDATE raid_events SET signups_closed = TRUE WHERE id = %s
+            """, (event_id,))
+            
+            # Update the embed
+            try:
+                guild = bot.get_guild(guild_id)
+                if not guild:
+                    continue
+                channel = guild.get_channel(channel_id)
+                if not channel:
+                    continue
+                message = await channel.fetch_message(message_id)
+                if message:
+                    embed, view = generate_raid_embed(event_id)
+                    if embed:
+                        await message.edit(embed=embed, view=view)
+            except discord.NotFound:
+                continue
+            except Exception:
+                continue
+        
+        if expired:
+            conn.commit()
+        
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        print(f"[ERROR] TASK: Exception during signup deadline check: {e}")
 
 
 def cleanup_old_events():

@@ -704,6 +704,8 @@ async def handle_get_events(request):
                 e.event_time,
                 e.created_by,
                 e.created_at,
+                e.signups_closed,
+                e.signup_deadline,
                 wc.character_name as owner_character
             FROM raid_events e
             LEFT JOIN LATERAL (
@@ -764,6 +766,8 @@ async def handle_get_events(request):
                 'time': event['event_time'].strftime('%H:%M:%S'),
                 'created_by': event['created_by'],
                 'owner_character': event.get('owner_character'),
+                'signups_closed': bool(event.get('signups_closed')),
+                'signup_deadline': event['signup_deadline'].isoformat() if event.get('signup_deadline') else None,
                 'signups': unique_signups
             })
         
@@ -820,6 +824,8 @@ async def handle_get_single_event(request):
                 e.event_date,
                 e.event_time,
                 e.created_by,
+                e.signups_closed,
+                e.signup_deadline,
                 wc.character_name as owner_character
             FROM raid_events e
             LEFT JOIN LATERAL (
@@ -879,6 +885,8 @@ async def handle_get_single_event(request):
             'time': event['event_time'].strftime('%H:%M:%S'),
             'created_by': event['created_by'],
             'owner_character': event.get('owner_character'),
+            'signups_closed': bool(event.get('signups_closed')),
+            'signup_deadline': event['signup_deadline'].isoformat() if event.get('signup_deadline') else None,
             'signups': unique_signups
         }
         
@@ -1065,7 +1073,7 @@ async def handle_update_signup(request):
         
         # Verify event exists and belongs to this guild
         cursor.execute("""
-            SELECT e.id, e.created_by
+            SELECT e.id, e.created_by, e.signups_closed, e.signup_deadline
             FROM raid_events e
             WHERE e.id = %s AND e.guild_id = %s
         """, (event_id, guild_id))
@@ -1077,6 +1085,22 @@ async def handle_update_signup(request):
             return web.json_response(
                 {'success': False, 'error': 'Event not found or unauthorized'},
                 status=404
+            )
+        
+        # Check if signups are closed (event owners can still manage)
+        is_event_owner = str(event['created_by']) == requester_discord_id
+        signups_closed = event.get('signups_closed', False)
+        if not signups_closed and event.get('signup_deadline'):
+            from datetime import datetime, timezone
+            if datetime.now(timezone.utc) >= event['signup_deadline']:
+                signups_closed = True
+        
+        if signups_closed and not is_event_owner:
+            cursor.close()
+            conn.close()
+            return web.json_response(
+                {'success': False, 'error': 'Signups are closed for this event'},
+                status=403
             )
         
         # Get the requester's characters to determine who is making the change
@@ -3368,6 +3392,8 @@ async def handle_events_page(request):
                 e.created_at,
                 e.log_url,
                 e.log_detected_at,
+                e.signups_closed,
+                e.signup_deadline,
                 COUNT(rs.id) as signup_count
             FROM raid_events e
             LEFT JOIN raid_signups rs ON e.id = rs.event_id
@@ -3563,6 +3589,16 @@ async def handle_events_page(request):
             else:
                 date_badge = '<span class="badge" style="background:#28a745">Upcoming</span>'
             
+            # Signups closed badge
+            signups_closed_badge = ''
+            is_signups_closed = event.get('signups_closed', False)
+            if not is_signups_closed and event.get('signup_deadline'):
+                from datetime import datetime as dt_cls, timezone as tz_cls
+                if dt_cls.now(tz_cls.utc) >= event['signup_deadline']:
+                    is_signups_closed = True
+            if is_signups_closed:
+                signups_closed_badge = ' <span class="badge" style="background:#dc3545">🔒 Signups Closed</span>'
+            
             # Log link
             log_html = ''
             if event['log_url']:
@@ -3668,7 +3704,7 @@ async def handle_events_page(request):
                     <div>
                         <h3 style="margin:0">{event['title']}</h3>
                         <p style="margin:5px 0;color:rgba(255,255,255,0.7)">
-                            📅 {event_date} at {event_time} {date_badge}
+                            📅 {event_date} at {event_time} {date_badge}{signups_closed_badge}
                         </p>
                     </div>
                     <div style="display:flex;align-items:center;gap:10px">

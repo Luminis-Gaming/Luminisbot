@@ -186,6 +186,20 @@ def run_migrations():
                 ) THEN
                     ALTER TABLE raid_events ADD COLUMN log_detected_at TIMESTAMP WITH TIME ZONE;
                 END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'raid_events' AND column_name = 'signups_closed'
+                ) THEN
+                    ALTER TABLE raid_events ADD COLUMN signups_closed BOOLEAN DEFAULT FALSE;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'raid_events' AND column_name = 'signup_deadline'
+                ) THEN
+                    ALTER TABLE raid_events ADD COLUMN signup_deadline TIMESTAMP WITH TIME ZONE;
+                END IF;
             END $$;
         """)
         
