@@ -880,9 +880,9 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
         self.add_item(self.time_input)
         
         self.signup_deadline_input = discord.ui.TextInput(
-            label="Signup Deadline (optional, HH:MM event day)",
-            placeholder="e.g., 18:00 to close signups at 6 PM on event day",
-            max_length=5,
+            label="Signup Deadline (optional)",
+            placeholder="e.g., 18:00 (event day) or 20/04/2025 18:00",
+            max_length=20,
             required=False
         )
         self.add_item(self.signup_deadline_input)
@@ -901,12 +901,21 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             title = self.title_input.value
             
             # Parse optional signup deadline
+            # Supports: "HH:MM" (uses event date) or "DD/MM/YYYY HH:MM" / "DD.MM.YYYY HH:MM" / "YYYY-MM-DD HH:MM"
             signup_deadline = None
             deadline_value = self.signup_deadline_input.value.strip()
             if deadline_value:
-                deadline_time = parse_time(deadline_value)
                 tz = ZoneInfo(DEFAULT_TIMEZONE)
-                signup_deadline = datetime.combine(event_date, deadline_time, tzinfo=tz)
+                if ' ' in deadline_value:
+                    # Full date+time: split into date and time parts
+                    parts = deadline_value.split(' ', 1)
+                    deadline_date = parse_date(parts[0])
+                    deadline_time = parse_time(parts[1])
+                    signup_deadline = datetime.combine(deadline_date, deadline_time, tzinfo=tz)
+                else:
+                    # Time only: use event date
+                    deadline_time = parse_time(deadline_value)
+                    signup_deadline = datetime.combine(event_date, deadline_time, tzinfo=tz)
             
         except ValueError as e:
             await interaction.response.send_message(
