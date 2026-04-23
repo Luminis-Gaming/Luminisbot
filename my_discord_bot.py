@@ -1262,26 +1262,21 @@ if __name__ == "__main__":
     else:
         print("--- SCRIPT LAUNCH ---")
         
-        # Add retry logic for Discord connection issues
-        max_retries = 3
-        for attempt in range(max_retries):
+        # Wait for network/DNS to be ready (important in Docker containers)
+        import socket
+        max_dns_retries = 6
+        for attempt in range(max_dns_retries):
             try:
-                print(f"[DEBUG] Starting Discord bot (attempt {attempt + 1}/{max_retries})...")
-                client.run(BOT_TOKEN)
-                break  # If we get here, the bot started successfully
-            except aiohttp.client_exceptions.WSServerHandshakeError as e:
-                print(f"[ERROR] Discord WebSocket handshake failed (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    print(f"[DEBUG] Retrying in 5 seconds...")
+                socket.getaddrinfo('discord.com', 443)
+                print("[DEBUG] DNS resolution successful, network is ready.")
+                break
+            except socket.gaierror:
+                if attempt < max_dns_retries - 1:
+                    print(f"[DEBUG] Waiting for network/DNS... (attempt {attempt + 1}/{max_dns_retries})")
                     time.sleep(5)
                 else:
-                    print(f"[FATAL] Failed to connect to Discord after {max_retries} attempts.")
-                    print(f"[FATAL] This is usually a temporary Discord service issue. Try again later.")
-            except Exception as e:
-                print(f"[ERROR] Unexpected error starting bot (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    print(f"[DEBUG] Retrying in 5 seconds...")
-                    time.sleep(5)
-                else:
-                    print(f"[FATAL] Failed to start bot after {max_retries} attempts: {e}")
-                    raise
+                    print("[FATAL] DNS resolution failed after all attempts. Check container network/DNS config.")
+                    exit(1)
+        
+        # Start the bot (Docker restart policy handles retries if this fails)
+        client.run(BOT_TOKEN)
