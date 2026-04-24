@@ -51,6 +51,32 @@ async def get_latest_log(session, token):
             return reports_data[0] if reports_data else None
         return None
 
+async def get_latest_logs(session, token, limit=5):
+    """Get the N most recent logs for the configured guild."""
+    print(f"[DEBUG] WCL: Fetching latest {limit} logs for guild.")
+    query = """
+    query($guildID: Int!, $limit: Int!) {
+        reportData {
+            reports(guildID: $guildID, limit: $limit) {
+                data {
+                    code,
+                    title,
+                    startTime,
+                    owner { name }
+                }
+            }
+        }
+    }
+    """
+    variables = {'guildID': WCL_GUILD_ID, 'limit': limit}
+    headers = {'Authorization': f'Bearer {token}'}
+    url = "https://www.warcraftlogs.com/api/v2/client"
+    async with session.post(url, json={'query': query, 'variables': variables}, headers=headers) as resp:
+        if resp.status == 200:
+            reports_data = (await resp.json()).get('data', {}).get('reportData', {}).get('reports', {}).get('data', [])
+            return reports_data
+        return []
+
 async def get_fights_from_report(session, token, report_code):
     """Get all boss fights from a report."""
     print(f"[DEBUG] WCL: Fetching fights for report: {report_code}")

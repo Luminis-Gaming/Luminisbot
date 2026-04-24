@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 # --- Custom Module Imports ---
 from database import get_db_connection, setup_database
-from wcl_api import get_wcl_token, get_latest_log, get_fights_from_report
+from wcl_api import get_wcl_token, get_latest_log, get_latest_logs, get_fights_from_report
 from discord_ui import LogButtonsView, send_message_with_auto_delete
 
 # --- Import SimCraft integration ---
@@ -90,23 +90,39 @@ async def check_for_new_logs():
                 print("[ERROR] TASK: Failed to get WCL token for log checking.")
                 return
                 
-            latest_log = await get_latest_log(session, token)
-            if not latest_log:
+            latest_logs = await get_latest_logs(session, token, limit=5)
+            if not latest_logs:
                 print("[TASK] No logs found for guild.")
                 return
-                
-            log_code = latest_log['code']
-            log_title = latest_log['title']
-            log_start_time = latest_log['startTime']
-            log_owner = latest_log['owner']['name'] if latest_log.get('owner') else 'Unknown'
             
             for guild_config in guild_configs:
                 guild_id = guild_config['guild_id']
                 channel_id = guild_config['channel_id']
-                last_log_id = guild_config.get('last_log_id')
                 
-                if last_log_id == log_code:
-                    print(f"[TASK] Log {log_code} already posted to guild {guild_id}.")
+                # Get all log codes already posted for this guild
+                cur.execute(
+                    "SELECT log_code FROM posted_logs WHERE guild_id = %s",
+                    (guild_id,)
+                )
+                posted_codes = {row['log_code'] for row in cur.fetchall()}
+                
+                # First run guard: if no logs have ever been tracked for this guild,
+                # seed all current logs as "already posted" to avoid spamming old logs.
+                if not posted_codes:
+                    print(f"[TASK] First run for guild {guild_id} — seeding current logs as already posted.")
+                    for log in latest_logs:
+                        cur.execute(
+                            "INSERT INTO posted_logs (guild_id, log_code) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            (guild_id, log['code'])
+                        )
+                    conn.commit()
+                    continue
+                
+                # Filter to only logs we haven't posted yet
+                new_logs = [log for log in latest_logs if log['code'] not in posted_codes]
+                
+                if not new_logs:
+                    print(f"[TASK] All recent logs already posted to guild {guild_id}.")
                     continue
                     
                 channel = client.get_channel(channel_id)
@@ -114,47 +130,71 @@ async def check_for_new_logs():
                     print(f"[ERROR] TASK: Channel {channel_id} not found for guild {guild_id}.")
                     continue
                 
-                # Format start time
-                start_datetime = datetime.fromtimestamp(log_start_time / 1000, tz=timezone.utc)
-                formatted_time = start_datetime.strftime('%Y-%m-%d %H:%M UTC')
-                
-                # Create embed
-                embed = discord.Embed(
-                    title=log_title,
-                    url=f"https://www.warcraftlogs.com/reports/{log_code}",
-                    description=f"**Owner:** {log_owner}\n**Date:** {formatted_time}",
-                    color=0x00ff00
-                )
-                embed.set_footer(text="Click the buttons below to view performance data")
-                
-                # Add buttons
-                view = LogButtonsView()
-                
-                try:
-                    await send_message_with_auto_delete(channel, embed=embed, view=view)
-                    print(f"[TASK] Posted log {log_code} to guild {guild_id} channel {channel_id}.")
+                # Post new logs oldest-first so they appear in chronological order
+                for log in reversed(new_logs):
+                    log_code = log['code']
+                    log_title = log['title']
+                    log_start_time = log['startTime']
+                    log_owner = log['owner']['name'] if log.get('owner') else 'Unknown'
                     
-                    # 🔗 NEW: Auto-link this log to any matching raid event
-                    try:
-                        from raid_system import auto_link_raid_log
-                        
-                        log_url = f"https://www.warcraftlogs.com/reports/{log_code}"
-                        log_timestamp = datetime.fromtimestamp(log_start_time / 1000, tz=timezone.utc)
-                        
-                        await auto_link_raid_log(client, guild_id, log_url, log_timestamp)
-                        print(f"[TASK] Attempted auto-link for log {log_code} in guild {guild_id}")
-                    except Exception as link_error:
-                        print(f"[WARNING] TASK: Failed to auto-link log {log_code}: {link_error}")
+                    # Format start time
+                    start_datetime = datetime.fromtimestamp(log_start_time / 1000, tz=timezone.utc)
+                    formatted_time = start_datetime.strftime('%Y-%m-%d %H:%M UTC')
                     
-                    # Update database with new log ID
-                    cur.execute(
-                        "UPDATE guild_channels SET last_log_id = %s WHERE guild_id = %s",
-                        (log_code, guild_id)
+                    # Create embed
+                    embed = discord.Embed(
+                        title=log_title,
+                        url=f"https://www.warcraftlogs.com/reports/{log_code}",
+                        description=f"**Owner:** {log_owner}\n**Date:** {formatted_time}",
+                        color=0x00ff00
                     )
-                    conn.commit()
+                    embed.set_footer(text="Click the buttons below to view performance data")
                     
-                except Exception as e:
-                    print(f"[ERROR] TASK: Failed to post log to guild {guild_id}: {e}")
+                    # Add buttons
+                    view = LogButtonsView()
+                    
+                    try:
+                        await send_message_with_auto_delete(channel, embed=embed, view=view)
+                        print(f"[TASK] Posted log {log_code} to guild {guild_id} channel {channel_id}.")
+                        
+                        # Record this log as posted
+                        cur.execute(
+                            "INSERT INTO posted_logs (guild_id, log_code) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            (guild_id, log_code)
+                        )
+                        # Also keep last_log_id in sync for backwards compatibility
+                        cur.execute(
+                            "UPDATE guild_channels SET last_log_id = %s WHERE guild_id = %s",
+                            (log_code, guild_id)
+                        )
+                        conn.commit()
+                        
+                        # Auto-link this log to any matching raid event
+                        try:
+                            from raid_system import auto_link_raid_log
+                            
+                            log_url = f"https://www.warcraftlogs.com/reports/{log_code}"
+                            log_timestamp = datetime.fromtimestamp(log_start_time / 1000, tz=timezone.utc)
+                            
+                            await auto_link_raid_log(client, guild_id, log_url, log_timestamp)
+                            print(f"[TASK] Attempted auto-link for log {log_code} in guild {guild_id}")
+                        except Exception as link_error:
+                            print(f"[WARNING] TASK: Failed to auto-link log {log_code}: {link_error}")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] TASK: Failed to post log {log_code} to guild {guild_id}: {e}")
+                
+                # Cleanup: keep only the most recent 10 posted logs per guild
+                cur.execute("""
+                    DELETE FROM posted_logs
+                    WHERE guild_id = %s AND id NOT IN (
+                        SELECT id FROM posted_logs
+                        WHERE guild_id = %s
+                        ORDER BY posted_at DESC
+                        LIMIT 10
+                    )
+                """, (guild_id, guild_id))
+                conn.commit()
     
     except Exception as e:
         print(f"[ERROR] TASK: Exception during log checking: {e}")

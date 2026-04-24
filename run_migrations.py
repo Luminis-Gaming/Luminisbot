@@ -611,6 +611,34 @@ def run_migrations():
         
         logger.info("[MIGRATIONS] ✓ admin_users event manager column ready")
         
+        # ============================================================================
+        # POSTED LOGS TABLE (tracks all WCL reports posted per guild)
+        # ============================================================================
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS posted_logs (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                log_code TEXT NOT NULL,
+                posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                UNIQUE(guild_id, log_code)
+            );
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_logs_guild ON posted_logs(guild_id);
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posted_logs_guild_code ON posted_logs(guild_id, log_code);
+        """)
+        
+        cursor.execute("""
+            GRANT ALL PRIVILEGES ON TABLE posted_logs TO luminisbot;
+        """)
+        
+        logger.info("[MIGRATIONS] ✓ posted_logs table ready")
+        
         conn.commit()
         cursor.close()
         conn.close()
