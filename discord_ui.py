@@ -7,6 +7,7 @@ import discord
 import aiohttp
 from wcl_api import get_wcl_token, get_fight_details, get_deaths_for_fight
 from wcl_web_scraper import get_all_boss_health_for_report, get_boss_health_for_wipe
+from raid_system import SPEC_EMOJIS
 
 # --- Helper functions for formatting ---
 async def send_ephemeral_with_auto_delete(interaction, content=None, embed=None, view=None, delete_after=600):
@@ -219,8 +220,9 @@ def _extract_role_data_from_playerdetails(player_details_data):
     return player_details_data
 
 def _extract_player_roles_from_playerdetails(player_details_data, friendly_players=None):
-    """Extract player roles from playerDetails data."""
+    """Extract player roles and specs from playerDetails data."""
     player_roles = {}
+    player_specs = {}
     role_data = _extract_role_data_from_playerdetails(player_details_data)
     
     role_mapping = {
@@ -237,8 +239,19 @@ def _extract_player_roles_from_playerdetails(player_details_data, friendly_playe
                 if isinstance(player_entry, dict) and 'name' in player_entry:
                     player_name = player_entry['name']
                     player_roles[player_name] = simplified_role
+                    
+                    # Extract spec: try 'icon' (e.g. "Warrior-Arms"),
+                    # then construct from 'type' (class) + 'specs' array
+                    icon = player_entry.get('icon')
+                    if icon and isinstance(icon, str) and '-' in icon:
+                        player_specs[player_name] = icon
+                    else:
+                        player_class = player_entry.get('type', '')
+                        specs = player_entry.get('specs', [])
+                        if player_class and specs:
+                            player_specs[player_name] = f"{player_class}-{specs[0]}"
     
-    return player_roles
+    return player_roles, player_specs
 
 def _get_colored_name(name, player_roles):
     """Apply role-based color to player name."""
@@ -401,7 +414,7 @@ def _format_overheal_mobile(entry):
         return "N/A"
 
 def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_duration_seconds, metric, boss_health_percentage=None, encounter_name=None):
-    """Create a mobile-friendly embed version of the performance data."""
+    """Create a mobile-friendly embed with spec emojis and colored parse indicators."""
     print(f"[DEBUG] Mobile embed - table_data exists: {table_data is not None}")
     print(f"[DEBUG] Mobile embed - table_data entries: {len(table_data.get('entries', [])) if table_data else 0}")
     print(f"[DEBUG] Mobile embed - ranking_data exists: {ranking_data is not None}")
@@ -424,9 +437,14 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     # Parse data first to get top performer's color
     parses, player_roles = _parse_ranking_data(ranking_data, fight_details)
     
-    if not player_roles:
+    # Always extract specs (and roles as fallback) from playerDetails
+    player_specs = {}
+    if fight_details:
         player_details_data = fight_details.get('playerDetails')
-        player_roles = _extract_player_roles_from_playerdetails(player_details_data)
+        if player_details_data:
+            pd_roles, player_specs = _extract_player_roles_from_playerdetails(player_details_data)
+            if not player_roles:
+                player_roles = pd_roles
 
     if fight_duration_seconds <= 0: 
         fight_duration_seconds = 1
@@ -434,10 +452,13 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     sorted_entries = sorted(table_data.get('entries', []), key=lambda x: x['total'], reverse=True)
     player_entries = _filter_player_entries(sorted_entries, parses, player_roles)
 
-    # Show more players for mobile (same as desktop) but limit to prevent Discord limits
-    max_players = 25
+    # Limit players — using description (4096 chars) so we can show more
+    max_players = 20
     if len(player_entries) > max_players:
+        total_players = len(player_entries)
         player_entries = player_entries[:max_players]
+    else:
+        total_players = len(player_entries)
     
     # Set embed color based on top performer's parse quality
     embed_color = 0x0099ff  # Default blue
@@ -451,36 +472,31 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
             if parse_color:
                 embed_color = parse_color
     
-    embed = discord.Embed(title=title, color=embed_color)
-    
-    # Create a clean, aligned table format using Discord's code block formatting
+    # Build plain-text ranking lines with spec emojis (renders outside code blocks)
+    # Using embed description (4096 char limit) instead of field (1024 char limit)
     player_lines = []
     
     for i, entry in enumerate(player_entries):
         name = entry['name']
         player_parses = parses.get(name)
         
-        # Get role icon (much clearer than text)
-        role = player_roles.get(name, 'unknown')
-        role_icons = {
-            'tank': '🛡️',
-            'healer': '💚', 
-            'dps': '⚔️',
-            'unknown': '❓'
-        }
-        role_icon = role_icons.get(role, '❓')
+        # Get spec emoji from playerDetails, fall back to Unicode role icon
+        spec_key = player_specs.get(name, '')
+        spec_emoji = SPEC_EMOJIS.get(spec_key, '')
+        if not spec_emoji:
+            role = player_roles.get(name, 'unknown')
+            role_fallback = {'tank': '🛡️', 'healer': '💚', 'dps': '⚔️', 'unknown': '❓'}
+            spec_emoji = role_fallback.get(role, '❓')
         
         # Get percentages
         parse_pct, ilvl_pct = _get_player_percentages(player_parses)
-        
-        # Get parse quality indicators with ANSI colors for supported clients
         parse_value = int(parse_pct) if parse_pct != "N/A" and parse_pct.isdigit() else None
         ilvl_value = int(ilvl_pct) if ilvl_pct != "N/A" and ilvl_pct.isdigit() else None
         
-        parse_emoji = _get_parse_emoji(parse_value)
-        ilvl_emoji = _get_parse_emoji(ilvl_value)
+        parse_emoji_indicator = _get_parse_emoji(parse_value)
+        ilvl_emoji_indicator = _get_parse_emoji(ilvl_value)
         
-        # Format main metric value only (remove total and active)
+        # Format metric value
         amount_per_second = entry['total'] / fight_duration_seconds
         if amount_per_second >= 1_000_000:
             amount_str = f"{amount_per_second / 1_000_000:.1f}M"
@@ -489,98 +505,39 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         else:
             amount_str = f"{amount_per_second:.0f}"
         
-        # Calculate optimal name length to fit 20 players in one field
-        # Target: fit 20 players + header + separator in 1024 chars
-        # Line format: "20 🛡️ Name.... 🟡99% 🟣99%   2.1M  99%" 
-        # Fixed parts per line: rank(2) + space(1) + emoji(2) + space(1) + parse(6) + space(1) + ilvl(6) + space(1) + dps(7) + overheal(5) + spaces ≈ 32 chars
-        # Available for name: (1024 - 100 header overhead) / 20 lines - 32 fixed = ~14 chars per name
-        # Let's be conservative and use 8 chars to ensure it always fits
-        max_name_length = 8  # Shorter names to guarantee single field
+        # Truncate name for readability
+        max_name_length = 9
         display_name = name[:max_name_length] if len(name) > max_name_length else name
         
-        # Use the same ANSI color coding as desktop version for consistency
-        def get_desktop_ansi_color(parse_val):
-            """Same colors as desktop _get_colored_percentage function"""
-            if parse_val is None:
-                return ""
-            elif parse_val >= 95:
-                return "\033[33m"  # Yellow for legendary (95+) - same as desktop
-            elif parse_val >= 75:
-                return "\033[35m"  # Purple for epic (75+) - same as desktop
-            elif parse_val >= 50:
-                return "\033[34m"  # Blue for rare (50+) - same as desktop
-            elif parse_val >= 25:
-                return "\033[32m"  # Green for uncommon (25+) - same as desktop
-            else:
-                return ""  # No color for gray - same as desktop
+        # Format parse/ilvl with color circle emojis
+        parse_str = f"{parse_emoji_indicator}{parse_pct}%" if parse_pct != "N/A" else "` -- `"
+        ilvl_str = f"{ilvl_emoji_indicator}{ilvl_pct}%" if ilvl_pct != "N/A" else "` -- `"
         
-        ansi_color = get_desktop_ansi_color(parse_value)
-        ansi_reset = "\033[0m" if ansi_color else ""
-        
-        # Create aligned format using fixed-width formatting
-        rank_str = f"{i+1:2d}"
-        name_str = f"{display_name:<{max_name_length}}"  # Use longer names for better readability
-        
-        # Parse percentage with color
-        if parse_pct != "N/A":
-            parse_str = f"{ansi_color}{parse_emoji}{parse_pct:>2s}%{ansi_reset}"
-        else:
-            parse_str = "   --"
-        
-        # Item level percentage (compact) - always show if available
-        if ilvl_pct != "N/A":
-            ilvl_color = get_desktop_ansi_color(ilvl_value)
-            ilvl_reset = "\033[0m" if ilvl_color else ""
-            ilvl_str = f"{ilvl_color}{ilvl_emoji}{ilvl_pct:>2s}%{ilvl_reset}"
-        else:
-            ilvl_str = "   --"
-            
-        amount_padded = f"{amount_str:>6s}"
-        
-        # Same format for both DPS and HPS (no overheal column)
-        player_line = f"{rank_str} {role_icon} {name_str} {parse_str} {ilvl_str} {amount_padded}"
-        
-        player_lines.append(player_line)
+        # Build line: rank + spec emoji + name + parse + ilvl + metric
+        rank_str = f"`{i+1:>2}`"
+        line = f"{rank_str} {spec_emoji} {display_name} {parse_str} {ilvl_str} `{amount_str}`"
+        player_lines.append(line)
     
-    # Create header with proper alignment to match data columns (8 char names, no overheal)
+    # Assemble description
     metric_label = metric.upper()
-    header = f" #  Name     Parse  iLvl    {metric_label}"
-    separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    header = f"` # ` Spec Player Parse iLvl {metric_label}"
+    description = header + "\n" + "\n".join(player_lines)
     
-    # Calculate if we can fit everything in one field with 8-char names (no overheal column)
-    # Each player line: rank(2) + space + emoji(2) + space + name(8) + space + parse(6) + space + ilvl(6) + space + dps/hps(7) + spaces ≈ 34 chars
-    # Header + separator ≈ 75 chars, code block markers ≈ 20 chars  
-    # 20 lines: 20 * 34 + 95 = 775 chars (safely under 1024 with good margin)
+    # Safety: truncate if somehow over Discord's 4096 description limit
+    if len(description) > 4090:
+        print(f"[WARNING] Description too long ({len(description)} chars), truncating")
+        while len(description) > 4090 and player_lines:
+            player_lines.pop()
+            description = header + "\n" + "\n".join(player_lines)
     
-    # Limit to top 20 players to guarantee single field
-    if len(player_lines) > 20:
-        player_lines = player_lines[:20]
-        print(f"[INFO] Limited to top 20 players for single field display")
+    embed = discord.Embed(title=title, description=description, color=embed_color)
     
-    # Create single field with all players
-    all_lines = [header, separator] + player_lines
-    content = "```ansi\n" + "\n".join(all_lines) + "\n```"
-    
-    # Update field name to indicate we're showing top 20
-    field_name = f"📊 Rankings (Top {len(player_lines)})"
-    
-    # Safety check - if somehow still too long, truncate further
-    if len(content) > 1020:
-        print(f"[WARNING] Content still too long ({len(content)} chars), reducing to 15 players")
-        reduced_lines = player_lines[:15]
-        reduced_all_lines = [header, separator] + reduced_lines
-        content = "```ansi\n" + "\n".join(reduced_all_lines) + "\n```"
-        field_name = f"📊 Rankings (Top {len(reduced_lines)})"
-    
-    embed.add_field(name=field_name, value=content, inline=False)
-    
-    # Add footer with legend
+    # Footer: parse color legend (no role legend needed — spec emojis are self-explanatory)
     legend_parts = []
-    legend_parts.append("🛡️=Tank 💚=Healer ⚔️=DPS")
-    legend_parts.append("Parse/iLvl: 🟡95+ 🟣75+ 🔵50+ 🟢25+ ⚫<25")
+    legend_parts.append("Parse / iLvl: 🟡95+ 🟣75+ 🔵50+ 🟢25+ ⚫<25")
     
-    if len(player_entries) >= max_players:
-        legend_parts.append(f"Top {max_players} shown")
+    if total_players > max_players:
+        legend_parts.append(f"Top {max_players} of {total_players} shown")
     
     embed.set_footer(text=" • ".join(legend_parts))
     
@@ -876,7 +833,7 @@ class FightSelect(discord.ui.Select):
                         player_details_data = fight_details.get('playerDetails')
                         fights_data = fight_details.get('fights', [])
                         friendly_players = fights_data[0].get('friendlyPlayers', []) if fights_data else None
-                        player_roles = _extract_player_roles_from_playerdetails(player_details_data, friendly_players)
+                        player_roles, _ = _extract_player_roles_from_playerdetails(player_details_data, friendly_players)
                         
                         if not player_roles:
                             print("[DEBUG] No spec data available for deaths table - will show names without role colors")
