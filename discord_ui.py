@@ -813,8 +813,6 @@ class FightSelect(discord.ui.Select):
                     else:
                         encounter_name += f" Wipe {wipe_count}"
                 
-                formatted_table = format_merged_table(fight_details, self.metric, fight_duration_seconds, encounter_name, boss_health_percentage)
-            
             elif self.metric == "deaths":
                 print(f"[UI] Getting death details.")
                 fight_start_time = selected_fight['startTime']
@@ -870,14 +868,12 @@ class FightSelect(discord.ui.Select):
             
             print("[UI] Data formatted. Checking if mobile-friendly version should be offered.")
             
-            # For DPS/HPS data, use mobile-friendly format by default with optional desktop view
+            # For DPS/HPS data, show embed with spec emojis + ANSI colored stats
             if self.metric in ["dps", "hps"]:
-                # Extract the table data from fight_details (same as format_merged_table does)
                 table_data = fight_details.get('table', {}).get('data', {}) if fight_details else {}
                 ranking_data = fight_details.get('rankings') if fight_details else None
                 
-                # Create mobile-friendly embed (works well on all devices)
-                mobile_embed = create_mobile_friendly_embed(
+                embed = create_mobile_friendly_embed(
                     table_data, 
                     ranking_data,
                     fight_details,
@@ -887,12 +883,13 @@ class FightSelect(discord.ui.Select):
                     encounter_name
                 )
                 
-                # Create view with optional desktop format button
-                desktop_view = DesktopFormatView(formatted_table)
+                # Link button to view the fight on WCL
+                wcl_url = f"https://www.warcraftlogs.com/reports/{self.report_code}#fight={fight_id}"
+                link_view = WclLinkView(wcl_url)
                 await send_ephemeral_with_auto_delete(
                     interaction, 
-                    embed=mobile_embed,
-                    view=desktop_view
+                    embed=embed,
+                    view=link_view
                 )
             else:
                 # For deaths and other data, use traditional format with length checking
@@ -919,40 +916,16 @@ class FightSelect(discord.ui.Select):
                 
                 await send_ephemeral_with_auto_delete(interaction, content=formatted_table)
 
-class DesktopFormatView(discord.ui.View):
-    def __init__(self, desktop_table):
-        super().__init__(timeout=300)  # 5 minute timeout
-        self.desktop_table = desktop_table
-
-    @discord.ui.button(label="�️ Desktop Table View", style=discord.ButtonStyle.secondary, custom_id="desktop_format")
-    async def desktop_format_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Show traditional desktop table format."""
-        print("[UI] Desktop format requested.")
-        
-        # Check if the message is too long for Discord (2000 character limit)
-        formatted_table = self.desktop_table
-        if len(formatted_table) > 2000:
-            print(f"[UI] Message too long ({len(formatted_table)} chars), truncating.")
-            
-            warning_msg = "\n\n(Table truncated - too many players to display)\n```"
-            max_content_length = 1950 - len(warning_msg)
-            
-            truncated = formatted_table[:max_content_length]
-            last_newline = truncated.rfind('\n')
-            if last_newline > 0:
-                truncated = truncated[:last_newline]
-            
-            if not truncated.endswith('\033[0m'):
-                truncated += '\033[0m'
-            
-            formatted_table = truncated + warning_msg
-            print(f"[UI] Truncated to {len(formatted_table)} characters.")
-            
-            if len(formatted_table) > 2000:
-                print(f"[UI] Still too long after truncation, doing emergency truncation.")
-                formatted_table = formatted_table[:1990] + "\n```"
-        
-        await send_ephemeral_with_auto_delete(interaction, content=formatted_table)
+class WclLinkView(discord.ui.View):
+    """View with a link button to the fight on Warcraft Logs."""
+    def __init__(self, wcl_url):
+        super().__init__(timeout=300)
+        self.add_item(discord.ui.Button(
+            label="View on Warcraft Logs",
+            url=wcl_url,
+            style=discord.ButtonStyle.link,
+            emoji="🔗"
+        ))
 
 class LogButtonsView(discord.ui.View):
     def __init__(self):
