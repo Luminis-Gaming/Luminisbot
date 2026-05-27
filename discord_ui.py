@@ -571,7 +571,7 @@ def format_merged_table(fight_details, metric, fight_duration_seconds, encounter
     
     if not player_roles:
         player_details_data = fight_details.get('playerDetails')
-        player_roles = _extract_player_roles_from_playerdetails(player_details_data)
+        player_roles, _ = _extract_player_roles_from_playerdetails(player_details_data)
 
     if fight_duration_seconds <= 0: 
         fight_duration_seconds = 1
