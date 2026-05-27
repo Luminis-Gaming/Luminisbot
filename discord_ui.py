@@ -2,6 +2,7 @@
 # Discord UI components, views, and formatting functions
 
 import asyncio
+import re
 import time
 import discord
 import aiohttp
@@ -219,6 +220,16 @@ def _extract_role_data_from_playerdetails(player_details_data):
     
     return player_details_data
 
+def _normalize_wcl_spec_key(raw_key):
+    """Normalize WCL spec keys like 'DeathKnight-Unholy' to 'Death Knight-Unholy'.
+    
+    WCL uses CamelCase (e.g. DeathKnight, DemonHunter, BeastMastery)
+    while SPEC_EMOJIS uses spaces (e.g. Death Knight, Demon Hunter, Beast Mastery).
+    """
+    parts = raw_key.split('-', 1)
+    normalized = [re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', p) for p in parts]
+    return '-'.join(normalized)
+
 def _extract_player_roles_from_playerdetails(player_details_data, friendly_players=None):
     """Extract player roles and specs from playerDetails data."""
     player_roles = {}
@@ -240,16 +251,22 @@ def _extract_player_roles_from_playerdetails(player_details_data, friendly_playe
                     player_name = player_entry['name']
                     player_roles[player_name] = simplified_role
                     
-                    # Extract spec: try 'icon' (e.g. "Warrior-Arms"),
+                    # Extract spec: try 'icon' (e.g. "Warrior-Arms" or "DeathKnight-Unholy"),
                     # then construct from 'type' (class) + 'specs' array
+                    spec_key = None
                     icon = player_entry.get('icon')
                     if icon and isinstance(icon, str) and '-' in icon:
-                        player_specs[player_name] = icon
+                        spec_key = _normalize_wcl_spec_key(icon)
                     else:
                         player_class = player_entry.get('type', '')
                         specs = player_entry.get('specs', [])
                         if player_class and specs:
-                            player_specs[player_name] = f"{player_class}-{specs[0]}"
+                            spec_key = _normalize_wcl_spec_key(f"{player_class}-{specs[0]}")
+                    
+                    if spec_key:
+                        if spec_key not in SPEC_EMOJIS:
+                            print(f"[DEBUG] Spec key '{spec_key}' not found in SPEC_EMOJIS (icon={icon}, type={player_entry.get('type')}, specs={player_entry.get('specs')})")
+                        player_specs[player_name] = spec_key
     
     return player_roles, player_specs
 
@@ -472,9 +489,10 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
             if parse_color:
                 embed_color = parse_color
     
-    # Build plain-text ranking lines with spec emojis (renders outside code blocks)
+    # Build ranking lines with spec emojis in plain text + inline code for alignment
     # Using embed description (4096 char limit) instead of field (1024 char limit)
     player_lines = []
+    max_name_length = 8
     
     for i, entry in enumerate(player_entries):
         name = entry['name']
@@ -505,22 +523,32 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         else:
             amount_str = f"{amount_per_second:.0f}"
         
-        # Truncate name for readability
-        max_name_length = 9
+        # Truncate and pad name for alignment (monospace inline code)
         display_name = name[:max_name_length] if len(name) > max_name_length else name
         
-        # Format parse/ilvl with color circle emojis
-        parse_str = f"{parse_emoji_indicator}{parse_pct}%" if parse_pct != "N/A" else "` -- `"
-        ilvl_str = f"{ilvl_emoji_indicator}{ilvl_pct}%" if ilvl_pct != "N/A" else "` -- `"
+        # Use inline code blocks for each column to ensure monospace alignment
+        # Spec emojis are in plain text (so they render as custom Discord emojis)
+        rank_col = f"`{i+1:>2}`"
+        name_col = f"`{display_name:<{max_name_length}}`"
         
-        # Build line: rank + spec emoji + name + parse + ilvl + metric
-        rank_str = f"`{i+1:>2}`"
-        line = f"{rank_str} {spec_emoji} {display_name} {parse_str} {ilvl_str} `{amount_str}`"
+        if parse_pct != "N/A":
+            parse_col = f"{parse_emoji_indicator}`{parse_pct:>3}%`"
+        else:
+            parse_col = f"⚪` -- `"
+        
+        if ilvl_pct != "N/A":
+            ilvl_col = f"{ilvl_emoji_indicator}`{ilvl_pct:>3}%`"
+        else:
+            ilvl_col = f"⚪` -- `"
+        
+        amount_col = f"`{amount_str:>6}`"
+        
+        line = f"{rank_col} {spec_emoji} {name_col} {parse_col} {ilvl_col} {amount_col}"
         player_lines.append(line)
     
-    # Assemble description
+    # Assemble description with aligned header
     metric_label = metric.upper()
-    header = f"` # ` Spec Player Parse iLvl {metric_label}"
+    header = f"` # `{'':>5}`{'Player':<{max_name_length}}` {'':>1}`Prs%` {'':>1}`iLv%` `{metric_label:>6}`"
     description = header + "\n" + "\n".join(player_lines)
     
     # Safety: truncate if somehow over Discord's 4096 description limit
