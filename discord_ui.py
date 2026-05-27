@@ -547,8 +547,9 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
         player_lines.append(line)
     
     # Assemble description with aligned header
+    # ⚪ placeholders match the visual width of spec/color emojis in data rows
     metric_label = metric.upper()
-    header = f"` # `{'':>5}`{'Player':<{max_name_length}}` {'':>1}`Prs%` {'':>1}`iLv%` `{metric_label:>6}`"
+    header = f"` #` ⚪ `{'Player':<{max_name_length}}` ⚪`Prs%` ⚪`iLv%` `{metric_label:>6}`"
     description = header + "\n" + "\n".join(player_lines)
     
     # Safety: truncate if somehow over Discord's 4096 description limit
