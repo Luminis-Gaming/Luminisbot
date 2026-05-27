@@ -747,7 +747,11 @@ class FightSelect(discord.ui.Select):
         fight_id = int(self.values[0])
         selected_fight = self.fights[str(fight_id)]
         
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            await interaction.response.defer(thinking=True, ephemeral=True)
+        except discord.NotFound:
+            print("[WARNING] Interaction expired before defer (user waited too long or bot restarted)")
+            return
 
         async with aiohttp.ClientSession() as session:
             token = await get_wcl_token(session)
