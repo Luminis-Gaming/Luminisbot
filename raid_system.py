@@ -1500,6 +1500,39 @@ async def refresh_event_embed(bot, event_id: int):
 # DISCORD UI COMPONENTS
 # ============================================================================
 
+def build_battlenet_connect_response(discord_id: str, title: str = "🎮 Connect Your WoW Characters"):
+    """Build the embed + view with a Battle.net authorize link button.
+
+    Returns (embed, view). Used by /connectwow, the signup flow, and the
+    Update Characters button so users always get a direct authorize link.
+    """
+    redirect_uri = os.getenv('BLIZZARD_REDIRECT_URI')
+    auth_url = f"{redirect_uri.replace('/callback', '')}/authorize?discord_id={discord_id}"
+
+    embed = discord.Embed(
+        title=title,
+        description=(
+            "Click the button below to authorize LuminisBot to access your World of Warcraft character information.\n\n"
+            "**What we'll access:**\n"
+            "• Character names and realms\n"
+            "• Character classes and levels\n"
+            "• Basic character stats\n\n"
+            "**Privacy:** Your data is only used for guild features and is never shared."
+        ),
+        color=0x00ff00
+    )
+
+    view = View()
+    view.add_item(Button(
+        label="Authorize Battle.net",
+        url=auth_url,
+        style=discord.ButtonStyle.link,
+        emoji="🔗"
+    ))
+
+    return embed, view
+
+
 class RaidButtonsView(View):
     """Persistent view with raid signup buttons"""
     
@@ -1535,6 +1568,15 @@ class RaidButtonsView(View):
     async def remindme_button(self, interaction: discord.Interaction, button: Button):
         """Handle remind me button click"""
         await handle_remind_me_click(interaction)
+
+    @discord.ui.button(label="Update Characters", style=discord.ButtonStyle.secondary, custom_id="raid:updatechars", emoji="🔗", row=1)
+    async def update_characters_button(self, interaction: discord.Interaction, button: Button):
+        """Send the Battle.net authorize link to (re)connect characters"""
+        embed, view = build_battlenet_connect_response(
+            str(interaction.user.id),
+            title="🎮 Update Your WoW Characters"
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     @discord.ui.button(label="Admin Panel", style=discord.ButtonStyle.secondary, custom_id="raid:admin", emoji="⚙️", row=1)
     async def admin_button(self, interaction: discord.Interaction, button: Button):
@@ -2861,15 +2903,18 @@ async def handle_signup_click(interaction: discord.Interaction):
     characters = get_user_characters(discord_id)
     
     if not characters:
-        # No characters - prompt to connect account
+        # No characters - send authorize link directly
+        embed, view = build_battlenet_connect_response(discord_id)
         await interaction.response.send_message(
-            "❌ You haven't connected your Battle.net account yet!\n\n"
-            "Please use the `/connectwow` command to link your WoW characters first.\n"
-            "You can use this command in any channel (e.g., #general) or in a DM to the bot.",
+            "❌ You haven't connected your Battle.net account yet!\n"
+            "Connect it below, then click **Sign Up** again. \n",
+            "Or write /connectwow in any channel (e.g., #general) or in a DM to the bot.",
+            embed=embed,
+            view=view,
             ephemeral=True
         )
         return
-    
+
     # Show character selection
     view = CharacterSelectView(characters, event_id)
     await interaction.response.send_message(
@@ -2909,11 +2954,14 @@ async def handle_status_change(interaction: discord.Interaction, new_status: str
         characters = get_user_characters(discord_id)
         
         if not characters:
-            # No characters - prompt to connect account
+            # No characters - send authorize link directly
+            embed, view = build_battlenet_connect_response(discord_id)
             await interaction.response.send_message(
-                "❌ You haven't connected your Battle.net account yet!\n\n"
-                "Please use the `/connectwow` command to link your WoW characters first.\n"
-                "You can use this command in any channel (e.g., #general) or in a DM to the bot.",
+                "❌ You haven't connected your Battle.net account yet!\n"
+                "Connect it below, then click the status button again. \n",
+                "Or write /connectwow in any channel (e.g., #general) or in a DM to the bot.",
+                embed=embed,
+                view=view,
                 ephemeral=True
             )
             return

@@ -475,31 +475,10 @@ async def connectwow_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
     discord_id = str(interaction.user.id)
-    
-    # Generate authorization URL
-    auth_url = f"{BLIZZARD_REDIRECT_URI.replace('/callback', '')}/authorize?discord_id={discord_id}"
-    
-    embed = discord.Embed(
-        title="🎮 Connect Your WoW Characters",
-        description=(
-            "Click the button below to authorize LuminisBot to access your World of Warcraft character information.\n\n"
-            "**What we'll access:**\n"
-            "• Character names and realms\n"
-            "• Character classes and levels\n"
-            "• Basic character stats\n\n"
-            "**Privacy:** Your data is only used for guild features and is never shared."
-        ),
-        color=0x00ff00
-    )
-    
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(
-        label="Authorize Battle.net",
-        url=auth_url,
-        style=discord.ButtonStyle.link,
-        emoji="🔗"
-    ))
-    
+
+    from raid_system import build_battlenet_connect_response
+    embed, view = build_battlenet_connect_response(discord_id)
+
     await interaction.edit_original_response(embed=embed, view=view)
     print(f"[CMD] Generated WoW connection URL for Discord user {discord_id}")
 
