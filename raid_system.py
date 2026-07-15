@@ -2907,7 +2907,7 @@ async def handle_signup_click(interaction: discord.Interaction):
         embed, view = build_battlenet_connect_response(discord_id)
         await interaction.response.send_message(
             "❌ You haven't connected your Battle.net account yet!\n"
-            "Connect it below, then click **Sign Up** again. \n",
+            "Connect it below, then click **Sign Up** again.\n"
             "Or write /connectwow in any channel (e.g., #general) or in a DM to the bot.",
             embed=embed,
             view=view,
@@ -2958,7 +2958,7 @@ async def handle_status_change(interaction: discord.Interaction, new_status: str
             embed, view = build_battlenet_connect_response(discord_id)
             await interaction.response.send_message(
                 "❌ You haven't connected your Battle.net account yet!\n"
-                "Connect it below, then click the status button again. \n",
+                "Connect it below, then click the status button again.\n"
                 "Or write /connectwow in any channel (e.g., #general) or in a DM to the bot.",
                 embed=embed,
                 view=view,
