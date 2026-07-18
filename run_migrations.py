@@ -638,7 +638,16 @@ def run_migrations():
         """)
         
         logger.info("[MIGRATIONS] ✓ posted_logs table ready")
-        
+
+        # ============================================================================
+        # MYTHIC+ EVENT SYSTEM TABLES (schema lives in mythicplus/db.py)
+        # ============================================================================
+
+        from mythicplus.db import ensure_schema as ensure_mplus_schema
+        ensure_mplus_schema(cursor)
+
+        logger.info("[MIGRATIONS] ✓ mythicplus tables ready")
+
         conn.commit()
         cursor.close()
         conn.close()

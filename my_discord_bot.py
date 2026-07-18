@@ -59,6 +59,10 @@ intents.message_content = True  # Required to read message content in guild chan
 client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
+# --- Mythic+ system (slash command + persistent buttons) ---
+import mythicplus
+mythicplus.setup(client, tree)
+
 # --- Automatic Log Detection Task ---
 @tasks.loop(minutes=10)
 async def check_for_new_logs():
@@ -325,6 +329,7 @@ async def on_ready():
         close_expired_signups.start()
     if not check_raid_reminders.is_running():
         check_raid_reminders.start()
+    mythicplus.start_tasks(client)  # M+ deadline watcher (guards itself)
     
     # Start OAuth web server for Battle.net integration
     if not hasattr(client, 'oauth_server_started'):
