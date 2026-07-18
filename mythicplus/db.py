@@ -410,6 +410,212 @@ def get_alternates(event_id):
 
 
 # ============================================================================
+# ADMIN WEB PAGE QUERIES & ACTIONS (mythicplus/web/routes.py)
+# ============================================================================
+
+def admin_list_events():
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT e.*,
+               COUNT(DISTINCT s.discord_id) AS player_count,
+               COUNT(DISTINCT g.id) AS group_count
+        FROM mplus_events e
+        LEFT JOIN mplus_signups s ON s.event_id = e.id
+        LEFT JOIN mplus_groups g ON g.event_id = e.id
+        GROUP BY e.id
+        ORDER BY e.event_date DESC, e.event_time DESC
+        LIMIT 100
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def admin_event_signups(event_id):
+    """All signups with display names and role-specific scores, for the
+    manage page."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT s.id AS signup_id, s.discord_id, s.character_name, s.realm_slug,
+               s.character_class, s.role, s.spec, s.armor_type, s.signed_at,
+               COALESCE(conn2.discord_display_name, conn2.discord_username,
+                        s.discord_id) AS display_name,
+               COALESCE(
+                   CASE s.role
+                       WHEN 'tank' THEN wc.mythic_plus_score_tank
+                       WHEN 'healer' THEN wc.mythic_plus_score_healer
+                       ELSE wc.mythic_plus_score_dps
+                   END,
+                   wc.mythic_plus_score, 0) AS score
+        FROM mplus_signups s
+        LEFT JOIN wow_connections conn2 ON conn2.discord_id = s.discord_id
+        LEFT JOIN wow_characters wc
+            ON wc.discord_id = s.discord_id
+            AND wc.character_name = s.character_name
+            AND wc.realm_slug = s.realm_slug
+        WHERE s.event_id = %s
+        ORDER BY display_name, s.character_name, s.role
+    """, (event_id,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def _group_id_for_number(cursor, event_id, group_number):
+    cursor.execute("""
+        SELECT id FROM mplus_groups WHERE event_id = %s AND group_number = %s
+    """, (event_id, group_number))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def move_group_member(event_id, signup_id, target_group_number):
+    """Move a rostered player to another group. Returns error text or None."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT m.group_id, s.discord_id
+            FROM mplus_group_members m
+            JOIN mplus_signups s ON s.id = m.signup_id
+            JOIN mplus_groups g ON g.id = m.group_id
+            WHERE m.signup_id = %s AND g.event_id = %s
+        """, (signup_id, event_id))
+        row = cursor.fetchone()
+        if not row:
+            return "That player is not in a group."
+        current_group_id, discord_id = row
+
+        target_id = _group_id_for_number(cursor, event_id, target_group_number)
+        if target_id is None:
+            return f"Group {target_group_number} does not exist."
+        if target_id == current_group_id:
+            return "Player is already in that group."
+
+        cursor.execute("""
+            SELECT 1 FROM mplus_group_members m
+            JOIN mplus_signups s ON s.id = m.signup_id
+            WHERE m.group_id = %s AND s.discord_id = %s
+        """, (target_id, discord_id))
+        if cursor.fetchone():
+            return "That player is already in the target group with another character."
+
+        cursor.execute("""
+            UPDATE mplus_group_members SET group_id = %s WHERE signup_id = %s
+        """, (target_id, signup_id))
+        conn.commit()
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def remove_group_member(event_id, signup_id):
+    """Remove a player from their group; they become a reserve. Returns
+    error text or None."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            DELETE FROM mplus_group_members m
+            USING mplus_groups g, mplus_signups s
+            WHERE m.group_id = g.id AND s.id = m.signup_id
+              AND m.signup_id = %s AND g.event_id = %s
+            RETURNING s.discord_id
+        """, (signup_id, event_id))
+        row = cursor.fetchone()
+        if not row:
+            return "That player is not in a group."
+        discord_id = row[0]
+        cursor.execute("""
+            INSERT INTO mplus_alternates (event_id, discord_id, rank, reason)
+            SELECT %s, %s, COALESCE(MAX(rank), 0) + 1, 'composition'
+            FROM mplus_alternates WHERE event_id = %s
+            ON CONFLICT (event_id, discord_id) DO NOTHING
+        """, (event_id, discord_id, event_id))
+        conn.commit()
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def promote_alternate(event_id, signup_id, target_group_number):
+    """Put a reserve into a group using one of their signed characters.
+    Returns error text or None."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT discord_id, role FROM mplus_signups
+            WHERE id = %s AND event_id = %s
+        """, (signup_id, event_id))
+        row = cursor.fetchone()
+        if not row:
+            return "Unknown signup."
+        discord_id, role = row
+
+        cursor.execute("""
+            SELECT 1 FROM mplus_group_members m
+            JOIN mplus_groups g ON g.id = m.group_id
+            JOIN mplus_signups s ON s.id = m.signup_id
+            WHERE g.event_id = %s AND s.discord_id = %s
+        """, (event_id, discord_id))
+        if cursor.fetchone():
+            return "That player is already in a group."
+
+        target_id = _group_id_for_number(cursor, event_id, target_group_number)
+        if target_id is None:
+            return f"Group {target_group_number} does not exist."
+
+        cursor.execute("""
+            INSERT INTO mplus_group_members (group_id, signup_id, assigned_role)
+            VALUES (%s, %s, %s)
+        """, (target_id, signup_id, role))
+        cursor.execute("""
+            DELETE FROM mplus_alternates WHERE event_id = %s AND discord_id = %s
+        """, (event_id, discord_id))
+        conn.commit()
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def grace_overview():
+    """Current grace points + recent audit log, with display names."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT gp.*, COALESCE(c.discord_display_name, c.discord_username,
+                              gp.discord_id) AS display_name
+        FROM mplus_grace_points gp
+        LEFT JOIN wow_connections c ON c.discord_id = gp.discord_id
+        WHERE gp.points > 0
+        ORDER BY gp.points DESC, display_name
+    """)
+    points = cursor.fetchall()
+    cursor.execute("""
+        SELECT gl.*, COALESCE(c.discord_display_name, c.discord_username,
+                              gl.discord_id) AS display_name,
+               e.title AS event_title
+        FROM mplus_grace_log gl
+        LEFT JOIN wow_connections c ON c.discord_id = gl.discord_id
+        LEFT JOIN mplus_events e ON e.id = gl.event_id
+        ORDER BY gl.created_at DESC
+        LIMIT 200
+    """)
+    log = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return points, log
+
+
+# ============================================================================
 # TEMPORARY TEST DATA HELPERS
 # TODO: remove together with the [TEST] admin buttons after initial testing
 # ============================================================================
