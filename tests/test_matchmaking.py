@@ -137,6 +137,39 @@ class TestSolver(unittest.TestCase):
         scores = sorted(g.armor_score() for g in roster.groups)
         self.assertEqual(scores, [4, 5])
 
+    def test_armor_diversity_gives_cloth_a_group(self):
+        # 10 leather (2 tanks, 2 healers, 6 dps) + 4 cloth (healer + 3 dps).
+        # Pure homogeneity would double-stack leather (5+5) and bench all
+        # cloth; the diversity bonus should instead produce one leather 5/5
+        # and one cloth-modal group (leather tank + priest + 3 mages)
+        rows = [
+            row('lt1', 'LT1', 'Druid', 'tank'),
+            row('lt2', 'LT2', 'Druid', 'tank'),
+            row('lh1', 'LH1', 'Monk', 'healer'),
+            row('lh2', 'LH2', 'Monk', 'healer'),
+        ]
+        rows += [row(f'ld{i}', f'LD{i}', 'Rogue', 'dps') for i in range(6)]
+        rows += [row('ch', 'CH', 'Priest', 'healer')]
+        rows += [row(f'cd{i}', f'CD{i}', 'Mage', 'dps') for i in range(3)]
+        roster, _ = make_roster(rows)
+        self.assertEqual(len(roster.groups), 2)
+        modal_armors = {g.modal_armor() for g in roster.groups}
+        self.assertEqual(modal_armors, {'leather', 'cloth'})
+
+    def test_diversity_never_beats_a_second_full_group(self):
+        # Only leather players: diversity can't invent cloth groups — the
+        # solver must still just build two full leather groups
+        rows = [
+            row('t1', 'T1', 'Druid', 'tank'),
+            row('t2', 'T2', 'Demon Hunter', 'tank'),
+            row('h1', 'H1', 'Monk', 'healer'),
+            row('h2', 'H2', 'Druid', 'healer'),
+        ]
+        rows += [row(f'd{i}', f'D{i}', 'Rogue', 'dps') for i in range(6)]
+        roster, _ = make_roster(rows)
+        self.assertEqual(len(roster.groups), 2)
+        self.assertEqual([g.armor_score() for g in roster.groups], [5, 5])
+
     def test_deterministic_for_same_seed(self):
         rows = [
             row('t1', 'T1', 'Druid', 'tank'),

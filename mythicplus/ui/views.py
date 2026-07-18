@@ -11,8 +11,8 @@ import discord
 from discord.ui import Button, Select, View
 
 from raid_system import (CLASS_EMOJIS, CLASS_SPECS, WOW_MAX_LEVEL,
-                         get_spec_emoji, get_user_characters,
-                         parse_emoji_for_dropdown)
+                         build_battlenet_connect_response, get_spec_emoji,
+                         get_user_characters, parse_emoji_for_dropdown)
 
 from .. import db
 from ..constants import ARMOR_EMOJIS, STATUS_OPEN, armor_for_class
@@ -53,8 +53,18 @@ class MPlusButtonsView(View):
     async def grace_button(self, interaction: discord.Interaction, button: Button):
         await handle_grace_click(interaction)
 
+    @discord.ui.button(label="Update Characters", style=discord.ButtonStyle.secondary,
+                       custom_id="mplus:updatechars", emoji="🔗", row=1)
+    async def update_characters_button(self, interaction: discord.Interaction, button: Button):
+        """Send the Battle.net authorize link to (re)connect characters"""
+        embed, view = build_battlenet_connect_response(
+            str(interaction.user.id),
+            title="🎮 Update Your WoW Characters")
+        await interaction.response.send_message(embed=embed, view=view,
+                                                ephemeral=True)
+
     @discord.ui.button(label="Admin", style=discord.ButtonStyle.secondary,
-                       custom_id="mplus:admin", emoji="⚙️", row=0)
+                       custom_id="mplus:admin", emoji="⚙️", row=1)
     async def admin_button(self, interaction: discord.Interaction, button: Button):
         await handle_admin_click(interaction)
 
@@ -84,9 +94,13 @@ async def handle_signup_click(interaction: discord.Interaction):
 
     characters = get_user_characters(str(interaction.user.id))
     if not characters:
-        await interaction.response.send_message(
-            "❌ You have no characters connected. Use `/connectwow` first!",
-            ephemeral=True)
+        # First-time user: send the Battle.net authorize flow, same as the
+        # raid system does
+        embed, view = build_battlenet_connect_response(
+            str(interaction.user.id),
+            title="🎮 Connect Your WoW Characters")
+        await interaction.response.send_message(embed=embed, view=view,
+                                                ephemeral=True)
         return
 
     # Same max-level filter as the raid system

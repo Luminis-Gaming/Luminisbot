@@ -50,7 +50,8 @@ def _greedy_build(persons_by_id, target_groups, rng):
     groups = []
     while len(groups) < target_groups:
         built = None
-        for target_armor in _armor_targets(remaining, rng):
+        used_armors = {g.modal_armor() for g in groups}
+        for target_armor in _armor_targets(remaining, used_armors, rng):
             built = _try_build_group(remaining, target_armor, rng)
             if built:
                 break
@@ -62,14 +63,17 @@ def _greedy_build(persons_by_id, target_groups, rng):
     return groups
 
 
-def _armor_targets(remaining, rng):
-    """Armor types ordered by how many remaining players can contribute."""
+def _armor_targets(remaining, used_armors, rng):
+    """Armor types ordered by how many remaining players can contribute,
+    preferring types that don't have a group yet (armor diversity — matches
+    the diversity bonus in scoring)."""
     counts = {
         armor: sum(1 for p in remaining.values()
                    if any(o.armor_type == armor for o in p.options))
         for armor in ARMOR_TYPES
     }
-    return sorted(ARMOR_TYPES, key=lambda a: (-counts[a], rng.random()))
+    return sorted(ARMOR_TYPES,
+                  key=lambda a: (a in used_armors, -counts[a], rng.random()))
 
 
 def _try_build_group(remaining, target_armor, rng):
