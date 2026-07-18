@@ -6,19 +6,18 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from raid_system import (CLASS_EMOJIS, DEFAULT_TIMEZONE, ROLE_EMOJIS,
+from raid_system import (CLASS_EMOJIS, DEFAULT_TIMEZONE, get_spec_emoji,
                          text_to_emoji_letters)
 
 from .. import db
 from ..constants import (ARMOR_EMOJIS, ARMOR_TYPES, STATUS_CANCELLED,
                          STATUS_FINALIZED, STATUS_OPEN)
 
-# raid ROLE_EMOJIS uses melee/ranged for dps; M+ shows a single dps icon
-_ROLE_ICONS = {
-    'tank': ROLE_EMOJIS.get('tank', '🛡️'),
-    'healer': ROLE_EMOJIS.get('healer', '💚'),
-    'dps': '⚔️',
-}
+
+def _char_emoji(character_class, spec):
+    """Spec emoji when we know the spec, class emoji as fallback."""
+    return (get_spec_emoji(character_class, spec) if spec else '') \
+        or CLASS_EMOJIS.get(character_class, '')
 
 
 def _event_unix(event) -> int:
@@ -84,9 +83,13 @@ def _add_signup_fields(embed, event_id):
             continue
         lines = []
         for c in chars[:15]:
-            class_emoji = CLASS_EMOJIS.get(c['character_class'], '')
-            roles = ' '.join(_ROLE_ICONS.get(role, role) for role in c['roles'])
-            lines.append(f"{class_emoji} {c['character_name']} {roles}")
+            # One spec emoji per offered spec — spec implies the role, so
+            # no separate role icons needed
+            specs = [s for s in (c.get('specs') or []) if s]
+            emojis = ' '.join(dict.fromkeys(
+                _char_emoji(c['character_class'], s) for s in specs)) \
+                or CLASS_EMOJIS.get(c['character_class'], '')
+            lines.append(f"{emojis} {c['character_name']}")
         if len(chars) > 15:
             lines.append(f"…and {len(chars) - 15} more")
         embed.add_field(
@@ -103,8 +106,7 @@ def _add_roster_fields(embed, event_id):
         lines = []
         off_armor = 0
         for m in group['members']:
-            class_emoji = CLASS_EMOJIS.get(m['character_class'], '')
-            role_icon = _ROLE_ICONS.get(m['assigned_role'], '')
+            emoji = _char_emoji(m['character_class'], m.get('spec'))
             marker = ''
             if m['armor_type'] != group['armor_type']:
                 off_armor += 1
@@ -112,8 +114,7 @@ def _add_roster_fields(embed, event_id):
             # Character + realm + role is the authoritative roster line;
             # the @mention is only there for pinging
             lines.append(
-                f"{role_icon} {class_emoji} "
-                f"**{m['character_name']}-{m['realm_name']}** "
+                f"{emoji} **{m['character_name']}-{m['realm_name']}** "
                 f"({m['assigned_role'].capitalize()}{marker}) — <@{m['discord_id']}>")
         name = (f"{ARMOR_EMOJIS.get(armor, '')} Group {group['group_number']}"
                 f" — {armor.capitalize()}")
@@ -123,8 +124,29 @@ def _add_roster_fields(embed, event_id):
 
     alternates = db.get_alternates(event_id)
     if alternates:
-        # Alphabetical by mention id — deliberately NOT in priority order so
-        # private grace points can't be inferred (plan §5)
-        mentions = sorted(f"<@{a['discord_id']}>" for a in alternates)
+        chars_by_user = {}
+        for row in db.get_signup_summary(event_id):
+            chars_by_user.setdefault(row['discord_id'], []).append(row)
+
+        # Alphabetical by id — deliberately NOT in priority order so private
+        # grace points can't be inferred (plan §5). One spec icon per signed
+        # character shows what each reserve can bring.
+        parts = []
+        for discord_id in sorted(a['discord_id'] for a in alternates):
+            icons = ''.join(
+                _char_emoji(c['character_class'], _primary_spec(c))
+                for c in chars_by_user.get(discord_id, []))
+            parts.append(f"<@{discord_id}> {icons}".rstrip())
         embed.add_field(name="🪑 Reserves",
-                        value=" ".join(mentions)[:1024], inline=False)
+                        value=" · ".join(parts)[:1024], inline=False)
+
+
+def _primary_spec(char_row):
+    """A character's most defining offered spec: tank > healer > dps."""
+    roles = char_row.get('roles') or []
+    specs = char_row.get('specs') or []
+    for wanted in ('tank', 'healer', 'dps'):
+        for role, spec in zip(roles, specs):
+            if role == wanted and spec:
+                return spec
+    return next((s for s in specs if s), None)

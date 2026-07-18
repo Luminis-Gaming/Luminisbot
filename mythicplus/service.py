@@ -227,9 +227,10 @@ def _rostered_dm_text(event, group, discord_id):
         lines.append(f"  {m['assigned_role'].capitalize()}: "
                      f"**{m['character_name']}-{m['realm_name']}**{marker}{you}")
     if your_char:
+        spec = f" ({your_char['spec']})" if your_char.get('spec') else ''
         lines.insert(1, f"You're playing **{your_char['character_name']}-"
                         f"{your_char['realm_name']}** as "
-                        f"**{your_char['assigned_role']}**.")
+                        f"**{your_char['assigned_role']}**{spec}.")
     if off_armor and armor in ('mail', 'cloth'):
         lines.append(f"\nℹ️ {armor.capitalize()} has no tank specs, so this "
                      f"is the best possible {armor} stack — the off-armor "
@@ -277,14 +278,19 @@ async def _display_names(client, event, discord_ids):
     guild = client.get_guild(event['guild_id'])
     for discord_id in discord_ids:
         name = None
-        if guild:
-            member = guild.get_member(int(discord_id))
-            if member:
-                name = member.display_name
-        if not name:
-            user = client.get_user(int(discord_id))
-            name = user.display_name if user else f"<@{discord_id}>"
-        names[discord_id] = name
+        try:
+            if guild:
+                member = guild.get_member(int(discord_id))
+                if member:
+                    name = member.display_name
+            if not name:
+                user = client.get_user(int(discord_id))
+                if user:
+                    name = user.display_name
+        except Exception as e:
+            # Non-numeric test ids / departed users — fall back to the raw id
+            logger.debug(f"[MPLUS] Name lookup failed for {discord_id}: {e}")
+        names[discord_id] = name or str(discord_id)
     return names
 
 

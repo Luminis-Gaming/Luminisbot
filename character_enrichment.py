@@ -54,37 +54,48 @@ QUALITY_COLORS = {
 
 class CharacterEnricher:
     """Fetches and aggregates character data from multiple sources"""
-    
-    def __init__(self):
-        self.blizzard_token = None
-        self.blizzard_token_expires = None
-    
+
+    # Token cache is class-level so it survives across enricher instances
+    # (one instance is created per character), and the lock prevents the
+    # 5 concurrent API calls per character from racing the cache check and
+    # each fetching their own token
+    _blizzard_token = None
+    _blizzard_token_expires = None
+    _blizzard_token_lock = asyncio.Lock()
+
     async def get_blizzard_token(self):
-        """Get Blizzard API OAuth token"""
-        if self.blizzard_token and self.blizzard_token_expires and self.blizzard_token_expires > datetime.now():
-            return self.blizzard_token
-        
-        async with aiohttp.ClientSession() as session:
-            auth = aiohttp.BasicAuth(BLIZZARD_CLIENT_ID, BLIZZARD_CLIENT_SECRET)
-            try:
-                async with session.post(
-                    'https://oauth.battle.net/token',
-                    data={'grant_type': 'client_credentials'},
-                    auth=auth,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        self.blizzard_token = data['access_token']
-                        self.blizzard_token_expires = datetime.now() + timedelta(seconds=data['expires_in'] - 60)
-                        logger.info("Obtained new Blizzard API token")
-                        return self.blizzard_token
-                    else:
-                        logger.error(f"Failed to get Blizzard token: {resp.status}")
-                        return None
-            except Exception as e:
-                logger.error(f"Error getting Blizzard token: {e}")
-                return None
+        """Get Blizzard API OAuth token (cached ~24h, single-flight)"""
+        cls = CharacterEnricher
+        if cls._blizzard_token and cls._blizzard_token_expires and cls._blizzard_token_expires > datetime.now():
+            return cls._blizzard_token
+
+        async with cls._blizzard_token_lock:
+            # Re-check after acquiring: another caller may have fetched it
+            # while we waited
+            if cls._blizzard_token and cls._blizzard_token_expires and cls._blizzard_token_expires > datetime.now():
+                return cls._blizzard_token
+
+            async with aiohttp.ClientSession() as session:
+                auth = aiohttp.BasicAuth(BLIZZARD_CLIENT_ID, BLIZZARD_CLIENT_SECRET)
+                try:
+                    async with session.post(
+                        'https://oauth.battle.net/token',
+                        data={'grant_type': 'client_credentials'},
+                        auth=auth,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            cls._blizzard_token = data['access_token']
+                            cls._blizzard_token_expires = datetime.now() + timedelta(seconds=data['expires_in'] - 60)
+                            logger.info("Obtained new Blizzard API token")
+                            return cls._blizzard_token
+                        else:
+                            logger.error(f"Failed to get Blizzard token: {resp.status}")
+                            return None
+                except Exception as e:
+                    logger.error(f"Error getting Blizzard token: {e}")
+                    return None
     
     async def get_character_profile(self, realm: str, name: str, region: str = 'eu') -> Optional[Dict]:
         """Fetch character profile from Blizzard API"""

@@ -63,10 +63,22 @@ def ensure_schema(cursor):
             realm_slug TEXT NOT NULL,
             character_class TEXT NOT NULL,
             role TEXT NOT NULL,
+            spec TEXT,
             armor_type TEXT NOT NULL,
             signed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             UNIQUE(event_id, discord_id, character_name, realm_slug, role)
         );
+    """)
+    cursor.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'mplus_signups' AND column_name = 'spec'
+            ) THEN
+                ALTER TABLE mplus_signups ADD COLUMN spec TEXT;
+            END IF;
+        END $$;
     """)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_mplus_signups_event
@@ -189,7 +201,7 @@ def set_event_status(event_id, status):
 # ============================================================================
 
 def add_signup(event_id, discord_id, character_name, realm_slug,
-               character_class, role, armor_type):
+               character_class, role, armor_type, spec=None):
     """UPSERT one (character, role) offering. Returns False if signups closed."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -205,12 +217,12 @@ def add_signup(event_id, discord_id, character_name, realm_slug,
         return False
     cursor.execute("""
         INSERT INTO mplus_signups (event_id, discord_id, character_name,
-            realm_slug, character_class, role, armor_type)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+            realm_slug, character_class, role, spec, armor_type)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (event_id, discord_id, character_name, realm_slug, role)
-        DO NOTHING
+        DO UPDATE SET spec = EXCLUDED.spec
     """, (event_id, discord_id, character_name, realm_slug, character_class,
-          role, armor_type))
+          role, spec, armor_type))
     conn.commit()
     cursor.close()
     conn.close()
@@ -294,7 +306,8 @@ def get_signup_summary(event_id):
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
         SELECT discord_id, character_name, realm_slug, character_class,
-               armor_type, array_agg(role ORDER BY role) AS roles
+               armor_type, array_agg(role ORDER BY role) AS roles,
+               array_agg(spec ORDER BY role) AS specs
         FROM mplus_signups
         WHERE event_id = %s
         GROUP BY discord_id, character_name, realm_slug, character_class, armor_type
@@ -355,7 +368,7 @@ def get_roster(event_id):
     cursor.execute("""
         SELECT g.group_number, g.armor_type AS group_armor,
                m.assigned_role, s.discord_id, s.character_name, s.realm_slug,
-               s.character_class, s.armor_type,
+               s.character_class, s.spec, s.armor_type,
                COALESCE(wc.realm_name, s.realm_slug) AS realm_name
         FROM mplus_groups g
         JOIN mplus_group_members m ON m.group_id = g.id
@@ -394,6 +407,39 @@ def get_alternates(event_id):
     cursor.close()
     conn.close()
     return rows
+
+
+# ============================================================================
+# TEMPORARY TEST DATA HELPERS
+# TODO: remove together with the [TEST] admin buttons after initial testing
+# ============================================================================
+
+TEST_ID_PREFIX = 'mplustest:'
+
+
+def remove_test_data(event_id, guild_id):
+    """Delete every trace of seeded test users (signups, roster rows via
+    cascade, alternates, grace points/log)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    like = TEST_ID_PREFIX + '%'
+    cursor.execute("""
+        DELETE FROM mplus_signups WHERE event_id = %s AND discord_id LIKE %s
+    """, (event_id, like))
+    removed = cursor.rowcount
+    cursor.execute("""
+        DELETE FROM mplus_alternates WHERE event_id = %s AND discord_id LIKE %s
+    """, (event_id, like))
+    cursor.execute("""
+        DELETE FROM mplus_grace_points WHERE guild_id = %s AND discord_id LIKE %s
+    """, (guild_id, like))
+    cursor.execute("""
+        DELETE FROM mplus_grace_log WHERE guild_id = %s AND discord_id LIKE %s
+    """, (guild_id, like))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return removed
 
 
 # ============================================================================
