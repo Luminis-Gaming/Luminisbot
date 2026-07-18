@@ -8,7 +8,7 @@ import logging
 from psycopg2.extras import RealDictCursor
 
 from . import db
-from .constants import ARMOR_EMOJIS, STATUS_OPEN
+from .constants import ARMOR_EMOJIS, STATUS_OPEN, format_key_range
 from .matchmaking import (alternate_reason, build_pool, build_roster,
                           compute_grace_changes)
 
@@ -170,7 +170,7 @@ async def _post_channel_summary(client, event, roster):
         from .ui.embeds import char_emoji
 
         lines = [f"📋 **{event['title']}** — groups are set! "
-                 f"(keys +{event['key_level_min']}–+{event['key_level_max']})"]
+                 f"(🔑 {format_key_range(event['key_level_min'], event['key_level_max'])})"]
         groups = db.get_roster(event['id'])
         for group in groups:
             armor = group['armor_type'] or 'mixed'
@@ -215,7 +215,7 @@ def _rostered_dm_text(event, group, discord_id):
 
     armor = group['armor_type'] or 'mixed'
     lines = [f"🎉 You're rostered for **{event['title']}** "
-             f"(keys +{event['key_level_min']}–+{event['key_level_max']})!",
+             f"(🔑 {format_key_range(event['key_level_min'], event['key_level_max'])})!",
              f"\n{ARMOR_EMOJIS.get(armor, '')} **Group "
              f"{group['group_number']} — {armor.capitalize()}**"]
     off_armor = []

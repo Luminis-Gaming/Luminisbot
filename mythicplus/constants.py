@@ -58,3 +58,8 @@ DEFAULT_DEADLINE_HOURS_BEFORE = 2
 def armor_for_class(character_class: str) -> str:
     """Armor type for a class; unknown classes fall back to cloth."""
     return ARMOR_BY_CLASS.get(character_class, 'cloth')
+
+
+def format_key_range(key_min: int, key_max: int) -> str:
+    """Display form of a key range: "8–12", or just "10" for a single level."""
+    return str(key_min) if key_min == key_max else f"{key_min}–{key_max}"

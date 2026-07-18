@@ -124,8 +124,10 @@ class CreateMPlusModal(discord.ui.Modal, title="Create Mythic+ Event"):
         embed, view = generate_event_embed(event_id)
         await message.edit(embed=embed, view=view)
 
+        from ..constants import format_key_range
         await interaction.followup.send(
-            f"✅ Mythic+ event **{title}** created (keys +{key_min}–+{key_max})!\n"
+            f"✅ Mythic+ event **{title}** created "
+            f"(🔑 {format_key_range(key_min, key_max)})!\n"
             f"📋 Event ID: {event_id} — groups form automatically at the deadline.",
             ephemeral=True)
         logger.info(f"[MPLUS] Created event '{title}' by {interaction.user.name} "

@@ -11,7 +11,7 @@ from raid_system import (CLASS_EMOJIS, DEFAULT_TIMEZONE, get_spec_emoji,
 
 from .. import db
 from ..constants import (ARMOR_EMOJIS, ARMOR_TYPES, STATUS_CANCELLED,
-                         STATUS_FINALIZED, STATUS_OPEN)
+                         STATUS_FINALIZED, STATUS_OPEN, format_key_range)
 
 
 def char_emoji(character_class, spec):
@@ -37,7 +37,7 @@ def generate_event_embed(event_id):
         return None, None
 
     unix = _event_unix(event)
-    key_range = f"+{event['key_level_min']}–+{event['key_level_max']}"
+    key_range = format_key_range(event['key_level_min'], event['key_level_max'])
 
     color = discord.Color.purple()
     if event['status'] == STATUS_CANCELLED:
@@ -51,7 +51,7 @@ def generate_event_embed(event_id):
     )
     lines = [
         f"🗓️ <t:{unix}:F> (<t:{unix}:R>)",
-        f"🔑 Keys **{key_range}** — armor stacking event",
+        f"🔑 **{key_range}** — armor stacking",
     ]
     if event['signup_deadline'] and event['status'] == STATUS_OPEN:
         deadline_unix = int(event['signup_deadline'].timestamp())
@@ -59,7 +59,8 @@ def generate_event_embed(event_id):
                      f"formed automatically")
     if event['status'] == STATUS_CANCELLED:
         lines.append("❌ **Event cancelled**")
-    embed.description = "\n".join(lines)
+    # Blank line between each section for readability
+    embed.description = "\n\n".join(lines)
 
     if event['status'] == STATUS_FINALIZED:
         _add_roster_fields(embed, event_id)
@@ -75,7 +76,7 @@ def _add_signup_fields(embed, event_id):
     rows = db.get_signup_summary(event_id)
     players = {r['discord_id'] for r in rows}
     embed.add_field(name="👥 Players signed",
-                    value=str(len(players)) if players else "Nobody yet — be first!",
+                    value=(str(len(players)) if players else "Nobody yet — be first!") + "\n​",
                     inline=False)
 
     for armor in ARMOR_TYPES:
@@ -121,7 +122,10 @@ def _add_roster_fields(embed, event_id):
                 f" — {armor.capitalize()}")
         if off_armor:
             name += f" ({5 - off_armor}/5 stacked)"
-        embed.add_field(name=name, value="\n".join(lines)[:1024], inline=False)
+        # Trailing zero-width space renders as a blank line between groups
+        embed.add_field(name=name,
+                        value="\n".join(lines)[:1000] + "\n​",
+                        inline=False)
 
     alternates = db.get_alternates(event_id)
     if alternates:
