@@ -135,15 +135,16 @@ def _add_roster_fields(embed, event_id):
 
         # Alphabetical by id — deliberately NOT in priority order so private
         # grace points can't be inferred (plan §5). One spec icon per signed
-        # character shows what each reserve can bring.
-        parts = []
+        # character shows what each reserve can bring; one row per person,
+        # matching the group layout.
+        lines = []
         for discord_id in sorted(a['discord_id'] for a in alternates):
             icons = ''.join(
                 char_emoji(c['character_class'], _primary_spec(c))
                 for c in chars_by_user.get(discord_id, []))
-            parts.append(f"<@{discord_id}> {icons}".rstrip())
+            lines.append(f"{icons} <@{discord_id}>".strip())
         embed.add_field(name="🪑 Reserves",
-                        value=" · ".join(parts)[:1024], inline=False)
+                        value="\n".join(lines)[:1024], inline=False)
 
 
 def _primary_spec(char_row):

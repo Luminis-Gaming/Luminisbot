@@ -15,7 +15,8 @@ from raid_system import (CLASS_EMOJIS, CLASS_SPECS, WOW_MAX_LEVEL,
                          get_user_characters, parse_emoji_for_dropdown)
 
 from .. import db
-from ..constants import ARMOR_EMOJIS, STATUS_OPEN, armor_for_class
+from ..constants import (ARMOR_EMOJIS, STATUS_FINALIZED, STATUS_OPEN,
+                         armor_for_class)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,32 @@ async def handle_my_signups_click(interaction: discord.Interaction):
     event = await _get_open_event(interaction)
     if not event:
         return
-    rows = db.get_user_signups(event['id'], str(interaction.user.id))
+    discord_id = str(interaction.user.id)
+
+    # After finalization, removing signup rows would silently break the
+    # roster — offer the proper cancel-my-spot flow instead
+    if event['status'] == STATUS_FINALIZED:
+        slot = db.get_member_slot(event['id'], discord_id)
+        if slot:
+            await interaction.response.send_message(
+                f"You're rostered in **Group {slot['group_number']}** as "
+                f"**{slot['assigned_role']}** on "
+                f"**{slot['character_name']}-{slot['realm_slug']}**.\n\n"
+                f"Cancel your spot? The best-fitting reserve is promoted "
+                f"automatically and the group gets notified.",
+                view=CancelSpotView(event['id']), ephemeral=True)
+        elif db.is_alternate(event['id'], discord_id):
+            await interaction.response.send_message(
+                "You're on the **reserve list** for this event.\n\n"
+                "Withdraw completely? You won't be considered if a spot "
+                "opens up.",
+                view=WithdrawReserveView(event['id']), ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                "You have no spot or signups in this event.", ephemeral=True)
+        return
+
+    rows = db.get_user_signups(event['id'], discord_id)
     if not rows:
         await interaction.response.send_message(
             "You haven't signed up for this event yet.", ephemeral=True)
@@ -356,6 +382,67 @@ class MySignupsSelect(Select):
         from ..service import refresh_event_message
         asyncio.create_task(refresh_event_message(interaction.client, self.event_id))
         await interaction.response.edit_message(content=content, view=None)
+
+
+# ============================================================================
+# POST-FINALIZATION WITHDRAWAL
+# ============================================================================
+
+class CancelSpotView(View):
+    """Confirm giving up a rostered spot; triggers auto-promotion."""
+
+    def __init__(self, event_id):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+
+    @discord.ui.button(label="Yes, cancel my spot",
+                       style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        from ..service import handle_roster_withdrawal
+        await interaction.response.edit_message(
+            content="⏳ Cancelling your spot…", view=None)
+        vacated, promoted = await handle_roster_withdrawal(
+            interaction.client, self.event_id, str(interaction.user.id))
+        if promoted:
+            text = (f"✅ Your spot is cancelled. "
+                    f"**{promoted['character_name']}-{promoted['realm_slug']}** "
+                    f"was promoted from reserve to take your place.")
+        elif vacated:
+            text = ("✅ Your spot is cancelled. No reserve could fill it — "
+                    "the group has been notified it's short a player.")
+        else:
+            text = "✅ You've been removed from this event."
+        await interaction.edit_original_response(content=text)
+
+    @discord.ui.button(label="Keep my spot",
+                       style=discord.ButtonStyle.secondary)
+    async def abort(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(
+            content="👍 You're still rostered.", view=None)
+
+
+class WithdrawReserveView(View):
+    """Confirm a reserve withdrawing entirely."""
+
+    def __init__(self, event_id):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+
+    @discord.ui.button(label="Yes, withdraw",
+                       style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        db.withdraw_completely(self.event_id, str(interaction.user.id))
+        from ..service import refresh_event_message
+        asyncio.create_task(
+            refresh_event_message(interaction.client, self.event_id))
+        await interaction.response.edit_message(
+            content="✅ You've withdrawn from the reserve list.", view=None)
+
+    @discord.ui.button(label="Stay on reserve",
+                       style=discord.ButtonStyle.secondary)
+    async def abort(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(
+            content="👍 You're still on the reserve list.", view=None)
 
 
 # ============================================================================

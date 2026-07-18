@@ -118,6 +118,70 @@ async def refresh_event_characters(event_id):
 
 
 # ============================================================================
+# WITHDRAWAL & AUTO-PROMOTION (post-finalization)
+# ============================================================================
+
+async def handle_roster_withdrawal(client, event_id, discord_id):
+    """A rostered player (or reserve) cancels after finalization: free their
+    slot, auto-promote the best-fitting reserve, announce, update the embed.
+    Returns (vacated, promoted) dicts for the caller's confirmation text."""
+    event = db.get_event(event_id)
+    vacated = db.withdraw_completely(event_id, discord_id)
+
+    promoted = None
+    if vacated:
+        candidate = db.find_promotion_candidate(
+            event_id, vacated['group_number'], vacated['assigned_role'])
+        if candidate:
+            error = db.promote_alternate(event_id, candidate['signup_id'],
+                                         vacated['group_number'])
+            if error:
+                logger.warning(f"[MPLUS] Auto-promotion failed for event "
+                               f"{event_id}: {error}")
+            else:
+                promoted = candidate
+
+    await refresh_event_message(client, event_id)
+
+    if vacated and event:
+        await _post_withdrawal_note(client, event, vacated, promoted)
+        if promoted:
+            from .ui.embeds import char_emoji
+            emoji = char_emoji(promoted['character_class'], promoted.get('spec'))
+            await _try_dm(client, event, promoted['discord_id'],
+                          f"🎉 A spot opened up — you've been **promoted from "
+                          f"reserve** for **{event['title']}**!\n"
+                          f"You're now in **Group {vacated['group_number']}** "
+                          f"as **{vacated['assigned_role']}** playing {emoji} "
+                          f"**{promoted['character_name']}-"
+                          f"{promoted['realm_slug']}**.")
+    return vacated, promoted
+
+
+async def _post_withdrawal_note(client, event, vacated, promoted):
+    try:
+        channel = client.get_channel(event['channel_id'])
+        if channel is None:
+            channel = await client.fetch_channel(event['channel_id'])
+        char = f"**{vacated['character_name']}-{vacated['realm_slug']}**"
+        if promoted:
+            await channel.send(
+                f"🔄 {char} cancelled their spot in Group "
+                f"{vacated['group_number']} of **{event['title']}** — "
+                f"<@{promoted['discord_id']}> has been promoted from reserve "
+                f"as **{vacated['assigned_role']}** on "
+                f"**{promoted['character_name']}-{promoted['realm_slug']}**!")
+        else:
+            await channel.send(
+                f"⚠️ {char} cancelled their spot in **{event['title']}** — "
+                f"Group {vacated['group_number']} now needs a "
+                f"**{vacated['assigned_role']}** and no reserve can fill it.")
+    except Exception as e:
+        logger.warning(f"[MPLUS] Withdrawal note failed for event "
+                       f"{event['id']}: {e}")
+
+
+# ============================================================================
 # FINALIZE PIPELINE (unattended)
 # ============================================================================
 

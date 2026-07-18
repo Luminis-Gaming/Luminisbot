@@ -410,6 +410,82 @@ def get_alternates(event_id):
 
 
 # ============================================================================
+# WITHDRAWAL & AUTO-PROMOTION (post-finalization)
+# ============================================================================
+
+def get_member_slot(event_id, discord_id):
+    """The group slot a person occupies, or None if not rostered."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT g.group_number, m.assigned_role, s.character_name, s.realm_slug
+        FROM mplus_group_members m
+        JOIN mplus_groups g ON g.id = m.group_id
+        JOIN mplus_signups s ON s.id = m.signup_id
+        WHERE g.event_id = %s AND s.discord_id = %s
+    """, (event_id, discord_id))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row
+
+
+def is_alternate(event_id, discord_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 1 FROM mplus_alternates WHERE event_id = %s AND discord_id = %s
+    """, (event_id, discord_id))
+    found = cursor.fetchone() is not None
+    cursor.close()
+    conn.close()
+    return found
+
+
+def withdraw_completely(event_id, discord_id):
+    """Remove a person entirely: signups (cascades to their group slot),
+    alternate row. Returns the vacated slot dict (get_member_slot shape)
+    or None if they weren't rostered."""
+    vacated = get_member_slot(event_id, discord_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM mplus_signups WHERE event_id = %s AND discord_id = %s",
+                   (event_id, discord_id))
+    cursor.execute("DELETE FROM mplus_alternates WHERE event_id = %s AND discord_id = %s",
+                   (event_id, discord_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return vacated
+
+
+def find_promotion_candidate(event_id, group_number, role):
+    """Best reserve for a vacated slot: same role, preferring the group's
+    armor type, then alternate rank (grace desc, signup order). Returns a
+    dict with discord_id/signup_id/character info, or None."""
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT a.discord_id, s.id AS signup_id, s.character_name,
+               s.realm_slug, s.character_class, s.spec, s.armor_type
+        FROM mplus_alternates a
+        JOIN mplus_signups s
+            ON s.event_id = a.event_id
+            AND s.discord_id = a.discord_id
+            AND s.role = %s
+        JOIN mplus_groups g
+            ON g.event_id = a.event_id AND g.group_number = %s
+        WHERE a.event_id = %s
+        ORDER BY (s.armor_type = g.armor_type) DESC, a.rank ASC, s.id ASC
+        LIMIT 1
+    """, (role, group_number, event_id))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row
+
+
+# ============================================================================
 # ADMIN WEB PAGE QUERIES & ACTIONS (mythicplus/web/routes.py)
 # ============================================================================
 
