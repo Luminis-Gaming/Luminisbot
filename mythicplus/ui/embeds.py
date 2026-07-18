@@ -14,8 +14,9 @@ from ..constants import (ARMOR_EMOJIS, ARMOR_TYPES, STATUS_CANCELLED,
                          STATUS_FINALIZED, STATUS_OPEN)
 
 
-def _char_emoji(character_class, spec):
-    """Spec emoji when we know the spec, class emoji as fallback."""
+def char_emoji(character_class, spec):
+    """Spec emoji when we know the spec, class emoji as fallback.
+    Also used by service.py for the channel summary and result DMs."""
     return (get_spec_emoji(character_class, spec) if spec else '') \
         or CLASS_EMOJIS.get(character_class, '')
 
@@ -87,7 +88,7 @@ def _add_signup_fields(embed, event_id):
             # no separate role icons needed
             specs = [s for s in (c.get('specs') or []) if s]
             emojis = ' '.join(dict.fromkeys(
-                _char_emoji(c['character_class'], s) for s in specs)) \
+                char_emoji(c['character_class'], s) for s in specs)) \
                 or CLASS_EMOJIS.get(c['character_class'], '')
             lines.append(f"{emojis} {c['character_name']}")
         if len(chars) > 15:
@@ -106,7 +107,7 @@ def _add_roster_fields(embed, event_id):
         lines = []
         off_armor = 0
         for m in group['members']:
-            emoji = _char_emoji(m['character_class'], m.get('spec'))
+            emoji = char_emoji(m['character_class'], m.get('spec'))
             marker = ''
             if m['armor_type'] != group['armor_type']:
                 off_armor += 1
@@ -134,7 +135,7 @@ def _add_roster_fields(embed, event_id):
         parts = []
         for discord_id in sorted(a['discord_id'] for a in alternates):
             icons = ''.join(
-                _char_emoji(c['character_class'], _primary_spec(c))
+                char_emoji(c['character_class'], _primary_spec(c))
                 for c in chars_by_user.get(discord_id, []))
             parts.append(f"<@{discord_id}> {icons}".rstrip())
         embed.add_field(name="🪑 Reserves",

@@ -167,6 +167,8 @@ async def _post_channel_summary(client, event, roster):
                 f"healer and three DPS.)")
             return
 
+        from .ui.embeds import char_emoji
+
         lines = [f"📋 **{event['title']}** — groups are set! "
                  f"(keys +{event['key_level_min']}–+{event['key_level_max']})"]
         groups = db.get_roster(event['id'])
@@ -176,7 +178,7 @@ async def _post_channel_summary(client, event, roster):
                          f"{group['group_number']} — {armor.capitalize()}**")
             for m in group['members']:
                 lines.append(
-                    f"  {m['assigned_role'].capitalize()}: "
+                    f"  {char_emoji(m['character_class'], m.get('spec'))} "
                     f"**{m['character_name']}-{m['realm_name']}** "
                     f"(<@{m['discord_id']}>)")
         if roster.benched:
@@ -209,6 +211,8 @@ async def _send_result_dms(client, event, roster, reasons, grace_changes):
 
 
 def _rostered_dm_text(event, group, discord_id):
+    from .ui.embeds import char_emoji
+
     armor = group['armor_type'] or 'mixed'
     lines = [f"🎉 You're rostered for **{event['title']}** "
              f"(keys +{event['key_level_min']}–+{event['key_level_max']})!",
@@ -224,7 +228,7 @@ def _rostered_dm_text(event, group, discord_id):
         you = ' ← you' if m['discord_id'] == discord_id else ''
         if m['discord_id'] == discord_id:
             your_char = m
-        lines.append(f"  {m['assigned_role'].capitalize()}: "
+        lines.append(f"  {char_emoji(m['character_class'], m.get('spec'))} "
                      f"**{m['character_name']}-{m['realm_name']}**{marker}{you}")
     if your_char:
         spec = f" ({your_char['spec']})" if your_char.get('spec') else ''
