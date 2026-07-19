@@ -231,25 +231,24 @@ async def _post_channel_summary(client, event, roster):
                 f"healer and three DPS.)")
             return
 
-        from .ui.embeds import char_emoji
-
-        lines = [f"📋 **{event['title']}** — groups are set! "
-                 f"(🔑 {format_key_range(event['key_level_min'], event['key_level_max'])})"]
-        groups = db.get_roster(event['id'])
-        for group in groups:
-            armor = group['armor_type'] or 'mixed'
-            lines.append(f"\n{ARMOR_EMOJIS.get(armor, '')} **Group "
-                         f"{group['group_number']} — {armor.capitalize()}**")
-            for m in group['members']:
-                lines.append(
-                    f"  {char_emoji(m['character_class'], m.get('spec'))} "
-                    f"**{m['character_name']}-{m['realm_name']}** "
-                    f"(<@{m['discord_id']}>)")
-        if roster.benched:
-            mentions = sorted(f"<@{p.discord_id}>" for p in roster.benched)
-            lines.append(f"\n🪑 Reserves: {' '.join(mentions)} — check your "
-                         f"DMs for details.")
-        await channel.send("\n".join(lines)[:2000])
+        # Keep this short — full rosters overflow Discord's 2000-char limit;
+        # the event embed is the roster, so just announce + link to it
+        link = (f"https://discord.com/channels/{event['guild_id']}/"
+                f"{event['channel_id']}/{event['message_id']}")
+        keys = format_key_range(event['key_level_min'], event['key_level_max'])
+        reserves = (f" • 🪑 {len(roster.benched)} reserve"
+                    f"{'s' if len(roster.benched) != 1 else ''}"
+                    if roster.benched else "")
+        mentions = ' '.join(sorted(
+            {f"<@{pid}>" for pid in roster.placed_ids()}
+            | {f"<@{p.discord_id}>" for p in roster.benched}))
+        await channel.send(
+            f"📋 **{event['title']}** — groups are set! (🔑 {keys})\n"
+            f"✅ {len(roster.groups)} group"
+            f"{'s' if len(roster.groups) != 1 else ''}{reserves} — check "
+            f"your DMs for your assignment.\n"
+            f"➡️ Full roster: {link}\n"
+            f"{mentions}"[:2000])
     except Exception as e:
         logger.warning(f"[MPLUS] Channel summary failed for event "
                        f"{event['id']}: {e}")
@@ -328,8 +327,13 @@ def _reserve_dm_text(event, person, roster, reasons, grace_changes, names):
             "the slots your characters cover were already filled by "
             "same-armor players.")
 
-    others = [names[pid] for pid in names
-              if pid != person.discord_id]
+    others = []
+    for p in roster.benched:
+        if p.discord_id == person.discord_id:
+            continue
+        chars = sorted({o.character_name for o in p.options})
+        handle = names.get(p.discord_id, p.discord_id)
+        others.append(f"**{'/'.join(chars)}** ({handle})")
     if others:
         pugs_needed = max(0, 5 - (len(others) + 1))
         lines.append(
@@ -350,11 +354,15 @@ async def _display_names(client, event, discord_ids):
             if guild:
                 member = guild.get_member(int(discord_id))
                 if member:
-                    name = member.display_name
+                    name = f"@{member.display_name}"
             if not name:
                 user = client.get_user(int(discord_id))
+                if user is None:
+                    # Cache miss (members intent off) — resolve via the API
+                    # so DMs never show raw numeric IDs
+                    user = await client.fetch_user(int(discord_id))
                 if user:
-                    name = user.display_name
+                    name = f"@{user.display_name}"
         except Exception as e:
             # Non-numeric test ids / departed users — fall back to the raw id
             logger.debug(f"[MPLUS] Name lookup failed for {discord_id}: {e}")
