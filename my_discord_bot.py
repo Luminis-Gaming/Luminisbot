@@ -315,6 +315,7 @@ async def on_ready():
     if not hasattr(client, 'added_view'):
         client.add_view(LogButtonsView())
         client.add_view(RaidButtonsView())  # Add raid system buttons
+        mythicplus.register_views(client)   # M+ event buttons (survive restarts)
         client.added_view = True
     
     # Sync command tree and start background tasks

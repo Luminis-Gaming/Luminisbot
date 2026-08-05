@@ -19,12 +19,15 @@ _deadline_watcher = None
 
 
 def setup(client, tree):
-    """Register the slash command and persistent view. Call at import time,
-    before tree.sync()."""
+    """Register the slash command. Call at import time, before tree.sync().
+
+    The persistent view is NOT registered here — see register_views(), which
+    must run after the bot has logged in (from on_ready), or button clicks on
+    events created in a previous session silently time out after a restart.
+    """
     import discord
 
     from .ui.modals import CreateMPlusModal
-    from .ui.views import MPlusButtonsView
 
     @tree.command(name="createmplus",
                   description="Create a Mythic+ armor-stacking event with "
@@ -32,8 +35,19 @@ def setup(client, tree):
     async def createmplus_command(interaction: discord.Interaction):
         await interaction.response.send_modal(CreateMPlusModal())
 
+    logger.info("[MPLUS] Mythic+ command registered")
+
+
+def register_views(client):
+    """Register the persistent event-button view so buttons on events from
+    previous sessions keep working after a restart. Call from on_ready.
+
+    The view carries no per-message state (static custom_ids), so this single
+    call reclaims every existing M+ event message at once."""
+    from .ui.views import MPlusButtonsView
+
     client.add_view(MPlusButtonsView())
-    logger.info("[MPLUS] Mythic+ commands and views registered")
+    logger.info("[MPLUS] Persistent event view registered")
 
 
 async def on_reaction_add(client, payload):
