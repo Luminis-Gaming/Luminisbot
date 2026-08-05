@@ -44,6 +44,11 @@ class MPlusButtonsView(View):
     async def signup_button(self, interaction: discord.Interaction, button: Button):
         await handle_signup_click(interaction)
 
+    @discord.ui.button(label="Cancel Signup", style=discord.ButtonStyle.secondary,
+                       custom_id="mplus:cancel", emoji="🚫", row=0)
+    async def cancel_signup_button(self, interaction: discord.Interaction, button: Button):
+        await handle_cancel_signup_click(interaction)
+
     @discord.ui.button(label="My Signups", style=discord.ButtonStyle.secondary,
                        custom_id="mplus:mysignups", emoji="📋", row=0)
     async def mysignups_button(self, interaction: discord.Interaction, button: Button):
@@ -118,33 +123,37 @@ async def handle_signup_click(interaction: discord.Interaction):
         view=view, ephemeral=True)
 
 
+async def _send_finalized_withdrawal_options(interaction, event, discord_id):
+    """After finalization, removing raw signup rows would silently break the
+    roster — offer the proper cancel-my-spot / reserve-withdrawal flow."""
+    slot = db.get_member_slot(event['id'], discord_id)
+    if slot:
+        await interaction.response.send_message(
+            f"You're rostered in **Group {slot['group_number']}** as "
+            f"**{slot['assigned_role']}** on "
+            f"**{slot['character_name']}-{slot['realm_slug']}**.\n\n"
+            f"Cancel your spot? The best-fitting reserve is promoted "
+            f"automatically and the group gets notified.",
+            view=CancelSpotView(event['id']), ephemeral=True)
+    elif db.is_alternate(event['id'], discord_id):
+        await interaction.response.send_message(
+            "You're on the **reserve list** for this event.\n\n"
+            "Withdraw completely? You won't be considered if a spot "
+            "opens up.",
+            view=WithdrawReserveView(event['id']), ephemeral=True)
+    else:
+        await interaction.response.send_message(
+            "You have no spot or signups in this event.", ephemeral=True)
+
+
 async def handle_my_signups_click(interaction: discord.Interaction):
     event = await _get_open_event(interaction)
     if not event:
         return
     discord_id = str(interaction.user.id)
 
-    # After finalization, removing signup rows would silently break the
-    # roster — offer the proper cancel-my-spot flow instead
     if event['status'] == STATUS_FINALIZED:
-        slot = db.get_member_slot(event['id'], discord_id)
-        if slot:
-            await interaction.response.send_message(
-                f"You're rostered in **Group {slot['group_number']}** as "
-                f"**{slot['assigned_role']}** on "
-                f"**{slot['character_name']}-{slot['realm_slug']}**.\n\n"
-                f"Cancel your spot? The best-fitting reserve is promoted "
-                f"automatically and the group gets notified.",
-                view=CancelSpotView(event['id']), ephemeral=True)
-        elif db.is_alternate(event['id'], discord_id):
-            await interaction.response.send_message(
-                "You're on the **reserve list** for this event.\n\n"
-                "Withdraw completely? You won't be considered if a spot "
-                "opens up.",
-                view=WithdrawReserveView(event['id']), ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                "You have no spot or signups in this event.", ephemeral=True)
+        await _send_finalized_withdrawal_options(interaction, event, discord_id)
         return
 
     rows = db.get_user_signups(event['id'], discord_id)
@@ -159,6 +168,35 @@ async def handle_my_signups_click(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"📋 Your signups:\n{summary}\n\nSelect one to remove it:",
         view=view, ephemeral=True)
+
+
+async def handle_cancel_signup_click(interaction: discord.Interaction):
+    event = await _get_open_event(interaction)
+    if not event:
+        return
+    discord_id = str(interaction.user.id)
+
+    # Once groups are formed, cancelling has to go through the roster/reserve
+    # flow so promotions and notifications fire correctly.
+    if event['status'] == STATUS_FINALIZED:
+        await _send_finalized_withdrawal_options(interaction, event, discord_id)
+        return
+
+    rows = db.get_user_signups(event['id'], discord_id)
+    if not rows:
+        await interaction.response.send_message(
+            "You haven't signed up for this event yet — nothing to cancel.",
+            ephemeral=True)
+        return
+    summary = "\n".join(
+        f"• **{r['character_name']}-{r['realm_slug']}** — "
+        f"{r['spec'] or ''} ({r['role']})"
+        for r in rows)
+    await interaction.response.send_message(
+        f"You're signed up with:\n{summary}\n\n"
+        f"Cancel your signup and remove **all** of these characters from "
+        f"this event?",
+        view=CancelSignupView(event['id']), ephemeral=True)
 
 
 async def handle_grace_click(interaction: discord.Interaction):
@@ -382,6 +420,32 @@ class MySignupsSelect(Select):
         from ..service import refresh_event_message
         asyncio.create_task(refresh_event_message(interaction.client, self.event_id))
         await interaction.response.edit_message(content=content, view=None)
+
+
+class CancelSignupView(View):
+    """Confirm cancelling a signup on an open event — removes every character
+    the user offered, so the signup no longer feels permanent."""
+
+    def __init__(self, event_id):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+
+    @discord.ui.button(label="Yes, cancel my signup",
+                       style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: Button):
+        db.remove_all_signups(self.event_id, str(interaction.user.id))
+        from ..service import refresh_event_message
+        asyncio.create_task(
+            refresh_event_message(interaction.client, self.event_id))
+        await interaction.response.edit_message(
+            content="🚫 Your signup is cancelled — all your characters were "
+                    "removed from this event.", view=None)
+
+    @discord.ui.button(label="Keep my signup",
+                       style=discord.ButtonStyle.secondary)
+    async def abort(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(
+            content="👍 Your signup is unchanged.", view=None)
 
 
 # ============================================================================

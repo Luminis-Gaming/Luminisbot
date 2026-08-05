@@ -36,6 +36,19 @@ def setup(client, tree):
     logger.info("[MPLUS] Mythic+ commands and views registered")
 
 
+async def on_reaction_add(client, payload):
+    """Forward a raw reaction-add to the M+ reaction-signup handler.
+    Call from the bot's on_raw_reaction_add alongside the raid handler."""
+    from . import reactions
+    await reactions.handle_reaction_add(client, payload)
+
+
+async def on_reaction_remove(client, payload):
+    """Forward a raw reaction-remove to the M+ reaction-signup handler."""
+    from . import reactions
+    await reactions.handle_reaction_remove(client, payload)
+
+
 def start_tasks(client):
     """Start the deadline watcher. Call from on_ready (needs an event loop)."""
     global _deadline_watcher

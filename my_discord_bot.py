@@ -363,6 +363,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         if payload.emoji.name != '✅':
             return
 
+        # M+ reaction-signup (Stonasloth opts out of buttons). Harmless for
+        # non-M+ messages; the handler checks the message itself.
+        await mythicplus.on_reaction_add(client, payload)
+
         # Find raid event associated with this message
         event = get_raid_event(int(payload.message_id))
         if not event:
@@ -394,6 +398,9 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
             return
         if payload.emoji.name != '✅':
             return
+
+        # M+ reaction-signup cancel (mirror of the add handler above).
+        await mythicplus.on_reaction_remove(client, payload)
 
         event = get_raid_event(int(payload.message_id))
         if not event:

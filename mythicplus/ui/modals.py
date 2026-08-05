@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_key_range(value: str):
-    """Parse "8-12", "+8-+12", "8 – 12", or a single "10" into (min, max)."""
+    """Parse "8-12", "+8-+12", "8 – 12", or a single "10"/"0" into (min, max)."""
     cleaned = value.replace('+', '').replace('–', '-').replace(' ', '')
     if '-' in cleaned:
         low, high = cleaned.split('-', 1)
@@ -28,8 +28,11 @@ def parse_key_range(value: str):
         raise ValueError("Key range must look like 8-12 (or a single level like 10)")
     if key_min > key_max:
         key_min, key_max = key_max, key_min
-    if not (2 <= key_min <= 40 and 2 <= key_max <= 40):
-        raise ValueError("Key levels must be between +2 and +40")
+    # Valid levels are Mythic 0 or +2 through +40 — there is no +1 key.
+    def _valid(level):
+        return level == 0 or 2 <= level <= 40
+    if not (_valid(key_min) and _valid(key_max)):
+        raise ValueError("Key levels must be 0 (Mythic 0) or between +2 and +40")
     return key_min, key_max
 
 
@@ -58,7 +61,7 @@ class CreateMPlusModal(discord.ui.Modal, title="Create Mythic+ Event"):
 
         self.key_range_input = discord.ui.TextInput(
             label="Key level range",
-            placeholder="e.g., 8-12",
+            placeholder="e.g., 8-12, or 0 for Mythic 0",
             max_length=10, required=True)
         self.add_item(self.key_range_input)
 
