@@ -1768,6 +1768,10 @@ class CharacterSelectDropdown(Select):
             conn.close()
             
             if event_data:
+                # Grant the raid team role if this event lives in a team channel
+                from team_roles import grant_team_role
+                await grant_team_role(interaction.guild, interaction.user, event_data['channel_id'])
+
                 channel = interaction.guild.get_channel(event_data['channel_id'])
                 if channel:
                     try:
@@ -3346,6 +3350,10 @@ async def finalize_signup(interaction: discord.Interaction, event_id: int, chara
     conn.close()
     
     if event_data:
+        # Grant the raid team role if this event lives in a team channel
+        from team_roles import grant_team_role
+        await grant_team_role(interaction.guild, interaction.user, event_data['channel_id'])
+
         # Fetch the message and update it
         channel = interaction.guild.get_channel(event_data['channel_id'])
         if channel:

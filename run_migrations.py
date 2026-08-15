@@ -648,6 +648,15 @@ def run_migrations():
 
         logger.info("[MIGRATIONS] ✓ mythicplus tables ready")
 
+        # ============================================================================
+        # RAID TEAM ROLES (schema lives in team_roles.py)
+        # ============================================================================
+
+        from team_roles import ensure_schema as ensure_team_roles_schema
+        ensure_team_roles_schema(cursor)
+
+        logger.info("[MIGRATIONS] ✓ team_role_members table ready")
+
         conn.commit()
         cursor.close()
         conn.close()

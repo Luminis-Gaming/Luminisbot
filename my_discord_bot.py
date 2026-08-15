@@ -38,6 +38,9 @@ from raid_system import (
     get_pending_reminders, mark_reminder_sent
 )
 
+# --- Import raid team roles ---
+from team_roles import grant_team_role, sweep_expired_team_roles
+
 # --- Load All Secrets from Environment ---
 load_dotenv()
 BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
@@ -216,6 +219,13 @@ async def cleanup_old_raid_events():
     print("[TASK] Raid event cleanup completed.")
 
 
+@tasks.loop(hours=24)
+async def cleanup_inactive_team_roles():
+    """Remove raid team roles from players inactive in that team's channel."""
+    print("[TASK] Sweeping inactive raid team roles...")
+    await sweep_expired_team_roles(client)
+
+
 @tasks.loop(minutes=1)
 async def update_started_events():
     """Update raid events that have recently started."""
@@ -324,6 +334,8 @@ async def on_ready():
         check_for_new_logs.start()
     if not cleanup_old_raid_events.is_running():
         cleanup_old_raid_events.start()
+    if not cleanup_inactive_team_roles.is_running():
+        cleanup_inactive_team_roles.start()
     if not update_started_events.is_running():
         update_started_events.start()
     if not close_expired_signups.is_running():
@@ -387,6 +399,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
         # Add reservation and refresh message
         add_raid_reservation(event['id'], discord_id)
+
+        # Reserving counts as signing up for the team role
+        guild = client.get_guild(payload.guild_id) if payload.guild_id else None
+        if guild:
+            await grant_team_role(guild, payload.member or discord_id, event['channel_id'])
+
         await refresh_event_embed(client, event['id'])
     except Exception as e:
         print(f"[RESERVE] Error handling reaction add: {e}")
