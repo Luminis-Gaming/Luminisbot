@@ -123,7 +123,8 @@ async def handle_mplus_manage_page(request):
         raise web.HTTPFound('/admin/login')
 
     from .. import db
-    from ..constants import STATUS_OPEN, format_key_range
+    from ..constants import (GROUP_SIZE, STATUS_OPEN, format_key_range,
+                             format_roles)
 
     event_id = int(request.match_info['event_id'])
     event = db.get_event(event_id)
@@ -192,9 +193,13 @@ async def handle_mplus_manage_page(request):
                         <td>{html.escape(m['armor_type'])}</td>
                         <td class="actions">{actions}</td>
                     </tr>""")
+            short = (f" &nbsp;<em>best effort — needs "
+                     f"{html.escape(format_roles(g['missing_roles']))}</em>"
+                     if g['missing_roles'] else '')
             cards.append(f"""
                 <div class="group-card">
-                    <h2>Group {g['group_number']} — {html.escape(g['armor_type'] or 'mixed')}</h2>
+                    <h2>Group {g['group_number']} — {html.escape(g['armor_type'] or 'mixed')}
+                        ({len(g['members'])}/{GROUP_SIZE}){short}</h2>
                     <table>{''.join(member_rows)}</table>
                 </div>""")
 

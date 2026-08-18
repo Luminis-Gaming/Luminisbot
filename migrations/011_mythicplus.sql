@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS mplus_groups (
     UNIQUE(event_id, group_number)
 );
 
+-- A group normally holds 5 members (1T/1H/3D). Fewer means a best-effort
+-- ("LFG") group: formed from leftovers when the scarce roles ran out, or
+-- left short by a withdrawal no reserve could cover. Readers detect it by
+-- counting members — there is no separate flag.
 CREATE TABLE IF NOT EXISTS mplus_group_members (
     group_id INTEGER NOT NULL REFERENCES mplus_groups(id) ON DELETE CASCADE,
     signup_id INTEGER NOT NULL REFERENCES mplus_signups(id) ON DELETE CASCADE,

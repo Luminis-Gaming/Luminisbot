@@ -35,9 +35,19 @@ ARMOR_EMOJIS = {
 
 ROLES = ['tank', 'healer', 'dps']
 
+# How roles read in player-facing text ("still needs a tank", "not enough DPS")
+ROLE_LABELS = {'tank': 'tank', 'healer': 'healer', 'dps': 'DPS'}
+ROLE_PLURALS = {'tank': 'tanks', 'healer': 'healers', 'dps': 'DPS'}
+
 # A full M+ group composition
 GROUP_ROLES = ['tank', 'healer', 'dps', 'dps', 'dps']
 GROUP_SIZE = 5
+
+# Best-effort ("LFG") groups: tanks are the scarce role, so once no more full
+# groups can be formed the leftovers are packed into 4-person groups that are
+# short exactly one role and told to find that last player in the in-game
+# group finder — far better than benching them all.
+PARTIAL_GROUP_SIZE = 4
 
 EVENT_TYPE_ARMOR_STACKING = 'armor_stacking'
 
@@ -53,6 +63,26 @@ ALT_REASON_COMPOSITION = 'composition'  # no group needed their armor/role
 
 # If the creator leaves the deadline blank, signups close this long before start
 DEFAULT_DEADLINE_HOURS_BEFORE = 2
+
+
+def missing_group_roles(assigned_roles) -> list:
+    """Which of the 1T/1H/3D roles a group still needs, as a list."""
+    remaining = list(GROUP_ROLES)
+    for role in assigned_roles:
+        if role in remaining:
+            remaining.remove(role)
+    return remaining
+
+
+def format_roles(roles, plural=False) -> str:
+    """Human list of roles: "tank", "tank and healer", "healer, DPS and DPS"."""
+    labels = ROLE_PLURALS if plural else ROLE_LABELS
+    names = [labels.get(role, role) for role in roles]
+    if not names:
+        return ''
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def armor_for_class(character_class: str) -> str:
