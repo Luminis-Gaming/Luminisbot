@@ -4476,8 +4476,10 @@ async def handle_event_manage_page(request):
             'discord_display_name': r.get('discord_display_name') or r.get('discord_username') or r['discord_id'],
         } for r in reservations])
         
-        event_date = event['event_date'].strftime('%Y-%m-%d') if event['event_date'] else 'N/A'
-        event_time = event['event_time'].strftime('%H:%M') if event['event_time'] else 'N/A'
+        event_date = event['event_date'].strftime('%Y-%m-%d') if event['event_date'] else ''
+        event_time = event['event_time'].strftime('%H:%M') if event['event_time'] else ''
+
+        from raid_system import DEFAULT_TIMEZONE
         class_colors_json = json.dumps(WEB_CLASS_COLORS)
         class_order_json = json.dumps(WEB_CLASS_ORDER)
         
@@ -4499,7 +4501,38 @@ async def handle_event_manage_page(request):
                 }}
                 .event-header h1 {{ margin: 0; }}
                 .event-meta {{ color: rgba(255,255,255,0.7); font-size: 16px; }}
-                
+
+                /* Schedule editor */
+                .schedule-editor {{
+                    display: flex;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                    margin-top: 10px;
+                }}
+                .schedule-editor input[type="date"],
+                .schedule-editor input[type="time"] {{
+                    width: auto;
+                    padding: 8px 12px;
+                    margin-bottom: 0;
+                    font-size: 15px;
+                    border: 2px solid rgba(255,255,255,0.2);
+                    border-radius: 8px;
+                    background: rgba(255,255,255,0.1);
+                    color: #fff;
+                    color-scheme: dark;
+                }}
+                .schedule-editor.has-changes input[type="date"],
+                .schedule-editor.has-changes input[type="time"] {{
+                    border-color: #f97316;
+                }}
+                .schedule-hint {{
+                    color: rgba(255,255,255,0.45);
+                    font-size: 12px;
+                    margin-top: 6px;
+                }}
+                .schedule-status {{ font-size: 13px; }}
+
                 .save-bar {{
                     position: sticky;
                     top: 0;
@@ -4690,8 +4723,18 @@ async def handle_event_manage_page(request):
                     <div>
                         <h1>✏️ Manage Event</h1>
                         <div class="event-meta">
-                            <strong>{event['title']}</strong> &mdash; 📅 {event_date} at {event_time}
+                            <strong>{event['title']}</strong>
                         </div>
+                        <div class="schedule-editor" id="scheduleEditor">
+                            <span>📅</span>
+                            <input type="date" id="eventDate" value="{event_date}" oninput="updateScheduleState()">
+                            <span>🕐</span>
+                            <input type="time" id="eventTime" value="{event_time}" oninput="updateScheduleState()">
+                            <button class="btn btn-primary btn-sm" id="scheduleBtn" onclick="saveSchedule()" disabled style="opacity:0.5">💾 Update Time</button>
+                            <button class="btn btn-secondary btn-sm" id="scheduleResetBtn" onclick="resetSchedule()" style="display:none">↩️ Reset</button>
+                            <span class="schedule-status" id="scheduleStatus"></span>
+                        </div>
+                        <div class="schedule-hint">Times are in {DEFAULT_TIMEZONE}. Saving updates the Discord message (date &amp; countdown) and shifts any reminders and the signup deadline by the same amount.</div>
                     </div>
                     <a href="/admin/events" class="btn btn-secondary">← Back to Events</a>
                 </div>
@@ -4758,8 +4801,83 @@ async def handle_event_manage_page(request):
                 const originalSignups = JSON.parse(JSON.stringify(signups));
                 let hasChanges = false;
                 
+                // ---- Schedule editing ----
+
+                let originalDate = document.getElementById('eventDate').value;
+                let originalTime = document.getElementById('eventTime').value;
+                let scheduleChanged = false;
+
+                function updateScheduleState() {{
+                    const dateInput = document.getElementById('eventDate');
+                    const timeInput = document.getElementById('eventTime');
+                    const editor = document.getElementById('scheduleEditor');
+                    const btn = document.getElementById('scheduleBtn');
+                    const resetBtn = document.getElementById('scheduleResetBtn');
+
+                    scheduleChanged = (dateInput.value !== originalDate || timeInput.value !== originalTime);
+                    const valid = dateInput.value !== '' && timeInput.value !== '';
+
+                    if (scheduleChanged) {{
+                        editor.classList.add('has-changes');
+                        resetBtn.style.display = 'inline-block';
+                    }} else {{
+                        editor.classList.remove('has-changes');
+                        resetBtn.style.display = 'none';
+                        document.getElementById('scheduleStatus').textContent = '';
+                    }}
+
+                    btn.disabled = !(scheduleChanged && valid);
+                    btn.style.opacity = btn.disabled ? '0.5' : '1';
+                }}
+
+                function resetSchedule() {{
+                    document.getElementById('eventDate').value = originalDate;
+                    document.getElementById('eventTime').value = originalTime;
+                    updateScheduleState();
+                }}
+
+                async function saveSchedule() {{
+                    const dateInput = document.getElementById('eventDate');
+                    const timeInput = document.getElementById('eventTime');
+                    const btn = document.getElementById('scheduleBtn');
+                    const status = document.getElementById('scheduleStatus');
+
+                    if (!scheduleChanged || !dateInput.value || !timeInput.value) return;
+
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    status.style.color = 'rgba(255,255,255,0.6)';
+                    status.textContent = '⏳ Saving...';
+
+                    try {{
+                        const resp = await fetch('/admin/api/events/' + EVENT_ID + '/schedule', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ event_date: dateInput.value, event_time: timeInput.value }})
+                        }});
+                        const result = await resp.json();
+
+                        if (result.success) {{
+                            originalDate = dateInput.value;
+                            originalTime = timeInput.value;
+                            updateScheduleState();
+                            status.style.color = '#22c55e';
+                            status.textContent = '✅ ' + (result.message || 'Time updated');
+                            setTimeout(() => {{ if (!scheduleChanged) status.textContent = ''; }}, 5000);
+                        }} else {{
+                            status.style.color = '#ef4444';
+                            status.textContent = '❌ ' + (result.error || 'Unknown error');
+                            updateScheduleState();
+                        }}
+                    }} catch (err) {{
+                        status.style.color = '#ef4444';
+                        status.textContent = '❌ Network error: ' + err.message;
+                        updateScheduleState();
+                    }}
+                }}
+
                 // ---- Rendering ----
-                
+
                 function renderAll() {{
                     renderRoster();
                     renderStatusColumn('late');
@@ -5037,7 +5155,7 @@ async def handle_event_manage_page(request):
                 
                 // Warn before leaving with unsaved changes
                 window.addEventListener('beforeunload', (e) => {{
-                    if (hasChanges) {{
+                    if (hasChanges || scheduleChanged) {{
                         e.preventDefault();
                         e.returnValue = '';
                     }}
@@ -5120,6 +5238,112 @@ async def handle_event_manage_save(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 
+@require_event_manager
+async def handle_event_schedule_save(request):
+    """POST /admin/api/events/{event_id}/schedule - change the date/time of a raid event"""
+    import json
+    from zoneinfo import ZoneInfo
+    from raid_system import DEFAULT_TIMEZONE
+
+    session = request['session']
+    event_id = request.match_info.get('event_id')
+
+    try:
+        data = await request.json()
+        date_str = (data.get('event_date') or '').strip()
+        time_str = (data.get('event_time') or '').strip()
+
+        try:
+            new_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return web.json_response({'success': False, 'error': 'Invalid date (expected YYYY-MM-DD)'}, status=400)
+
+        try:
+            # <input type="time"> sends HH:MM, but can send HH:MM:SS in some browsers
+            time_fmt = '%H:%M:%S' if time_str.count(':') == 2 else '%H:%M'
+            new_time = datetime.strptime(time_str, time_fmt).time()
+        except ValueError:
+            return web.json_response({'success': False, 'error': 'Invalid time (expected HH:MM)'}, status=400)
+
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        cursor.execute("""
+            SELECT id, title, event_date, event_time, signup_deadline
+            FROM raid_events WHERE id = %s
+        """, (event_id,))
+        event = cursor.fetchone()
+
+        if not event:
+            cursor.close()
+            conn.close()
+            return web.json_response({'success': False, 'error': 'Event not found'}, status=404)
+
+        if event['event_date'] == new_date and event['event_time'] == new_time:
+            cursor.close()
+            conn.close()
+            return web.json_response({'success': True, 'message': 'No change'})
+
+        # How far the event moved - reminders and the signup deadline follow along
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
+        old_dt = datetime.combine(event['event_date'], event['event_time'], tzinfo=tz)
+        new_dt = datetime.combine(new_date, new_time, tzinfo=tz)
+        delta = new_dt - old_dt
+
+        cursor.execute("""
+            UPDATE raid_events
+            SET event_date = %s, event_time = %s
+            WHERE id = %s
+        """, (new_date, new_time, event_id))
+
+        # Shift pending reminders so they still fire the same amount of time before the raid
+        cursor.execute("""
+            UPDATE raid_reminders
+            SET reminder_time = reminder_time + %s
+            WHERE event_id = %s AND sent = FALSE
+        """, (delta, event_id))
+        reminders_shifted = cursor.rowcount
+
+        # Keep the signup deadline at the same offset from the event start
+        if event.get('signup_deadline'):
+            cursor.execute("""
+                UPDATE raid_events
+                SET signup_deadline = signup_deadline + %s
+                WHERE id = %s
+            """, (delta, event_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        logger.info(
+            f"[EVENT MANAGER] {session['username']} rescheduled event {event_id} "
+            f"from {old_dt.strftime('%Y-%m-%d %H:%M')} to {new_dt.strftime('%Y-%m-%d %H:%M')} "
+            f"({reminders_shifted} reminders shifted)"
+        )
+
+        # Refresh Discord embed (updates both the date field and the relative countdown)
+        if discord_bot:
+            from raid_system import refresh_event_embed
+            asyncio.create_task(refresh_event_embed(discord_bot, int(event_id)))
+
+        return web.json_response({
+            'success': True,
+            'message': f"Moved to {new_dt.strftime('%Y-%m-%d %H:%M')}",
+            'event_date': new_date.strftime('%Y-%m-%d'),
+            'event_time': new_time.strftime('%H:%M'),
+            'reminders_shifted': reminders_shifted,
+        })
+
+    except json.JSONDecodeError:
+        return web.json_response({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"Error rescheduling event: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+
 # Legacy redirect for old /characters URL
 async def handle_characters_redirect(request):
     """Redirect old /characters URL to new /admin/characters"""
@@ -5162,6 +5386,7 @@ def create_app(bot=None):
     app.router.add_get('/admin/events', handle_events_page)
     app.router.add_get('/admin/events/{event_id}/manage', handle_event_manage_page)
     app.router.add_post('/admin/api/events/{event_id}/manage', handle_event_manage_save)
+    app.router.add_post('/admin/api/events/{event_id}/schedule', handle_event_schedule_save)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
     app.router.add_post('/admin/users/new', handle_new_user)
