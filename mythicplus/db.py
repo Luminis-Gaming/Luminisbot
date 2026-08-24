@@ -11,6 +11,8 @@ import logging
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from .constants import GROUP_SIZE, missing_group_roles
+
 logger = logging.getLogger(__name__)
 
 
@@ -324,14 +326,21 @@ def get_signup_summary(event_id):
 # ============================================================================
 
 def save_roster(event_id, roster, reasons_by_id):
-    """Persist groups + alternates and mark the event finalized. Atomic."""
+    """Persist groups + alternates and mark the event finalized. Atomic.
+
+    Best-effort (partial) groups are stored as ordinary groups that simply
+    have fewer than GROUP_SIZE members — no separate table or flag, so every
+    reader can tell them apart by counting. Their members are NOT alternates:
+    they have a group, even if it still needs a fifth player.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM mplus_groups WHERE event_id = %s", (event_id,))
         cursor.execute("DELETE FROM mplus_alternates WHERE event_id = %s", (event_id,))
 
-        for number, group in enumerate(roster.groups, start=1):
+        for number, group in enumerate(roster.groups + roster.partial_groups,
+                                       start=1):
             cursor.execute("""
                 INSERT INTO mplus_groups (event_id, group_number, armor_type)
                 VALUES (%s, %s, %s) RETURNING id
@@ -343,7 +352,7 @@ def save_roster(event_id, roster, reasons_by_id):
                     VALUES (%s, %s, %s)
                 """, (group_id, slot.option.signup_id, slot.role))
 
-        for rank, person in enumerate(roster.benched, start=1):
+        for rank, person in enumerate(roster.reserves(), start=1):
             cursor.execute("""
                 INSERT INTO mplus_alternates (event_id, discord_id, rank, reason)
                 VALUES (%s, %s, %s, %s)
@@ -393,6 +402,12 @@ def get_roster(event_id):
             'armor_type': r['group_armor'],
             'members': [],
         })['members'].append(r)
+    for group in groups.values():
+        # A group short of GROUP_SIZE is a best-effort group looking for the
+        # roles listed here — either formed that way, or left short by a
+        # withdrawal no reserve could cover.
+        group['missing_roles'] = missing_group_roles(
+            m['assigned_role'] for m in group['members'])
     return [groups[n] for n in sorted(groups)]
 
 
@@ -418,7 +433,9 @@ def get_member_slot(event_id, discord_id):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
-        SELECT g.group_number, m.assigned_role, s.character_name, s.realm_slug
+        SELECT g.group_number, m.assigned_role, s.character_name, s.realm_slug,
+               (SELECT COUNT(*) FROM mplus_group_members m2
+                WHERE m2.group_id = g.id) AS member_count
         FROM mplus_group_members m
         JOIN mplus_groups g ON g.id = m.group_id
         JOIN mplus_signups s ON s.id = m.signup_id
@@ -459,26 +476,55 @@ def withdraw_completely(event_id, discord_id):
     return vacated
 
 
-def find_promotion_candidate(event_id, group_number, role):
-    """Best reserve for a vacated slot: same role, preferring the group's
-    armor type, then alternate rank (grace desc, signup order). Returns a
-    dict with discord_id/signup_id/character info, or None."""
+def find_promotion_candidate(event_id, group_number, role,
+                             allow_partial_members=False):
+    """Best replacement for a vacated slot: same role, preferring the group's
+    armor type, then alternate rank (grace desc, signup order).
+
+    Reserves always come first. With allow_partial_members, a member of a
+    best-effort group is an acceptable second choice — a confirmed spot in a
+    complete group beats a group that is still hunting for a fifth. Returns a
+    dict with discord_id/signup_id/character info (plus from_group_number,
+    NULL for reserves), or None.
+    """
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("""
-        SELECT a.discord_id, s.id AS signup_id, s.character_name,
-               s.realm_slug, s.character_class, s.spec, s.armor_type
-        FROM mplus_alternates a
-        JOIN mplus_signups s
-            ON s.event_id = a.event_id
-            AND s.discord_id = a.discord_id
-            AND s.role = %s
-        JOIN mplus_groups g
-            ON g.event_id = a.event_id AND g.group_number = %s
-        WHERE a.event_id = %s
-        ORDER BY (s.armor_type = g.armor_type) DESC, a.rank ASC, s.id ASC
+        WITH target AS (
+            SELECT armor_type FROM mplus_groups
+            WHERE event_id = %(event_id)s AND group_number = %(group_number)s
+        ), candidates AS (
+            SELECT a.discord_id, s.id AS signup_id, s.character_name,
+                   s.realm_slug, s.character_class, s.spec, s.armor_type,
+                   0 AS source, a.rank AS priority,
+                   NULL::INTEGER AS from_group_number
+            FROM mplus_alternates a
+            JOIN mplus_signups s
+                ON s.event_id = a.event_id
+                AND s.discord_id = a.discord_id
+                AND s.role = %(role)s
+            WHERE a.event_id = %(event_id)s
+            UNION ALL
+            SELECT s.discord_id, s.id, s.character_name,
+                   s.realm_slug, s.character_class, s.spec, s.armor_type,
+                   1, g.group_number, g.group_number
+            FROM mplus_group_members m
+            JOIN mplus_groups g ON g.id = m.group_id
+            JOIN mplus_signups s ON s.id = m.signup_id
+            WHERE %(allow_partial)s
+              AND g.event_id = %(event_id)s
+              AND g.group_number <> %(group_number)s
+              AND m.assigned_role = %(role)s
+              AND (SELECT COUNT(*) FROM mplus_group_members m2
+                   WHERE m2.group_id = g.id) < %(group_size)s
+        )
+        SELECT c.* FROM candidates c CROSS JOIN target t
+        ORDER BY c.source ASC, (c.armor_type = t.armor_type) DESC,
+                 c.priority ASC, c.signup_id ASC
         LIMIT 1
-    """, (role, group_number, event_id))
+    """, {'event_id': event_id, 'group_number': group_number, 'role': role,
+          'allow_partial': bool(allow_partial_members),
+          'group_size': GROUP_SIZE})
     row = cursor.fetchone()
     cursor.close()
     conn.close()
@@ -581,6 +627,12 @@ def move_group_member(event_id, signup_id, target_group_number):
             return "That player is already in the target group with another character."
 
         cursor.execute("""
+            SELECT COUNT(*) FROM mplus_group_members WHERE group_id = %s
+        """, (target_id,))
+        if cursor.fetchone()[0] >= GROUP_SIZE:
+            return f"Group {target_group_number} is already full."
+
+        cursor.execute("""
             UPDATE mplus_group_members SET group_id = %s WHERE signup_id = %s
         """, (target_id, signup_id))
         conn.commit()
@@ -622,7 +674,11 @@ def remove_group_member(event_id, signup_id):
 
 def promote_alternate(event_id, signup_id, target_group_number):
     """Put a reserve into a group using one of their signed characters.
-    Returns error text or None."""
+
+    A player who is only in a best-effort group may be promoted out of it
+    into a group that needs them; they are removed from the old one first.
+    Returns error text or None.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -635,18 +691,39 @@ def promote_alternate(event_id, signup_id, target_group_number):
             return "Unknown signup."
         discord_id, role = row
 
+        target_id = _group_id_for_number(cursor, event_id, target_group_number)
+        if target_id is None:
+            return f"Group {target_group_number} does not exist."
+
         cursor.execute("""
-            SELECT 1 FROM mplus_group_members m
+            SELECT m.group_id, g.group_number,
+                   (SELECT COUNT(*) FROM mplus_group_members m2
+                    WHERE m2.group_id = g.id) AS member_count
+            FROM mplus_group_members m
             JOIN mplus_groups g ON g.id = m.group_id
             JOIN mplus_signups s ON s.id = m.signup_id
             WHERE g.event_id = %s AND s.discord_id = %s
         """, (event_id, discord_id))
-        if cursor.fetchone():
-            return "That player is already in a group."
+        current = cursor.fetchone()
+        if current:
+            current_group_id, _, current_count = current
+            if current_group_id == target_id:
+                return "That player is already in that group."
+            if current_count >= GROUP_SIZE:
+                return "That player is already in a complete group."
+            # Only in a best-effort group — vacate it for the real spot
+            cursor.execute("""
+                DELETE FROM mplus_group_members m
+                USING mplus_signups s
+                WHERE s.id = m.signup_id AND m.group_id = %s
+                  AND s.discord_id = %s
+            """, (current_group_id, discord_id))
 
-        target_id = _group_id_for_number(cursor, event_id, target_group_number)
-        if target_id is None:
-            return f"Group {target_group_number} does not exist."
+        cursor.execute("""
+            SELECT COUNT(*) FROM mplus_group_members WHERE group_id = %s
+        """, (target_id,))
+        if cursor.fetchone()[0] >= GROUP_SIZE:
+            return f"Group {target_group_number} is already full."
 
         cursor.execute("""
             INSERT INTO mplus_group_members (group_id, signup_id, assigned_role)

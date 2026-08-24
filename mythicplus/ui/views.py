@@ -15,8 +15,8 @@ from raid_system import (CLASS_EMOJIS, CLASS_SPECS, WOW_MAX_LEVEL,
                          get_user_characters, parse_emoji_for_dropdown)
 
 from .. import db
-from ..constants import (ARMOR_EMOJIS, STATUS_FINALIZED, STATUS_OPEN,
-                         armor_for_class)
+from ..constants import (ARMOR_EMOJIS, GROUP_SIZE, STATUS_FINALIZED,
+                         STATUS_OPEN, armor_for_class)
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +128,10 @@ async def _send_finalized_withdrawal_options(interaction, event, discord_id):
     roster — offer the proper cancel-my-spot / reserve-withdrawal flow."""
     slot = db.get_member_slot(event['id'], discord_id)
     if slot:
+        kind = ("**Group" if slot['member_count'] >= GROUP_SIZE
+                else "the best-effort **Group")
         await interaction.response.send_message(
-            f"You're rostered in **Group {slot['group_number']}** as "
+            f"You're rostered in {kind} {slot['group_number']}** as "
             f"**{slot['assigned_role']}** on "
             f"**{slot['character_name']}-{slot['realm_slug']}**.\n\n"
             f"Cancel your spot? The best-fitting reserve is promoted "
@@ -563,6 +565,27 @@ class AdminPanelView(View):
                      f"design. Clean up with the [TEST] remove button."),
             view=None)
 
+    @discord.ui.button(label="[TEST] Seed 20 signups, 1 tank",
+                       style=discord.ButtonStyle.secondary, emoji="🛡️", row=3)
+    async def seed_tank_shortage(self, interaction: discord.Interaction, button: Button):
+        """Same seeder skewed to a tank shortage, to exercise best-effort
+        (LFG) group formation."""
+        event = db.get_event(self.event_id)
+        if not event or event['status'] != STATUS_OPEN:
+            await interaction.response.edit_message(
+                content="❌ Event must be open to seed test signups.", view=None)
+            return
+        count = _seed_test_signups(self.event_id, tanks=1, healers=4,
+                                   force_dps=True)
+        from ..service import refresh_event_message
+        asyncio.create_task(refresh_event_message(interaction.client, self.event_id))
+        await interaction.response.edit_message(
+            content=(f"🧪 Seeded **{count}** test signups with only **1 tank**. "
+                     f"Close signups to watch one full group form and the "
+                     f"leftovers get packed into best-effort groups that "
+                     f"need a tank from the group finder."),
+            view=None)
+
     @discord.ui.button(label="[TEST] Remove seeded signups",
                        style=discord.ButtonStyle.secondary, emoji="🧹", row=2)
     async def remove_test_data(self, interaction: discord.Interaction, button: Button):
@@ -587,22 +610,29 @@ _TEST_NAMES = ['Aeloria', 'Braxxus', 'Cynderla', 'Drakmor', 'Elunara',
                'Pyrelle', 'Quorath', 'Ravendal', 'Sylvaris', 'Thornwal']
 
 
-def _seed_test_signups(event_id):
+_TEST_USERS = 14
+
+
+def _seed_test_signups(event_id, tanks=3, healers=3, force_dps=False):
     """Insert ~20 fake characters across ~14 fake users. Guarantees a few
-    tanks and healers so full groups can actually form."""
+    tanks and healers so full groups can actually form; lower `tanks` (with
+    force_dps) to reproduce a tank shortage and best-effort groups."""
     import random
 
     tank_classes = [c for c, specs in CLASS_SPECS.items() if 'tank' in specs]
     healer_classes = [c for c, specs in CLASS_SPECS.items() if 'healer' in specs]
     all_classes = list(CLASS_SPECS)
 
-    # (user_number, forced_role_or_None) — 3 tanks + 3 healers guaranteed,
-    # users 12-14 bring two characters each (tests one-person-one-group)
-    plan = [(i, 'tank') for i in range(1, 4)] + \
-           [(i, 'healer') for i in range(4, 7)] + \
-           [(i, None) for i in range(7, 15)] + \
-           [(i, None) for i in range(12, 15)] + \
-           [(i, None) for i in range(7, 10)]
+    # (user_number, forced_role_or_None) — the requested tanks and healers
+    # are guaranteed; the last three users bring two characters each (tests
+    # one-person-one-group)
+    first_dps = 1 + tanks + healers
+    rest = 'dps' if force_dps else None
+    plan = [(i, 'tank') for i in range(1, 1 + tanks)] + \
+           [(i, 'healer') for i in range(1 + tanks, first_dps)] + \
+           [(i, rest) for i in range(first_dps, _TEST_USERS + 1)] + \
+           [(i, rest) for i in range(_TEST_USERS - 2, _TEST_USERS + 1)] + \
+           [(i, rest) for i in range(first_dps, first_dps + 3)]
 
     count = 0
     for user_num, forced_role in plan:
@@ -617,8 +647,11 @@ def _seed_test_signups(event_id):
         pairs = spec_role_options(char_class) or [('', 'dps')]
         if forced_role:
             picks = {random.choice([p for p in pairs if p[1] == forced_role])}
-            if random.random() < 0.5:
-                picks.add(random.choice(pairs))
+            # A second offering makes the flex path realistic — but never a
+            # tank one when we're deliberately seeding a tank shortage
+            extras = [p for p in pairs if not (force_dps and p[1] == 'tank')]
+            if extras and random.random() < 0.5:
+                picks.add(random.choice(extras))
         else:
             picks = set(random.sample(pairs, k=random.randint(1, min(2, len(pairs)))))
 

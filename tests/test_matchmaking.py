@@ -11,7 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mythicplus.constants import (ALT_REASON_COMPOSITION, ALT_REASON_UNLUCKY,
-                                  armor_for_class)
+                                  GROUP_SIZE, PARTIAL_GROUP_SIZE,
+                                  armor_for_class, format_roles)
 from mythicplus.matchmaking import (alternate_reason, build_pool, build_roster,
                                     compute_grace_changes)
 
@@ -180,6 +181,124 @@ class TestSolver(unittest.TestCase):
         ids_a = [[m.signup_id for m in g.members()] for g in roster_a.groups]
         ids_b = [[m.signup_id for m in g.members()] for g in roster_b.groups]
         self.assertEqual(ids_a, ids_b)
+
+
+class TestPartialGroups(unittest.TestCase):
+    """Best-effort groups: nobody sits out just because tanks ran out."""
+
+    def tank_shortage_rows(self, healers=4, dps=15):
+        rows = [row('t1', 'T1', 'Warrior', 'tank')]
+        rows += [row(f'h{i}', f'H{i}', 'Priest' if i % 2 else 'Shaman',
+                     'healer', minutes=i) for i in range(healers)]
+        classes = ['Mage', 'Rogue', 'Hunter', 'Death Knight',
+                   'Warlock', 'Druid', 'Shaman', 'Paladin']
+        rows += [row(f'd{i}', f'D{i}', classes[i % len(classes)], 'dps',
+                     minutes=i) for i in range(dps)]
+        return rows
+
+    def test_leftovers_become_tankless_groups(self):
+        # 20 players, 1 tank: one real group, the rest packed into 4-mans
+        roster, _ = make_roster(self.tank_shortage_rows())
+        self.assertEqual(len(roster.groups), 1)
+        self.assertEqual(len(roster.partial_groups), 3)
+        for group in roster.partial_groups:
+            self.assertEqual(len(group.slots), PARTIAL_GROUP_SIZE)
+            self.assertEqual(group.missing_roles(), ['tank'])
+            self.assertTrue(group.is_partial())
+        # Only the true leftovers stay on the reserve list
+        self.assertEqual(len(roster.reserves()), 3)
+
+    def test_partial_groups_stack_armor_too(self):
+        # 4 mail DPS + 4 cloth DPS + 2 healers and no tank at all: the two
+        # best-effort groups should each stack one armor type
+        rows = [row('h1', 'H1', 'Shaman', 'healer'),
+                row('h2', 'H2', 'Priest', 'healer')]
+        rows += [row(f'm{i}', f'M{i}', 'Hunter', 'dps') for i in range(3)]
+        rows += [row(f'c{i}', f'C{i}', 'Mage', 'dps') for i in range(3)]
+        roster, _ = make_roster(rows)
+        self.assertEqual(roster.groups, [])
+        self.assertEqual(len(roster.partial_groups), 2)
+        self.assertEqual({g.modal_armor() for g in roster.partial_groups},
+                         {'mail', 'cloth'})
+        self.assertEqual([g.armor_score() for g in roster.partial_groups],
+                         [4, 4])
+
+    def test_nobody_is_in_two_groups(self):
+        roster, _ = make_roster(self.tank_shortage_rows())
+        ids = [m.discord_id
+               for g in roster.groups + roster.partial_groups
+               for m in g.members()]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertFalse(roster.placed_ids() & roster.partial_ids())
+
+    def test_leftover_tank_is_used_instead_of_wasted(self):
+        # 2 tanks, 1 healer, 6 dps: one full group, then a 4-man that keeps
+        # the spare tank and only needs a healer
+        rows = [row('t1', 'T1', 'Warrior', 'tank'),
+                row('t2', 'T2', 'Paladin', 'tank'),
+                row('h1', 'H1', 'Paladin', 'healer')]
+        rows += [row(f'd{i}', f'D{i}', 'Death Knight', 'dps') for i in range(6)]
+        roster, _ = make_roster(rows)
+        self.assertEqual(len(roster.groups), 1)
+        self.assertEqual(len(roster.partial_groups), 1)
+        self.assertEqual(roster.partial_groups[0].missing_roles(), ['healer'])
+
+    def test_no_partial_group_when_two_roles_are_missing(self):
+        # 6 DPS, no tank and no healer: a "group" needing two more players
+        # is not a credible ask, so they stay reserves
+        rows = [row(f'u{i}', f'C{i}', 'Mage', 'dps') for i in range(6)]
+        roster, _ = make_roster(rows)
+        self.assertEqual(roster.partial_groups, [])
+        self.assertEqual(len(roster.reserves()), 6)
+
+    def test_partial_members_still_count_as_benched_for_grace(self):
+        # Landing in a best-effort group is not winning a spot: the players
+        # who lost the draw for the real group keep earning their point
+        roster, persons_by_id = make_roster(self.tank_shortage_rows())
+        changes = compute_grace_changes(roster, persons_by_id)
+        self.assertTrue(changes.awards)
+        self.assertFalse(set(changes.awards) & roster.placed_ids())
+        # ...and being in a best-effort group never spends a point
+        self.assertFalse(set(changes.resets) & roster.partial_ids())
+
+    def test_full_groups_are_never_traded_for_partial_ones(self):
+        # 2 tanks/2 healers/6 dps must still be two complete groups
+        rows = [row('t1', 'T1', 'Druid', 'tank'),
+                row('t2', 'T2', 'Demon Hunter', 'tank'),
+                row('h1', 'H1', 'Monk', 'healer'),
+                row('h2', 'H2', 'Druid', 'healer')]
+        rows += [row(f'd{i}', f'D{i}', 'Rogue', 'dps') for i in range(6)]
+        roster, _ = make_roster(rows)
+        self.assertEqual(len(roster.groups), 2)
+        self.assertEqual(roster.partial_groups, [])
+
+    def test_deterministic_for_same_seed(self):
+        rows = self.tank_shortage_rows()
+        a, _ = make_roster(rows, seed=11)
+        b, _ = make_roster(rows, seed=11)
+        self.assertEqual(
+            [[m.signup_id for m in g.members()] for g in a.partial_groups],
+            [[m.signup_id for m in g.members()] for g in b.partial_groups])
+
+    def test_complete_group_reports_no_missing_roles(self):
+        rows = [row('t1', 'T1', 'Warrior', 'tank'),
+                row('h1', 'H1', 'Paladin', 'healer')]
+        rows += [row(f'd{i}', f'D{i}', 'Death Knight', 'dps') for i in range(3)]
+        roster, _ = make_roster(rows)
+        group = roster.groups[0]
+        self.assertEqual(group.missing_roles(), [])
+        self.assertFalse(group.is_partial())
+        self.assertEqual(len(group.slots), GROUP_SIZE)
+
+
+class TestRoleFormatting(unittest.TestCase):
+    def test_labels_read_naturally(self):
+        self.assertEqual(format_roles(['tank']), 'tank')
+        self.assertEqual(format_roles(['dps']), 'DPS')
+        self.assertEqual(format_roles(['dps'], plural=True), 'DPS')
+        self.assertEqual(format_roles(['tank'], plural=True), 'tanks')
+        self.assertEqual(format_roles(['tank', 'healer']), 'tank and healer')
+        self.assertEqual(format_roles([]), '')
 
 
 class TestGraceAndRio(unittest.TestCase):

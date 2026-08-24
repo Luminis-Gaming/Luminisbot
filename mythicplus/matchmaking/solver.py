@@ -2,13 +2,20 @@
 Roster solver: greedy construction seeded by armor buckets + swap-based
 local search, with deterministic randomized restarts.
 
+Runs in two phases. Phase 1 forms as many complete 1T/1H/3D groups as the
+signups allow — that is the roster everything else (grace points, reserves,
+scoring) is defined against. Phase 2 packs whoever is left into best-effort
+4-person groups short exactly one role (usually the tank, the scarce one),
+so a tank shortage sidelines a handful of players instead of fifteen.
+
 Guild scale (5-40 players) keeps this cheap; the same (persons, seed)
 always produces the same roster, which makes the unattended finalize
 pipeline idempotent if it crashes and re-runs.
 """
 import random
 
-from ..constants import ARMOR_TYPES, GROUP_ROLES, GROUP_SIZE
+from ..constants import (ARMOR_TYPES, GROUP_ROLES, GROUP_SIZE,
+                         PARTIAL_GROUP_SIZE)
 from ..models import Group, Roster, Slot
 from .scoring import roster_score
 
@@ -42,7 +49,44 @@ def build_roster(persons, seed=0) -> Roster:
         (p for p in persons if p.discord_id not in placed),
         key=lambda p: (-p.grace_points, p.signup_rank),
     )
-    return Roster(groups=best_groups, benched=benched, seed=seed)
+    partial_groups = _build_partial_groups(
+        {p.discord_id: p for p in benched}, seed)
+    return Roster(groups=best_groups, benched=benched,
+                  partial_groups=partial_groups, seed=seed)
+
+
+def _build_partial_groups(remaining, seed):
+    """Phase 2: pack the leftovers into armor-stacked groups of four.
+
+    Slots are filled in GROUP_ROLES order and roles nobody can cover are
+    skipped, so a four-member result is always short exactly one role — a
+    credible "you only need one more player" ask. Fewer than four means the
+    leftovers can't form anything sensible (e.g. four DPS and no healer),
+    and they stay reserves.
+    """
+    best, best_key = [], (0, 0)
+    for restart in range(RESTARTS):
+        # Own random stream so phase 2 can't perturb phase 1's results
+        rng = random.Random(seed * 7_919 + restart)
+        pool = dict(remaining)
+        groups = []
+        while len(pool) >= PARTIAL_GROUP_SIZE:
+            built = None
+            used_armors = {g.modal_armor() for g in groups}
+            for target_armor in _armor_targets(pool, used_armors, rng):
+                built = _try_build_group(pool, target_armor, rng,
+                                         size=PARTIAL_GROUP_SIZE)
+                if built:
+                    break
+            if not built:
+                break
+            groups.append(built)
+            for member_id in built.member_ids():
+                pool.pop(member_id, None)
+        key = (len(groups), sum(g.armor_score() for g in groups))
+        if key > best_key:
+            best_key, best = key, groups
+    return best
 
 
 def _greedy_build(persons_by_id, target_groups, rng):
@@ -76,10 +120,18 @@ def _armor_targets(remaining, used_armors, rng):
                   key=lambda a: (a in used_armors, -counts[a], rng.random()))
 
 
-def _try_build_group(remaining, target_armor, rng):
+def _try_build_group(remaining, target_armor, rng, size=GROUP_SIZE):
+    """Fill the 1T/1H/3D template greedily, armor first.
+
+    With size < GROUP_SIZE the build is best-effort: roles nobody left can
+    cover are skipped instead of failing the whole group, and filling stops
+    once `size` members are seated.
+    """
     used = set()
     slots = []
     for role in GROUP_ROLES:
+        if len(slots) == size:
+            break
         candidates = []
         for person in remaining.values():
             if person.discord_id in used:
@@ -92,6 +144,8 @@ def _try_build_group(remaining, target_armor, rng):
             option = max(options, key=lambda o: (o.armor_type == target_armor, o.score))
             candidates.append((person, option))
         if not candidates:
+            if size < GROUP_SIZE:
+                continue     # best-effort: leave this role to the LFG tool
             return None
 
         def pick_key(pair):
@@ -115,7 +169,7 @@ def _try_build_group(remaining, target_armor, rng):
         person, option = max(candidates, key=pick_key)
         slots.append(Slot(role, option))
         used.add(person.discord_id)
-    return Group(slots=slots)
+    return Group(slots=slots) if len(slots) == size else None
 
 
 def _local_search(groups, persons_by_id, rng):

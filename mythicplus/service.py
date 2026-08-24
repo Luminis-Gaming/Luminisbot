@@ -8,7 +8,8 @@ import logging
 from psycopg2.extras import RealDictCursor
 
 from . import db
-from .constants import ARMOR_EMOJIS, STATUS_OPEN, format_key_range
+from .constants import (ARMOR_EMOJIS, GROUP_SIZE, STATUS_OPEN, format_roles,
+                        format_key_range)
 from .matchmaking import (alternate_reason, build_pool, build_roster,
                           compute_grace_changes)
 
@@ -130,8 +131,12 @@ async def handle_roster_withdrawal(client, event_id, discord_id):
 
     promoted = None
     if vacated:
+        # A slot in a complete group may be backfilled from a best-effort
+        # group; a best-effort group only draws from the reserve list, so
+        # the two never cannibalise each other.
         candidate = db.find_promotion_candidate(
-            event_id, vacated['group_number'], vacated['assigned_role'])
+            event_id, vacated['group_number'], vacated['assigned_role'],
+            allow_partial_members=vacated['member_count'] >= GROUP_SIZE)
         if candidate:
             error = db.promote_alternate(event_id, candidate['signup_id'],
                                          vacated['group_number'])
@@ -148,9 +153,11 @@ async def handle_roster_withdrawal(client, event_id, discord_id):
         if promoted:
             from .ui.embeds import char_emoji
             emoji = char_emoji(promoted['character_class'], promoted.get('spec'))
+            source = ("your best-effort group"
+                      if promoted.get('from_group_number') else "reserve")
             await _try_dm(client, event, promoted['discord_id'],
                           f"🎉 A spot opened up — you've been **promoted from "
-                          f"reserve** for **{event['title']}**!\n"
+                          f"{source}** for **{event['title']}**!\n"
                           f"You're now in **Group {vacated['group_number']}** "
                           f"as **{vacated['assigned_role']}** playing {emoji} "
                           f"**{promoted['character_name']}-"
@@ -165,17 +172,26 @@ async def _post_withdrawal_note(client, event, vacated, promoted):
             channel = await client.fetch_channel(event['channel_id'])
         char = f"**{vacated['character_name']}-{vacated['realm_slug']}**"
         if promoted:
+            from_group = promoted.get('from_group_number')
+            source = (f"from Group {from_group}" if from_group
+                      else "from reserve")
+            note = (f" Group {from_group} is now a player short and is "
+                    f"looking for one more in the group finder."
+                    if from_group else "")
             await channel.send(
                 f"🔄 {char} cancelled their spot in Group "
                 f"{vacated['group_number']} of **{event['title']}** — "
-                f"<@{promoted['discord_id']}> has been promoted from reserve "
+                f"<@{promoted['discord_id']}> has been promoted {source} "
                 f"as **{vacated['assigned_role']}** on "
-                f"**{promoted['character_name']}-{promoted['realm_slug']}**!")
+                f"**{promoted['character_name']}-{promoted['realm_slug']}**!"
+                f"{note}")
         else:
             await channel.send(
                 f"⚠️ {char} cancelled their spot in **{event['title']}** — "
                 f"Group {vacated['group_number']} now needs a "
-                f"**{vacated['assigned_role']}** and no reserve can fill it.")
+                f"**{vacated['assigned_role']}** and nobody on the reserve "
+                f"list can fill it. The group can pick one up in the in-game "
+                f"group finder.")
     except Exception as e:
         logger.warning(f"[MPLUS] Withdrawal note failed for event "
                        f"{event['id']}: {e}")
@@ -209,7 +225,8 @@ async def finalize_event(client, event_id):
     db.apply_grace_changes(event['guild_id'], event_id, grace_changes)
 
     logger.info(f"[MPLUS] Finalized event {event_id}: {len(roster.groups)} "
-                f"groups, {len(roster.benched)} reserves, "
+                f"groups, {len(roster.partial_groups)} best-effort groups, "
+                f"{len(roster.reserves())} reserves, "
                 f"{len(grace_changes.awards)} grace awards")
 
     await refresh_event_message(client, event_id)
@@ -223,10 +240,10 @@ async def _post_channel_summary(client, event, roster):
         if channel is None:
             channel = await client.fetch_channel(event['channel_id'])
 
-        if not roster.groups:
+        if not roster.groups and not roster.partial_groups:
             await channel.send(
                 f"📋 Signups for **{event['title']}** are closed — not enough "
-                f"players for a full group this time. "
+                f"players for a group this time. "
                 f"({len(roster.benched)} signed up; a group needs a tank, a "
                 f"healer and three DPS.)")
             return
@@ -236,17 +253,24 @@ async def _post_channel_summary(client, event, roster):
         link = (f"https://discord.com/channels/{event['guild_id']}/"
                 f"{event['channel_id']}/{event['message_id']}")
         keys = format_key_range(event['key_level_min'], event['key_level_max'])
-        reserves = (f" • 🪑 {len(roster.benched)} reserve"
-                    f"{'s' if len(roster.benched) != 1 else ''}"
-                    if roster.benched else "")
+        reserve_count = len(roster.reserves())
+        reserves = (f" • 🪑 {reserve_count} reserve"
+                    f"{'s' if reserve_count != 1 else ''}"
+                    if reserve_count else "")
+        # Best-effort groups exist because the scarce roles ran out — say so,
+        # otherwise "4 groups" reads as four ready-to-go teams
+        partial = (f" • 🤝 {len(roster.partial_groups)} best-effort group"
+                   f"{'s' if len(roster.partial_groups) != 1 else ''} "
+                   f"(short one player, find them in the group finder)"
+                   if roster.partial_groups else "")
         mentions = ' '.join(sorted(
             {f"<@{pid}>" for pid in roster.placed_ids()}
             | {f"<@{p.discord_id}>" for p in roster.benched}))
         await channel.send(
             f"📋 **{event['title']}** — groups are set! (🔑 {keys})\n"
-            f"✅ {len(roster.groups)} group"
-            f"{'s' if len(roster.groups) != 1 else ''}{reserves} — check "
-            f"your DMs for your assignment.\n"
+            f"✅ {len(roster.groups)} full group"
+            f"{'s' if len(roster.groups) != 1 else ''}{partial}{reserves} — "
+            f"check your DMs for your assignment.\n"
             f"➡️ Full roster: {link}\n"
             f"{mentions}"[:2000])
     except Exception as e:
@@ -262,23 +286,33 @@ async def _send_result_dms(client, event, roster, reasons, grace_changes):
             member_group[m['discord_id']] = group
 
     for discord_id, group in member_group.items():
-        text = _rostered_dm_text(event, group, discord_id)
+        text = _rostered_dm_text(event, group, discord_id,
+                                 awarded=discord_id in grace_changes.awards)
         await _try_dm(client, event, discord_id, text)
 
+    reserves = roster.reserves()
     benched_names = await _display_names(
-        client, event, [p.discord_id for p in roster.benched])
-    for person in roster.benched:
-        text = _reserve_dm_text(event, person, roster, reasons,
+        client, event, [p.discord_id for p in reserves])
+    for person in reserves:
+        text = _reserve_dm_text(event, person, roster, reserves, reasons,
                                 grace_changes, benched_names)
         await _try_dm(client, event, person.discord_id, text)
 
 
-def _rostered_dm_text(event, group, discord_id):
+def _rostered_dm_text(event, group, discord_id, awarded=False):
     from .ui.embeds import char_emoji
 
     armor = group['armor_type'] or 'mixed'
-    lines = [f"🎉 You're rostered for **{event['title']}** "
-             f"(🔑 {format_key_range(event['key_level_min'], event['key_level_max'])})!",
+    missing = group.get('missing_roles') or []
+    keys = format_key_range(event['key_level_min'], event['key_level_max'])
+    if missing:
+        header = (f"🤝 You're in a **best-effort group** for "
+                  f"**{event['title']}** (🔑 {keys}) — "
+                  f"{len(group['members'])}/{GROUP_SIZE} players, still "
+                  f"looking for a **{format_roles(missing)}**.")
+    else:
+        header = f"🎉 You're rostered for **{event['title']}** (🔑 {keys})!"
+    lines = [header,
              f"\n{ARMOR_EMOJIS.get(armor, '')} **Group "
              f"{group['group_number']} — {armor.capitalize()}**"]
     off_armor = []
@@ -305,10 +339,26 @@ def _rostered_dm_text(event, group, discord_id):
     elif off_armor:
         lines.append("\nℹ️ Not enough same-armor players for a full stack, "
                      "so this group mixes armor types — best effort!")
+
+    if missing:
+        roles = format_roles(missing)
+        lines.append(
+            f"\n🔎 There weren't enough {format_roles(missing, plural=True)} to "
+            f"go around, so rather than benching you we kept you together as "
+            f"a group. Gather up before the start and post in the in-game "
+            f"**Group Finder → Premade Groups** — a listing that already has "
+            f"{len(group['members'])} players and only needs a {roles} fills "
+            f"far quicker than looking on your own.")
+        if awarded:
+            lines.append(
+                "🎟️ You've also been given a **priority point** for missing "
+                "out on a full group — you'll be picked ahead of "
+                "otherwise-equal players next event.")
     return "\n".join(lines)
 
 
-def _reserve_dm_text(event, person, roster, reasons, grace_changes, names):
+def _reserve_dm_text(event, person, roster, reserves, reasons, grace_changes,
+                     names):
     from .constants import ALT_REASON_UNLUCKY
     lines = [f"🪑 You're on the **reserve list** for **{event['title']}**."]
 
@@ -326,9 +376,13 @@ def _reserve_dm_text(event, person, roster, reasons, grace_changes, names):
             "time — the groups are stacked by armor type for trade loot, and "
             "the slots your characters cover were already filled by "
             "same-armor players.")
+        if roster.partial_groups:
+            lines.append(
+                "There weren't enough players left over to build another "
+                "best-effort group around you either.")
 
     others = []
-    for p in roster.benched:
+    for p in reserves:
         if p.discord_id == person.discord_id:
             continue
         chars = sorted({o.character_name for o in p.options})

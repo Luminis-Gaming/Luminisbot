@@ -10,8 +10,9 @@ from raid_system import (CLASS_EMOJIS, DEFAULT_TIMEZONE, get_spec_emoji,
                          text_to_emoji_letters)
 
 from .. import db
-from ..constants import (ARMOR_EMOJIS, ARMOR_TYPES, STATUS_CANCELLED,
-                         STATUS_FINALIZED, STATUS_OPEN, format_key_range)
+from ..constants import (ARMOR_EMOJIS, ARMOR_TYPES, GROUP_SIZE,
+                         STATUS_CANCELLED, STATUS_FINALIZED, STATUS_OPEN,
+                         format_key_range, format_roles)
 
 
 def char_emoji(character_class, spec):
@@ -105,6 +106,8 @@ def _add_roster_fields(embed, event_id):
     groups = db.get_roster(event_id)
     for group in groups:
         armor = group['armor_type'] or 'mixed'
+        missing = group['missing_roles']
+        size = len(group['members'])
         lines = []
         off_armor = 0
         for m in group['members']:
@@ -118,10 +121,16 @@ def _add_roster_fields(embed, event_id):
             lines.append(
                 f"{emoji} **{m['character_name']}-{m['realm_name']}** "
                 f"({m['assigned_role'].capitalize()}{marker}) — <@{m['discord_id']}>")
-        name = (f"{ARMOR_EMOJIS.get(armor, '')} Group {group['group_number']}"
-                f" — {armor.capitalize()}")
-        if off_armor:
-            name += f" ({5 - off_armor}/5 stacked)"
+        if missing:
+            # Short of a full team — the group finds the last player itself
+            lines.append(f"🔎 **Needs a {format_roles(missing)}** — grab one "
+                         f"in the in-game group finder!")
+        name = (f"{'🤝' if missing else ARMOR_EMOJIS.get(armor, '')} "
+                f"Group {group['group_number']} — {armor.capitalize()}")
+        if missing:
+            name += f" ({size}/{GROUP_SIZE})"
+        elif off_armor:
+            name += f" ({size - off_armor}/{size} stacked)"
         # Trailing zero-width space renders as a blank line between groups
         embed.add_field(name=name,
                         value="\n".join(lines)[:1000] + "\n​",
