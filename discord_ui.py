@@ -6,8 +6,13 @@ import re
 import time
 import discord
 import aiohttp
-from wcl_api import get_wcl_token, get_fight_details, get_deaths_for_fight
-from wcl_web_scraper import get_all_boss_health_for_report, get_boss_health_for_wipe
+from wcl_api import (
+    get_wcl_token,
+    get_fight_details,
+    get_deaths_for_fight,
+    get_all_boss_health_for_report,
+    get_boss_health_for_wipe,
+)
 from raid_system import SPEC_EMOJIS
 
 # --- Helper functions for formatting ---
@@ -133,24 +138,22 @@ def _parse_ranking_data(ranking_data, fight_details=None):
     """Parse WCL ranking data and extract player parse data and roles."""
     parses = {}
     player_roles = {}
-    
-    # First priority: Check for scraped web data
-    if fight_details and 'scraped_parses' in fight_details:
-        scraped_data = fight_details['scraped_parses']
-        for player_name, player_data in scraped_data.items():
-            parses[player_name] = player_data
-        return parses, player_roles
-    
-    # Fallback: Try to parse GraphQL ranking data
+
+    # First priority: GraphQL ranking data (also gives us roles)
     ranking_list = _find_ranking_list(ranking_data)
-    
+
     if ranking_list and len(ranking_list) > 0:
         ranking_record = ranking_list[0]
         if isinstance(ranking_record, dict) and 'roles' in ranking_record:
             roles = ranking_record['roles']
             for role_name, role_data in roles.items():
                 _process_role_data(role_name, role_data, parses, player_roles)
-    
+
+    # Fallback: scraped web data (only carries percentages, no roles)
+    if not parses and fight_details and fight_details.get('scraped_parses'):
+        for player_name, player_data in fight_details['scraped_parses'].items():
+            parses[player_name] = player_data
+
     return parses, player_roles
 
 def _process_role_data(role_name, role_data, parses, player_roles):
@@ -741,7 +744,7 @@ class FightSelect(discord.ui.Select):
     @staticmethod
     async def create_with_boss_health(fights, report_code, metric, session, token):
         """Create a FightSelect with boss health data for wipes."""
-        boss_health_data = await get_all_boss_health_for_report(session, report_code)
+        boss_health_data = await get_all_boss_health_for_report(session, token, report_code)
         return FightSelect(fights, report_code, metric, boss_health_data)
 
     async def callback(self, interaction: discord.Interaction):
