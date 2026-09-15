@@ -15,6 +15,43 @@ from wcl_api import (
 )
 
 
+async def probe_ranking_variants(session, token, report_code, fight_id, metric):
+    """Try every combination of rankings() args to see if any of them return wipe data."""
+    player_metric = "dps" if metric == "dps" else "hps"
+    variants = [
+        "compare: Parses",
+        "compare: Rankings",
+        "timeframe: Historical",
+        "timeframe: Today",
+        "compare: Parses, timeframe: Historical",
+    ]
+    headers = {'Authorization': f'Bearer {token}'}
+    url = "https://www.warcraftlogs.com/api/v2/client"
+
+    for extra in variants:
+        query = f"""
+        query($reportCode: String!, $fightIDs: [Int]!, $playerMetric: ReportRankingMetricType!) {{
+          reportData {{
+            report(code: $reportCode) {{
+              rankings(fightIDs: $fightIDs, playerMetric: $playerMetric, {extra})
+            }}
+          }}
+        }}
+        """
+        variables = {"reportCode": report_code, "fightIDs": [fight_id], "playerMetric": player_metric}
+        async with session.post(url, json={'query': query, 'variables': variables}, headers=headers) as resp:
+            body = await resp.json()
+        if 'errors' in body:
+            print(f"  [{extra}] -> GraphQL error: {body['errors'][0].get('message')}")
+            continue
+        rankings = body.get('data', {}).get('reportData', {}).get('report', {}).get('rankings')
+        ranked = rankings.get('data') if isinstance(rankings, dict) else rankings
+        count = len(ranked) if isinstance(ranked, list) else 0
+        print(f"  [{extra}] -> {count} entries")
+        if count:
+            print(f"      raw: {json.dumps(ranked[0])[:600]}")
+
+
 async def main():
     if len(sys.argv) < 3:
         print("Usage: python test_wcl_rankings.py <report_code> <fight_id> [dps|hps]")
@@ -47,8 +84,9 @@ async def main():
         rankings = details.get('rankings')
         ranked = rankings.get('data') if isinstance(rankings, dict) else rankings
         if not ranked:
-            print("  rankings empty (expected for a wipe or unranked difficulty)")
+            print("  rankings empty with default args - probing variations for wipe support")
             print(f"  raw rankings: {json.dumps(rankings)[:400]}")
+            await probe_ranking_variants(session, token, report_code, fight_id, metric)
             return
 
         record = ranked[0]

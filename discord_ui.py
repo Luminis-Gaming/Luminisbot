@@ -437,7 +437,7 @@ def create_mobile_friendly_embed(table_data, ranking_data, fight_details, fight_
     """Create a mobile-friendly embed with spec emojis and colored parse indicators."""
     print(f"[DEBUG] Mobile embed - table_data exists: {table_data is not None}")
     print(f"[DEBUG] Mobile embed - table_data entries: {len(table_data.get('entries', [])) if table_data else 0}")
-    print(f"[DEBUG] Mobile embed - ranking_data exists: {ranking_data is not None}")
+    print(f"[DEBUG] Mobile embed - ranking entries: {len(_find_ranking_list(ranking_data) or [])}")
     
     if not table_data or not table_data.get('entries'):
         print(f"[ERROR] Mobile embed - No table data or entries found")

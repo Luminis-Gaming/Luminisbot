@@ -173,25 +173,25 @@ async def get_fight_details(session, token, report_code, fight_id, encounter_id,
     print(f"[DEBUG] WCL: Fetching fight details for report: {report_code}, fight ID: {fight_id}, metric: {metric}")
     
     # Import here to avoid circular import
-    from wcl_web_scraper import scrape_wcl_web_data
-    
+    from wcl_web_scraper import scrape_wcl_web_data, scrape_configured
+
     # Get basic fight data from GraphQL (table, playerDetails, etc.)
     fight_details = await get_fight_details_with_compare_type(session, token, report_code, fight_id, encounter_id, difficulty, metric)
-    
+
     if not fight_details:
         print(f"[DEBUG] Failed to get basic fight details from GraphQL API")
         return None
 
-    # The GraphQL `rankings` field is the primary source for parse/ilvl percentiles.
-    # Only fall back to HTML scraping when it gave us nothing for a kill; wipes are
-    # never ranked, so scraping them just burns requests.
+    # The GraphQL `rankings` field is the primary source for parse/ilvl percentiles, but
+    # the API only ranks kills. Wipe percentiles exist only on the website, so for wipes
+    # we fall back to scraping when a browser session (WCL_SCRAPE_COOKIES) is configured.
     rankings = fight_details.get('rankings')
     ranked_fights = rankings.get('data') if isinstance(rankings, dict) else rankings
     if ranked_fights:
         return fight_details
 
-    if not is_kill:
-        print("[DEBUG] No rankings for this fight (wipe) - skipping HTML scrape fallback")
+    if not is_kill and not scrape_configured():
+        print("[DEBUG] No rankings for this wipe and WCL_SCRAPE_COOKIES not set - skipping scrape")
         return fight_details
 
     fights_data = fight_details.get('fights', [])
@@ -256,9 +256,8 @@ async def get_all_boss_health_for_report(session, token, report_code):
                 raw = fight.get('bossPercentage')
                 if fight.get('kill') or fight_id is None or raw is None:
                     continue
-                # WCL has returned this both as a plain percentage and as hundredths
-                # (e.g. 8544 for 85.44%) depending on the endpoint - normalise both.
-                boss_health_data[fight_id] = raw / 100 if raw > 100 else raw
+                # v2 returns a plain percentage (e.g. 60.13), unlike the old web endpoint's hundredths.
+                boss_health_data[fight_id] = raw
 
             print(f"[DEBUG] Successfully extracted boss health data for {len(boss_health_data)} wipes")
             return boss_health_data

@@ -13,7 +13,10 @@ services:
       # Warcraft Logs API
       WCL_CLIENT_ID: ${WCL_CLIENT_ID}
       WCL_CLIENT_SECRET: ${WCL_CLIENT_SECRET}
-      
+      # Optional browser session for wipe parses (see .env.template)
+      WCL_SCRAPE_COOKIES: ${WCL_SCRAPE_COOKIES}
+      WCL_SCRAPE_USER_AGENT: ${WCL_SCRAPE_USER_AGENT}
+
       # Battle.net OAuth
       BLIZZARD_CLIENT_ID: ${BLIZZARD_CLIENT_ID}
       BLIZZARD_CLIENT_SECRET: ${BLIZZARD_CLIENT_SECRET}
