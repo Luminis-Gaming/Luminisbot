@@ -156,7 +156,6 @@ MELEE_SPECS = {
     'Death Knight': ['Frost', 'Unholy'],
     'Demon Hunter': ['Havoc'],
     'Druid': ['Feral'],
-    'Evoker': ['Augmentation'],
     'Hunter': ['Survival'],
     'Monk': ['Windwalker'],
     'Paladin': ['Retribution'],
@@ -168,7 +167,7 @@ MELEE_SPECS = {
 RANGED_SPECS = {
     'Demon Hunter': ['Devourer'],
     'Druid': ['Balance'],
-    'Evoker': ['Devastation'],
+    'Evoker': ['Devastation', 'Augmentation'],
     'Hunter': ['Beast Mastery', 'Marksmanship'],
     'Mage': ['Arcane', 'Fire', 'Frost'],
     'Priest': ['Shadow'],
