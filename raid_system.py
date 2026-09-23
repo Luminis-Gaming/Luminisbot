@@ -381,6 +381,27 @@ def text_to_emoji_letters(text: str, max_chars: int = 20) -> str:
     
     return ' '.join(result)
 
+def format_event_description(text: str) -> str:
+    """
+    Format an event description for the embed as an italic block quote,
+    so it reads as a note under the title rather than loose text.
+
+    Each line is italicized separately (Discord italics don't span newlines)
+    and runs of blank lines are collapsed so the embed can't be stretched.
+
+    Examples:
+        "Starting at Lair\\nthen Vexie" -> ">>> *Starting at Lair*\\n*then Vexie*"
+    """
+    lines = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if line:
+            lines.append(f"*{line}*")
+        elif lines and lines[-1]:
+            lines.append("")
+
+    return ">>> " + "\n".join(lines)
+
 def format_countdown(event_datetime: datetime) -> tuple[str, bool]:
     """
     Format a countdown string for the event.
@@ -1114,9 +1135,10 @@ def generate_raid_embed(event_id: int):
     
     # Create embed with emoji title (no date emoji)
     # The optional description renders between the title and the date field
+    raw_description = (event.get('description') or '').strip()
     embed = discord.Embed(
         title=emoji_title,
-        description=event.get('description') or None,
+        description=format_event_description(raw_description) if raw_description else None,
         color=embed_color,
         timestamp=datetime.now()
     )
@@ -1369,10 +1391,11 @@ def generate_raid_embed(event_id: int):
 
     # Discord rejects embeds over 6000 chars - shorten the description rather than
     # letting a big roster plus a long description break signups for everyone
-    if len(embed) > 6000 and embed.description:
-        overflow = len(embed) - 6000
-        keep = max(0, len(embed.description) - overflow - 3)
-        embed.description = embed.description[:keep] + "..." if keep else None
+    # (trims the raw text and re-formats, so the italics/quote markup stays intact)
+    if len(embed) > 6000 and raw_description:
+        keep = len(raw_description) - (len(embed) - 6000) - 3
+        shortened = raw_description[:keep].rstrip() if keep > 0 else ''
+        embed.description = format_event_description(shortened + "...") if shortened else None
 
     view = create_raid_buttons_view(event.get('log_url'))
     return embed, view
