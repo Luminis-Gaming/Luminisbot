@@ -66,6 +66,7 @@ import asyncio
 import aiohttp
 from aiohttp import web
 from datetime import datetime, timedelta
+from html import escape as html_escape
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import logging
@@ -3404,6 +3405,7 @@ async def handle_events_page(request):
                 e.id,
                 e.guild_id,
                 e.title,
+                e.description,
                 e.event_date,
                 e.event_time,
                 e.created_by,
@@ -3720,7 +3722,11 @@ async def handle_events_page(request):
             edit_event_btn = ''
             if session.get('is_event_manager'):
                 edit_event_btn = f'<a href="/admin/events/{event_id}/manage" class="btn btn-sm" style="background:#f97316;color:#fff" title="Manage signups">✏️ Edit Event</a>'
-            
+
+            description_html = ''
+            if event.get('description'):
+                description_html = f'<p style="margin:5px 0;color:rgba(255,255,255,0.55);font-size:13px;white-space:pre-line">{html_escape(event["description"])}</p>'
+
             events_html += f"""
             <div class="card event-card" data-event-id="{event_id}">
                 <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:10px">
@@ -3729,6 +3735,7 @@ async def handle_events_page(request):
                         <p style="margin:5px 0;color:rgba(255,255,255,0.7)">
                             📅 {event_date} at {event_time} {date_badge}{signups_closed_badge}
                         </p>
+                        {description_html}
                     </div>
                     <div style="display:flex;align-items:center;gap:10px">
                         <span class="badge" style="background:#5865F2;font-size:14px">{participant_text}</span>
@@ -4393,7 +4400,7 @@ async def handle_event_manage_page(request):
         
         # Get event details
         cursor.execute("""
-            SELECT id, title, event_date, event_time, signups_closed
+            SELECT id, title, description, event_date, event_time, signups_closed
             FROM raid_events WHERE id = %s
         """, (event_id,))
         event = cursor.fetchone()
@@ -4479,7 +4486,9 @@ async def handle_event_manage_page(request):
         event_date = event['event_date'].strftime('%Y-%m-%d') if event['event_date'] else ''
         event_time = event['event_time'].strftime('%H:%M') if event['event_time'] else ''
 
-        from raid_system import DEFAULT_TIMEZONE
+        event_description = html_escape(event.get('description') or '')
+
+        from raid_system import DEFAULT_TIMEZONE, MAX_EVENT_DESCRIPTION_LENGTH
         class_colors_json = json.dumps(WEB_CLASS_COLORS)
         class_order_json = json.dumps(WEB_CLASS_ORDER)
         
@@ -4532,6 +4541,31 @@ async def handle_event_manage_page(request):
                     margin-top: 6px;
                 }}
                 .schedule-status {{ font-size: 13px; }}
+
+                /* Description editor */
+                .description-editor {{ margin-top: 14px; max-width: 600px; }}
+                .description-editor textarea {{
+                    width: 100%;
+                    min-height: 70px;
+                    padding: 8px 12px;
+                    margin-bottom: 6px;
+                    font-size: 14px;
+                    font-family: inherit;
+                    border: 2px solid rgba(255,255,255,0.2);
+                    border-radius: 8px;
+                    background: rgba(255,255,255,0.1);
+                    color: #fff;
+                    resize: vertical;
+                    box-sizing: border-box;
+                }}
+                .description-editor.has-changes textarea {{ border-color: #f97316; }}
+                .description-actions {{
+                    display: flex;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 10px;
+                }}
+                .description-count {{ color: rgba(255,255,255,0.45); font-size: 12px; }}
 
                 .save-bar {{
                     position: sticky;
@@ -4735,6 +4769,15 @@ async def handle_event_manage_page(request):
                             <span class="schedule-status" id="scheduleStatus"></span>
                         </div>
                         <div class="schedule-hint">Times are in {DEFAULT_TIMEZONE}. Saving updates the Discord message (date &amp; countdown) and shifts any reminders and the signup deadline by the same amount.</div>
+                        <div class="description-editor" id="descriptionEditor">
+                            <textarea id="eventDescription" maxlength="{MAX_EVENT_DESCRIPTION_LENGTH}" placeholder="Description (optional), e.g. Starting at Lair, then Vexie and Cauldron" oninput="updateDescriptionState()">{event_description}</textarea>
+                            <div class="description-actions">
+                                <button class="btn btn-primary btn-sm" id="descriptionBtn" onclick="saveDescription()" disabled style="opacity:0.5">💾 Update Description</button>
+                                <button class="btn btn-secondary btn-sm" id="descriptionResetBtn" onclick="resetDescription()" style="display:none">↩️ Reset</button>
+                                <span class="description-count" id="descriptionCount"></span>
+                                <span class="schedule-status" id="descriptionStatus"></span>
+                            </div>
+                        </div>
                     </div>
                     <a href="/admin/events" class="btn btn-secondary">← Back to Events</a>
                 </div>
@@ -4875,6 +4918,80 @@ async def handle_event_manage_page(request):
                         updateScheduleState();
                     }}
                 }}
+
+                // ---- Description editing ----
+
+                const MAX_DESCRIPTION_LENGTH = {MAX_EVENT_DESCRIPTION_LENGTH};
+                let originalDescription = document.getElementById('eventDescription').value;
+                let descriptionChanged = false;
+
+                function updateDescriptionState() {{
+                    const input = document.getElementById('eventDescription');
+                    const editor = document.getElementById('descriptionEditor');
+                    const btn = document.getElementById('descriptionBtn');
+                    const resetBtn = document.getElementById('descriptionResetBtn');
+
+                    descriptionChanged = input.value !== originalDescription;
+                    document.getElementById('descriptionCount').textContent = input.value.length + ' / ' + MAX_DESCRIPTION_LENGTH;
+
+                    if (descriptionChanged) {{
+                        editor.classList.add('has-changes');
+                        resetBtn.style.display = 'inline-block';
+                    }} else {{
+                        editor.classList.remove('has-changes');
+                        resetBtn.style.display = 'none';
+                    }}
+
+                    btn.disabled = !descriptionChanged;
+                    btn.style.opacity = btn.disabled ? '0.5' : '1';
+                }}
+
+                function resetDescription() {{
+                    document.getElementById('eventDescription').value = originalDescription;
+                    document.getElementById('descriptionStatus').textContent = '';
+                    updateDescriptionState();
+                }}
+
+                async function saveDescription() {{
+                    const input = document.getElementById('eventDescription');
+                    const btn = document.getElementById('descriptionBtn');
+                    const status = document.getElementById('descriptionStatus');
+
+                    if (!descriptionChanged) return;
+
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    status.style.color = 'rgba(255,255,255,0.6)';
+                    status.textContent = '⏳ Saving...';
+
+                    try {{
+                        const resp = await fetch('/admin/api/events/' + EVENT_ID + '/description', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ description: input.value }})
+                        }});
+                        const result = await resp.json();
+
+                        if (result.success) {{
+                            input.value = result.description;
+                            originalDescription = result.description;
+                            updateDescriptionState();
+                            status.style.color = '#22c55e';
+                            status.textContent = '✅ Description updated';
+                            setTimeout(() => {{ if (!descriptionChanged) status.textContent = ''; }}, 5000);
+                        }} else {{
+                            status.style.color = '#ef4444';
+                            status.textContent = '❌ ' + (result.error || 'Unknown error');
+                            updateDescriptionState();
+                        }}
+                    }} catch (err) {{
+                        status.style.color = '#ef4444';
+                        status.textContent = '❌ Network error: ' + err.message;
+                        updateDescriptionState();
+                    }}
+                }}
+
+                updateDescriptionState();
 
                 // ---- Rendering ----
 
@@ -5344,6 +5461,59 @@ async def handle_event_schedule_save(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 
+@require_event_manager
+async def handle_event_description_save(request):
+    """POST /admin/api/events/{event_id}/description - change the description of a raid event"""
+    import json
+    from raid_system import MAX_EVENT_DESCRIPTION_LENGTH
+
+    session = request['session']
+    event_id = request.match_info.get('event_id')
+
+    try:
+        data = await request.json()
+        description = (data.get('description') or '').replace('\r\n', '\n').strip()
+
+        if len(description) > MAX_EVENT_DESCRIPTION_LENGTH:
+            return web.json_response(
+                {'success': False, 'error': f'Description too long (max {MAX_EVENT_DESCRIPTION_LENGTH} characters)'},
+                status=400
+            )
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE raid_events
+            SET description = %s
+            WHERE id = %s
+        """, (description or None, event_id))
+        updated = cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if not updated:
+            return web.json_response({'success': False, 'error': 'Event not found'}, status=404)
+
+        logger.info(f"[EVENT MANAGER] {session['username']} updated description of event {event_id}")
+
+        if discord_bot:
+            from raid_system import refresh_event_embed
+            asyncio.create_task(refresh_event_embed(discord_bot, int(event_id)))
+
+        return web.json_response({'success': True, 'description': description})
+
+    except json.JSONDecodeError:
+        return web.json_response({'success': False, 'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"Error updating event description: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+
 # Legacy redirect for old /characters URL
 async def handle_characters_redirect(request):
     """Redirect old /characters URL to new /admin/characters"""
@@ -5387,6 +5557,7 @@ def create_app(bot=None):
     app.router.add_get('/admin/events/{event_id}/manage', handle_event_manage_page)
     app.router.add_post('/admin/api/events/{event_id}/manage', handle_event_manage_save)
     app.router.add_post('/admin/api/events/{event_id}/schedule', handle_event_schedule_save)
+    app.router.add_post('/admin/api/events/{event_id}/description', handle_event_description_save)
     app.router.add_get('/admin/users', handle_users_page)
     app.router.add_get('/admin/users/new', handle_new_user_page)
     app.router.add_post('/admin/users/new', handle_new_user)
