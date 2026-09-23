@@ -200,6 +200,13 @@ def run_migrations():
                 ) THEN
                     ALTER TABLE raid_events ADD COLUMN signup_deadline TIMESTAMP WITH TIME ZONE;
                 END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'raid_events' AND column_name = 'description'
+                ) THEN
+                    ALTER TABLE raid_events ADD COLUMN description TEXT;
+                END IF;
             END $$;
         """)
         

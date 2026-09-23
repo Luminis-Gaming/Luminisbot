@@ -35,7 +35,7 @@ from raid_system import (
     RaidButtonsView, generate_raid_embed, create_raid_event,
     get_raid_event, add_raid_reservation, remove_raid_reservation,
     get_user_signup, refresh_event_embed, backfill_reservations_for_existing_events,
-    get_pending_reminders, mark_reminder_sent
+    get_pending_reminders, mark_reminder_sent, MAX_EVENT_DESCRIPTION_LENGTH
 )
 
 # --- Import raid team roles ---
@@ -912,7 +912,16 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             required=True
         )
         self.add_item(self.title_input)
-        
+
+        self.description_input = discord.ui.TextInput(
+            label="Description (optional)",
+            style=discord.TextStyle.paragraph,
+            placeholder="e.g., Starting at Lair, then Vexie and Cauldron",
+            max_length=MAX_EVENT_DESCRIPTION_LENGTH,
+            required=False
+        )
+        self.add_item(self.description_input)
+
         self.date_input = discord.ui.TextInput(
             label="Date (DD/MM/YYYY, DD.MM.YYYY, or YYYY-MM-DD)",
             placeholder="e.g., 06/10/2025, 06.10.2025, or 2025-10-06",
@@ -949,7 +958,8 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             event_date = parse_date(self.date_input.value)
             event_time = parse_time(self.time_input.value)
             title = self.title_input.value
-            
+            description = self.description_input.value.strip() or None
+
             # Parse optional signup deadline
             # Supports: "HH:MM" (uses event date) or "DD/MM/YYYY HH:MM" / "DD.MM.YYYY HH:MM" / "YYYY-MM-DD HH:MM"
             signup_deadline = None
@@ -996,7 +1006,8 @@ class CreateRaidModal(discord.ui.Modal, title="Create Raid Event"):
             event_date=event_date,
             event_time=event_time,
             created_by=interaction.user.id,
-            signup_deadline=signup_deadline
+            signup_deadline=signup_deadline,
+            description=description
         )
         
         # Now generate the proper embed using generate_raid_embed
