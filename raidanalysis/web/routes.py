@@ -1,0 +1,744 @@
+"""
+Raid analysis admin pages: raid nights, a night's "all pulls" view, a single
+pull, and per-boss progression with mechanic tagging.
+
+Mounted on the oauth server via register_routes(app), which create_app()
+calls at startup, so this module can import oauth_server freely (it is fully
+loaded by then) and reuse its session auth, CSS and nav.
+"""
+import asyncio
+import logging
+import re
+from urllib.parse import quote
+
+from aiohttp import web
+
+from .. import analyzer, db, guides, sync
+from .render import (CLIP_MODAL, PAGE_CSS, PAGE_JS, ability, difficulty_pill, esc, fmt_amount, fmt_duration,
+                     guide_button, killers_table, phase_label, player_name, progress_chart, pull_timeline,
+                     result_pill, scoreboard_table, tag_buttons, tag_pill, ts)
+
+logger = logging.getLogger(__name__)
+
+REPORT_CODE_RE = re.compile(r'(?:reports/)?([A-Za-z0-9]{16})\b')
+
+
+def register_routes(app):
+    app.router.add_get('/admin/raids', handle_overview)
+    app.router.add_post('/admin/raids/sync', handle_sync)
+    app.router.add_get('/admin/raids/report/{code}', handle_night)
+    app.router.add_get('/admin/raids/report/{code}/{fight_id}', handle_pull)
+    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', handle_boss)
+    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', handle_tag)
+    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', handle_rescan_guides)
+    logger.info("[RAIDS] Admin web routes registered")
+
+
+def _session(request):
+    from oauth_server import get_session
+    session = get_session(request)
+    if not session:
+        raise web.HTTPFound('/admin/login')
+    return session
+
+
+def _page(title, session, body):
+    from oauth_server import ADMIN_CSS, render_nav
+    return web.Response(text=f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>LuminisBot Admin - {esc(title)}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>{ADMIN_CSS}{PAGE_CSS}</style>
+</head>
+<body>
+    <div class="container">
+        {render_nav(session, active='raids')}
+        {body}
+    </div>
+    {CLIP_MODAL}
+    <script>{PAGE_JS}</script>
+</body>
+</html>""", content_type='text/html')
+
+
+def _flash(request):
+    out = ''
+    if request.query.get('msg'):
+        out += f'<p class="success">✅ {esc(request.query["msg"])}</p>'
+    if request.query.get('error'):
+        out += f'<p class="error">❌ {esc(request.query["error"])}</p>'
+    return out
+
+
+def _with_duration(pull):
+    """The pull's analysis plus its duration, as analyzer.scoreboard expects."""
+    analysis = dict(pull.get('analysis') or {})
+    analysis['_duration'] = pull['end_ms'] - pull['start_ms']
+    return analysis
+
+
+def _has_avoidable(tags):
+    return any(tag in analyzer.AVOIDABLE_TAGS for tag in tags.values())
+
+
+def _effective_tags(encounter_id):
+    """
+    ({ability_id: tag}, {ability_id: 'auto'|'manual'}) for a boss: tags derived
+    from Mythic Trap's mechanic categories, with officers' overrides on top.
+    """
+    tags = guides.auto_tags(db.get_guides(encounter_id), db.ability_shares(encounter_id))
+    sources = {ability_id: 'auto' for ability_id in tags}
+    for ability_id, tag in db.get_tags(encounter_id).items():
+        sources[ability_id] = 'manual'
+        if tag in db.TAGS:
+            tags[ability_id] = tag
+        else:
+            tags.pop(ability_id, None)
+    return tags, sources
+
+
+def _guide_lookup(encounter_id):
+    """(ability_id, name) -> cached Mythic Trap guide for this boss, or None."""
+    boss_guides = db.get_guides(encounter_id)
+    cache = {}
+
+    def guide_for(ability_id, name):
+        key = (ability_id, name)
+        if key not in cache:
+            cache[key] = guides.match_guide(boss_guides, ability_id, name)
+        return cache[key]
+    return guide_for
+
+
+def _group_by_boss(pulls):
+    groups = {}
+    for pull in pulls:
+        groups.setdefault((pull['encounter_id'], pull['difficulty']), []).append(pull)
+    return groups
+
+
+def _result_text(pull):
+    result = 'Kill' if pull['kill'] else f"{pull['fight_pct'] or 0:.1f}%"
+    return f"{result} · {fmt_duration(pull['end_ms'] - pull['start_ms'])}"
+
+
+def _boss_status(boss):
+    if boss['kills']:
+        return f'<span class="pill pill-kill">✔ Killed</span> {ts(boss["first_kill"], "date")}'
+    if boss['best_pct'] is not None:
+        return f'Best <strong>{boss["best_pct"]:.1f}%</strong>'
+    return ''
+
+
+# ============================================================================
+# GET /admin/raids - raid nights + boss progression + sync controls
+# ============================================================================
+
+async def handle_overview(request):
+    session = _session(request)
+    reports = db.list_reports(limit=40)
+    bosses = db.list_bosses()
+
+    st = sync.status
+    if st['running']:
+        sync_state = '<p class="muted">⏳ Sync in progress… refresh in a minute.</p>'
+    elif st['last_finished']:
+        sync_state = (f'<p class="muted small">Last sync: {ts(st["last_finished"] * 1000)} — '
+                      f'{esc(st["last_result"])}</p>')
+        if st['last_error']:
+            sync_state += f'<p class="error small">⚠️ {esc(st["last_error"])}</p>'
+    else:
+        sync_state = '<p class="muted small">Syncs automatically every 10 minutes.</p>'
+
+    boss_rows = ''.join(f"""
+        <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}'" style="cursor:pointer">
+            <td><a href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}" style="color:#fff">
+                <strong>{esc(b['name'])}</strong></a></td>
+            <td>{difficulty_pill(b['difficulty'])}</td>
+            <td class="num">{b['pulls']}</td>
+            <td class="num">{b['nights']}</td>
+            <td>{_boss_status(b)}</td>
+            <td class="muted small">{ts(b['last_seen'], 'date')}</td>
+        </tr>""" for b in bosses)
+
+    night_rows = []
+    for r in reports:
+        span = (r['last_pull_ms'] or 0) - (r['first_pull_ms'] or 0)
+        engaged = 100 * r['combat_ms'] / span if span else 0
+        diffs = ' '.join(difficulty_pill(d) for d in sorted(r['difficulties'] or [], reverse=True))
+        night_rows.append(f"""
+            <tr>
+                <td>{ts(r['start_time'], 'date')}</td>
+                <td><a href="/admin/raids/report/{esc(r['code'])}" style="color:#fff"><strong>{esc(r['title'])}</strong></a>
+                    {'<span class="pill pill-wipe">imported</span>' if r['source'] == 'manual' else ''}</td>
+                <td>{esc(r['zone_name'] or '')} {diffs}</td>
+                <td class="num">{r['pulls']}</td>
+                <td class="num">{r['kills']}</td>
+                <td class="num" title="Time in combat vs. time from first to last pull">{engaged:.0f}%</td>
+                <td><a class="btn btn-primary btn-sm" href="/admin/raids/report/{esc(r['code'])}">All pulls</a></td>
+            </tr>""")
+
+    body = f"""
+    <div class="card">
+        <h1>⚔️ Raid Analysis</h1>
+        {_flash(request)}
+        <p class="muted">Every raid pull from the guild's Warcraft Logs, analyzed for deaths, mechanics,
+           interrupts, dispels and consumables. Tag mechanics as <em>avoidable</em> on a boss page to
+           count who keeps getting hit.</p>
+        {sync_state}
+        <form method="post" action="/admin/raids/sync" class="inline-form">
+            <label class="small muted">Latest reports</label>
+            <input type="number" name="limit" value="10" min="1" max="50" style="width:80px">
+            <input type="text" name="code" placeholder="…or a WCL report URL / code to import" style="min-width:320px">
+            <button class="btn btn-primary btn-sm" {'disabled' if st['running'] else ''}>🔄 Sync now</button>
+        </form>
+    </div>
+    <div class="card">
+        <h2>🐉 Bosses</h2>
+        <div class="table-wrapper"><table class="compact">
+            <tr><th>Boss</th><th>Difficulty</th><th class="num">Pulls</th><th class="num">Nights</th>
+                <th>Progress</th><th>Last pulled</th></tr>
+            {boss_rows or '<tr><td colspan="6" class="muted">No raid pulls synced yet — hit Sync now.</td></tr>'}
+        </table></div>
+    </div>
+    <div class="card">
+        <h2>📅 Raid nights</h2>
+        <div class="table-wrapper"><table class="compact">
+            <tr><th>Date</th><th>Report</th><th>Zone</th><th class="num">Pulls</th><th class="num">Kills</th>
+                <th class="num">Engaged</th><th></th></tr>
+            {''.join(night_rows) or '<tr><td colspan="7" class="muted">Nothing yet.</td></tr>'}
+        </table></div>
+    </div>"""
+    return _page("Raid Analysis", session, body)
+
+
+# ============================================================================
+# POST /admin/raids/sync
+# ============================================================================
+
+async def handle_sync(request):
+    _session(request)
+    data = await request.post()
+    try:
+        limit = max(1, min(50, int(data.get('limit') or 10)))
+    except ValueError:
+        limit = 10
+    codes = []
+    raw = (data.get('code') or '').strip()
+    if raw:
+        match = REPORT_CODE_RE.search(raw)
+        if not match:
+            raise web.HTTPFound('/admin/raids?error=' + quote("That doesn't look like a WCL report URL or code."))
+        codes.append(match.group(1))
+
+    if sync.status['running']:
+        raise web.HTTPFound('/admin/raids?error=' + quote('A sync is already running.'))
+    asyncio.create_task(sync.sync_guild(limit=limit, force_codes=codes))
+
+    back = data.get('back') or '/admin/raids'
+    if not back.startswith('/admin/raids'):
+        back = '/admin/raids'
+    msg = 'Sync started — new pulls appear as they are analyzed.'
+    raise web.HTTPFound(f"{back}{'&' if '?' in back else '?'}msg={quote(msg)}")
+
+
+# ============================================================================
+# GET /admin/raids/report/{code} - one raid night, every pull grouped by boss
+# ============================================================================
+
+def _pull_row(code, number, pull, phase_names, tags):
+    analysis = pull.get('analysis') or {}
+    deaths = analysis.get('deaths') or []
+    counted = [d for d in deaths if not d.get('after_wipe')]
+    first = counted[0] if counted else None
+    avoidable = sum(s['hits'] for s in analyzer.avoidable_by_player(analysis, tags).values())
+    first_html = (f'{esc(first["name"])} <span class="muted small">({esc(first["ability"])}, '
+                  f'{fmt_duration(first["t"])})</span>' if first else '<span class="muted">—</span>')
+    wipe_at = analysis.get('wipe_at')
+    boss_hp = '' if pull['kill'] or pull.get('boss_pct') is None else f"{pull['boss_pct']:.1f}%"
+    return f"""
+        <tr onclick="location='/admin/raids/report/{esc(code)}/{pull['fight_id']}'" style="cursor:pointer">
+            <td class="num">{number}</td>
+            <td>{ts(pull['_abs_start'], 'time')}</td>
+            <td class="num">{fmt_duration(pull['end_ms'] - pull['start_ms'])}</td>
+            <td data-v="{0 if pull['kill'] else pull['fight_pct'] or 0}">{result_pill(pull)}</td>
+            <td class="num small">{boss_hp}</td>
+            <td class="small">{phase_label(pull, phase_names)}</td>
+            <td class="num">{len(deaths)}</td>
+            <td class="num" data-v="{wipe_at or 0}">{fmt_duration(wipe_at) if wipe_at is not None else ''}</td>
+            <td>{first_html}</td>
+            <td class="num{' bad' if avoidable else ''}">{avoidable if _has_avoidable(tags) else '<span class="muted">—</span>'}</td>
+            <td><a href="/admin/raids/report/{esc(code)}/{pull['fight_id']}" class="btn btn-secondary btn-sm">Details</a></td>
+        </tr>"""
+
+
+async def handle_night(request):
+    session = _session(request)
+    code = request.match_info['code']
+    report = db.get_report(code)
+    if not report:
+        raise web.HTTPFound('/admin/raids?error=' + quote('Report not found — sync or import it first.'))
+    pulls = db.get_pulls(code)
+    phase_names = report['phase_names'] or {}
+    for pull in pulls:
+        pull['_abs_start'] = report['start_time'] + pull['start_ms']
+
+    # Night summary
+    combat = sum(p['end_ms'] - p['start_ms'] for p in pulls)
+    span = (pulls[-1]['end_ms'] - pulls[0]['start_ms']) if pulls else 0
+    gaps = [b['start_ms'] - a['end_ms'] for a, b in zip(pulls, pulls[1:])]
+    avg_gap = sum(gaps) / len(gaps) if gaps else 0
+    stats = f"""
+        <div class="stats">
+            <div class="stat"><div class="stat-value">{len(pulls)}</div><div class="stat-label">Pulls</div></div>
+            <div class="stat"><div class="stat-value">{sum(1 for p in pulls if p['kill'])}</div><div class="stat-label">Kills</div></div>
+            <div class="stat"><div class="stat-value">{fmt_duration(span)}</div><div class="stat-label">Raid length</div></div>
+            <div class="stat"><div class="stat-value">{100 * combat / span if span else 0:.0f}%</div><div class="stat-label">Time engaged</div></div>
+            <div class="stat"><div class="stat-value">{fmt_duration(avg_gap)}</div><div class="stat-label">Avg. time between pulls</div></div>
+        </div>"""
+
+    sections = []
+    for (encounter_id, difficulty), boss_pulls in _group_by_boss(pulls).items():
+        tags, _ = _effective_tags(encounter_id)
+        guide_for = _guide_lookup(encounter_id)
+        has_avoidable = _has_avoidable(tags)
+        analyses = [_with_duration(p) for p in boss_pulls]
+        kill = any(p['kill'] for p in boss_pulls)
+        best = min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None)
+        points = [{'pct': p['fight_pct'], 'kill': p['kill'],
+                   'href': f"/admin/raids/report/{code}/{p['fight_id']}",
+                   'tip': f"Pull {i}: {_result_text(p)}"}
+                  for i, p in enumerate(boss_pulls, 1)]
+        rows = ''.join(_pull_row(code, i, p, phase_names, tags) for i, p in enumerate(boss_pulls, 1))
+        tag_hint = '' if has_avoidable else (
+            f'<p class="warning-box small">No avoidable mechanics known for this boss yet — they come from its '
+            f'Mythic Trap guide after the next sync, or you can '
+            f'<a href="/admin/raids/boss/{encounter_id}/{difficulty}#mechanics" style="color:#ffd43b">tag them here</a>.</p>')
+        sections.append(f"""
+        <section class="boss-section" id="boss-{encounter_id}-{difficulty}">
+            <h2>{esc(boss_pulls[0]['encounter_name'])} {difficulty_pill(difficulty)}
+                {'<span class="pill pill-kill">✔ Killed</span>' if kill else
+                 f'<span class="pill pill-wipe">Best {best:.1f}%</span>' if best is not None else ''}
+                <a href="/admin/raids/boss/{encounter_id}/{difficulty}" class="btn btn-secondary btn-sm"
+                   style="float:right">Boss progression →</a></h2>
+            <p class="muted">{len(boss_pulls)} pull{'s' if len(boss_pulls) != 1 else ''} ·
+               {fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in boss_pulls))} in combat</p>
+            {progress_chart(points)}
+            <div class="table-wrapper"><table class="compact">
+                <tr><th data-sort class="num">#</th><th>Time</th><th data-sort class="num">Duration</th>
+                    <th data-sort title="WCL fight %: how much of the encounter was left, accounting for phases">Fight %</th>
+                    <th data-sort class="num" title="Boss health when the pull ended">Boss HP</th>
+                    <th>Phase</th><th data-sort class="num">Deaths</th>
+                    <th data-sort class="num" title="When half the raid was dead - later deaths don't count against anyone">Wipe called</th>
+                    <th>First death</th>
+                    <th data-sort class="num" title="Hits from abilities tagged avoidable">Avoidable</th><th></th></tr>
+                {rows}
+            </table></div>
+            <div class="grid-2" style="margin-top:20px">
+                <div><h3>💀 What's killing us</h3>{killers_table(analyzer.killers(analyses), guide_for=guide_for)}</div>
+                <div><h3>🧪 Avoidable damage by mechanic</h3>{_avoidable_summary(analyses, tags, guide_for)}</div>
+            </div>
+            <h3 style="margin-top:20px">👥 Players across these pulls</h3>
+            {tag_hint}
+            {scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=has_avoidable)}
+        </section>""")
+
+    body = f"""
+    <div class="card">
+        <p><a href="/admin/raids">← All raid nights</a></p>
+        <h1>{esc(report['title'])}</h1>
+        {_flash(request)}
+        <p class="muted">{ts(report['start_time'])} · {esc(report['zone_name'] or '')} ·
+           logged by {esc(report['owner'] or '?')} ·
+           <a href="https://www.warcraftlogs.com/reports/{esc(code)}" target="_blank" style="color:#8b9cff">Warcraft Logs ↗</a></p>
+        {stats}
+        <form method="post" action="/admin/raids/sync" class="inline-form" style="margin-top:16px">
+            <input type="hidden" name="code" value="{esc(code)}">
+            <input type="hidden" name="limit" value="1">
+            <input type="hidden" name="back" value="/admin/raids/report/{esc(code)}">
+            <button class="btn btn-secondary btn-sm" title="Fetch this report again from WCL, e.g. after tagging new mechanics">
+                🔄 Re-analyze this night</button>
+        </form>
+    </div>
+    <div class="card">{''.join(sections) or '<p class="muted">No raid pulls in this report.</p>'}</div>"""
+    return _page(report['title'], session, body)
+
+
+def _avoidable_summary(analyses, tags, guide_for=lambda ability_id, name: None):
+    totals = {}
+    for analysis in analyses:
+        roles = {p['name']: p.get('role') for p in analysis.get('players') or []}
+        for a in analysis.get('abilities') or []:
+            tag = tags.get(a['id'])
+            if tag not in analyzer.AVOIDABLE_TAGS:
+                continue
+            entry = totals.setdefault(a['id'], {'name': a['name'], 'icon': a.get('icon'), 'hits': 0,
+                                                'damage': 0, 'players': {}})
+            counts = analyzer.mistake_counts(a)
+            for name, s in (a.get('players') or {}).items():
+                if not counts.get(name) or (tag == analyzer.TAG_AVOIDABLE_NON_TANK and roles.get(name) == 'tank'):
+                    continue
+                entry['hits'] += counts[name]
+                entry['damage'] += s.get('damage') or 0
+                entry['players'][name] = entry['players'].get(name, 0) + counts[name]
+    if not totals:
+        return '<p class="muted">No avoidable mechanics tagged (or nobody got hit).</p>'
+    rows = []
+    for ability_id, t in sorted(totals.items(), key=lambda kv: -kv[1]['hits']):
+        worst = sorted(t['players'].items(), key=lambda kv: -kv[1])[:4]
+        rows.append(f'<tr><td>{ability(t["name"], t["icon"], ability_id, guide_for(ability_id, t["name"]))}</td>'
+                    f'<td class="num">{t["hits"]}</td>'
+                    f'<td class="num">{fmt_amount(t["damage"])}</td>'
+                    f'<td class="small">{", ".join(f"{esc(n)} ×{c}" for n, c in worst if c)}</td></tr>')
+    return (f'<div class="table-wrapper"><table class="compact"><tr><th>Mechanic</th><th class="num">Hits</th>'
+            f'<th class="num">Damage</th><th>Most hit</th></tr>{"".join(rows)}</table></div>')
+
+
+# ============================================================================
+# GET /admin/raids/report/{code}/{fight_id} - one pull
+# ============================================================================
+
+async def handle_pull(request):
+    session = _session(request)
+    code = request.match_info['code']
+    try:
+        fight_id = int(request.match_info['fight_id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    pull = db.get_pull(code, fight_id)
+    if not pull:
+        raise web.HTTPFound(f'/admin/raids/report/{quote(code)}?error=' + quote('Pull not found.'))
+
+    analysis = pull['analysis'] or {}
+    phase_names = pull['phase_names'] or {}
+    encounter_id, difficulty = pull['encounter_id'], pull['difficulty']
+    tags, sources = _effective_tags(encounter_id)
+    guide_for = _guide_lookup(encounter_id)
+    roster = {p['name']: p for p in analysis.get('players') or []}
+    here = f'/admin/raids/report/{code}/{fight_id}'
+
+    # Pull number within the night + prev/next on the same boss
+    same_boss = [p for p in db.get_pulls(code, with_analysis=False)
+                 if p['encounter_id'] == encounter_id and p['difficulty'] == difficulty]
+    index = next(i for i, p in enumerate(same_boss) if p['fight_id'] == fight_id)
+    nav = []
+    if index > 0:
+        nav.append(f'<a class="btn btn-secondary btn-sm" href="/admin/raids/report/{esc(code)}/{same_boss[index - 1]["fight_id"]}">← Pull {index}</a>')
+    if index + 1 < len(same_boss):
+        nav.append(f'<a class="btn btn-secondary btn-sm" href="/admin/raids/report/{esc(code)}/{same_boss[index + 1]["fight_id"]}">Pull {index + 2} →</a>')
+
+    def pname(name):
+        p = roster.get(name, {})
+        return player_name(name, p.get('class', ''), p.get('role'))
+
+    # Deaths
+    death_rows = ''.join(
+        f'<tr{" class=muted" if d.get("after_wipe") else ""}><td class="num">{fmt_duration(d["t"])}</td>'
+        f'<td>{pname(d["name"])}</td>'
+        f'<td>{ability(d["ability"], d.get("icon"), d.get("ability_id"), guide_for(d.get("ability_id"), d["ability"]))}</td>'
+        f'<td class="small">{"after wipe called" if d.get("after_wipe") else ""}</td></tr>'
+        for d in analysis.get('deaths') or [])
+
+    # Damage taken by mechanic
+    raid_size = max(1, len(roster))
+    shown, ignored = [], []
+    for a in analysis.get('abilities') or []:
+        tag = tags.get(a['id'])
+        counts = analyzer.mistake_counts(a)
+        players = sorted((a.get('players') or {}).items(),
+                         key=lambda kv: -(counts.get(kv[0], 0) * 1e12 + (kv[1].get('damage') or 0)))
+        who = ', '.join(f'{pname(n)}' + (f' ×{counts[n]}' if counts.get(n) else '') for n, _ in players[:8])
+        if len(players) > 8:
+            who += f' <span class="muted">+{len(players) - 8} more</span>'
+        hits = sum(counts.values()) if a.get('complete') else None
+        row = f"""
+            <tr>
+                <td>{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
+                    {tag_pill(tag, sources.get(a['id'])) if tag != analyzer.TAG_IGNORE else ''}</td>
+                <td class="small muted">{esc(a.get('source') or '')}</td>
+                <td class="num" data-v="{a['total']}">{fmt_amount(a['total'])}</td>
+                <td class="num" data-v="{len(players)}">{len(players) if a.get('complete') else '5+'}/{raid_size}</td>
+                <td class="num">{hits if hits is not None else '<span class="muted" title="Raid-wide ability — only the top 5 targets are known">—</span>'}</td>
+                <td class="small">{who}</td>
+                <td>{tag_buttons(encounter_id, difficulty, a['id'], a['name'], tag, sources.get(a['id']), here)}</td>
+            </tr>"""
+        (ignored if tag == analyzer.TAG_IGNORE else shown).append(row)
+    ability_head = ('<tr><th data-sort>Ability</th><th>Source</th><th data-sort class="num">Damage</th>'
+                    '<th data-sort class="num">Players hit</th><th data-sort class="num">Hits</th><th>Who</th>'
+                    '<th>Tag</th></tr>')
+    ignored_html = (f'<details style="margin-top:10px"><summary class="muted">{len(ignored)} ignored '
+                    f'abilit{"y" if len(ignored) == 1 else "ies"}</summary><div class="table-wrapper">'
+                    f'<table class="compact">{ability_head}{"".join(ignored)}</table></div></details>') if ignored else ''
+
+    def breakdown(entries, verb):
+        if not entries:
+            return f'<p class="muted">No {verb}s.</p>'
+        rows = ''.join(
+            f'<tr><td>{ability(e["name"], e.get("icon"), e.get("id"), guide_for(e.get("id"), e["name"]))}</td>'
+            f'<td class="num">{e["count"]}{"/" + str(e["begun"]) if verb == "interrupt" and e["begun"] else ""}</td>'
+            f'<td class="small">{", ".join(pname(n) + (f" ×{c}" if c > 1 else "") for n, c in sorted(e["by"].items(), key=lambda kv: -kv[1]))}</td></tr>'
+            for e in entries)
+        head = 'Interrupted / cast' if verb == 'interrupt' else 'Dispelled'
+        return (f'<div class="table-wrapper"><table class="compact"><tr><th>Ability</th>'
+                f'<th class="num">{head}</th><th>By</th></tr>{rows}</table></div>')
+
+    result = 'Kill' if pull['kill'] else f"Wipe at {pull['fight_pct'] or 0:.1f}%"
+    body = f"""
+    <div class="card">
+        <p><a href="/admin/raids/report/{esc(code)}#boss-{encounter_id}-{difficulty}">← {esc(pull['report_title'])}</a></p>
+        <h1>{esc(pull['encounter_name'])} {difficulty_pill(difficulty)} — pull {index + 1} {result_pill(pull)}</h1>
+        {_flash(request)}
+        <p class="muted">{ts(pull['report_start'] + pull['start_ms'])} · {fmt_duration(pull['end_ms'] - pull['start_ms'])} ·
+           {result}{' · ' + phase_label(pull, phase_names) if pull.get('last_phase') else ''} ·
+           <a href="https://www.warcraftlogs.com/reports/{esc(code)}#fight={fight_id}" target="_blank" style="color:#8b9cff">Warcraft Logs ↗</a></p>
+        <div class="actions">{''.join(nav)}</div>
+        {pull_timeline(pull, analysis, phase_names)}
+        <p class="muted small">Red ticks are deaths (hover for details); grey ones came after the wipe was called
+           (half the raid dead) and don't count against anyone.</p>
+    </div>
+    <div class="card">
+        <div class="grid-2">
+            <div><h2>💀 Deaths</h2>
+                <div class="table-wrapper"><table class="compact"><tr><th class="num">Time</th><th>Player</th>
+                    <th>Killing blow</th><th></th></tr>
+                {death_rows or '<tr><td colspan="4" class="muted">Nobody died.</td></tr>'}</table></div></div>
+            <div><h2>✋ Interrupts</h2>{breakdown(analysis.get('interrupts'), 'interrupt')}
+                 <h2 style="margin-top:20px">✨ Dispels</h2>{breakdown(analysis.get('dispels'), 'dispel')}</div>
+        </div>
+    </div>
+    <div class="card">
+        <h2>🎯 Damage taken by mechanic</h2>
+        <p class="muted small">Tag a mechanic as <strong>Avoidable</strong> and every hit counts as a mistake in the
+           scoreboards (for this boss, every night). <strong>Ignore</strong> hides noise. Raid-wide abilities
+           only show their top 5 targets.</p>
+        <div class="table-wrapper"><table class="compact">{ability_head}{''.join(shown)}</table></div>
+        {ignored_html}
+    </div>
+    <div class="card">
+        <h2>👥 Players</h2>
+        {scoreboard_table(analyzer.scoreboard([_with_duration(pull)], tags), show_avoidable=_has_avoidable(tags))}
+    </div>"""
+    return _page(f"{pull['encounter_name']} pull {index + 1}", session, body)
+
+
+# ============================================================================
+# GET /admin/raids/boss/{encounter_id}/{difficulty} - progression + tagging
+# ============================================================================
+
+async def handle_boss(request):
+    session = _session(request)
+    try:
+        encounter_id = int(request.match_info['encounter_id'])
+        difficulty = int(request.match_info['difficulty'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    pulls = db.get_boss_pulls(encounter_id, difficulty, with_analysis=True)
+    if not pulls:
+        raise web.HTTPFound('/admin/raids?error=' + quote('No pulls for that boss yet.'))
+    tags, sources = _effective_tags(encounter_id)
+    guide_for = _guide_lookup(encounter_id)
+    name = pulls[-1]['encounter_name']
+    here = f'/admin/raids/boss/{encounter_id}/{difficulty}'
+
+    # Nights (most recent first in the table, chronological in the chart)
+    nights = {}
+    for pull in pulls:
+        nights.setdefault(pull['report_code'], []).append(pull)
+    try:
+        last_n = int(request.query.get('nights') or 0)
+    except ValueError:
+        last_n = 0
+    scope_codes = list(nights)[-last_n:] if last_n else list(nights)
+    scoped = [p for p in pulls if p['report_code'] in scope_codes]
+    analyses = [_with_duration(p) for p in scoped]
+
+    points, separators, number = [], [], 0
+    for code, night in nights.items():
+        separators.append((number, _short_date(night[0]['report_start'])))
+        for pull in night:
+            number += 1
+            points.append({'pct': pull['fight_pct'], 'kill': pull['kill'],
+                           'href': f"/admin/raids/report/{code}/{pull['fight_id']}",
+                           'tip': f"Pull {number} ({_short_date(night[0]['report_start'])}): "
+                                  f"{_result_text(pull)}"})
+
+    night_rows = []
+    best_before = 100.0
+    for code, night in nights.items():
+        best = min((p['fight_pct'] or 0 for p in night if not p['kill']), default=None)
+        killed = any(p['kill'] for p in night)
+        improved = best is not None and best < best_before
+        night_rows.append(f"""
+            <tr>
+                <td>{ts(night[0]['report_start'], 'date')}</td>
+                <td><a href="/admin/raids/report/{esc(code)}#boss-{encounter_id}-{difficulty}" style="color:#fff">
+                    {esc(night[0]['report_title'])}</a></td>
+                <td class="num">{len(night)}</td>
+                <td class="num">{fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in night))}</td>
+                <td>{'<span class="pill pill-kill">✔ Kill</span>' if killed else
+                     (f'{best:.1f}%' + (' <span class="small good">▼ new best</span>' if improved else '')
+                      if best is not None else '')}</td>
+            </tr>""")
+        if best is not None:
+            best_before = min(best_before, best)
+
+    # Mechanics seen on this boss, with tagging
+    mechanics = {}
+    for analysis in [a for a in (p.get('analysis') for p in pulls) if a]:
+        raid = max(1, len(analysis.get('players') or []))
+        for a in analysis.get('abilities') or []:
+            m = mechanics.setdefault(a['id'], {'name': a['name'], 'icon': a.get('icon'), 'source': a.get('source'),
+                                               'pulls': 0, 'damage': 0, 'hits': 0, 'share': 0.0, 'complete': True})
+            m['pulls'] += 1
+            m['damage'] += a['total']
+            m['share'] += len(a.get('players') or {}) / raid
+            m['complete'] = m['complete'] and a.get('complete')
+            m['hits'] += sum(analyzer.mistake_counts(a).values())
+    # Anything Mythic Trap or an officer already decided on isn't up for suggestion.
+    suggested = {s['id'] for s in analyzer.suggest_avoidable(
+        [p['analysis'] for p in pulls if p.get('analysis')], set(tags) | set(sources))}
+    order = {analyzer.TAG_AVOIDABLE: 0, analyzer.TAG_AVOIDABLE_NON_TANK: 0, None: 1,
+             guides.EXPECTED: 2, analyzer.TAG_IGNORE: 3}
+    mech_rows = []
+    for ability_id, m in sorted(mechanics.items(),
+                                key=lambda kv: (order.get(tags.get(kv[0]), 1), kv[0] not in suggested, -kv[1]['damage'])):
+        tag = tags.get(ability_id)
+        pill = tag_pill(tag, sources.get(ability_id)) or (
+            '<span class="pill pill-suggest" title="Only ever hits a few players at a time">suggested</span>'
+            if ability_id in suggested else '')
+        mech_rows.append(f"""
+            <tr>
+                <td>{ability(m['name'], m['icon'], ability_id, guide_for(ability_id, m['name']))} {pill}</td>
+                <td class="small muted">{esc(m['source'] or '')}</td>
+                <td class="num">{m['pulls']}</td>
+                <td class="num" data-v="{m['share'] / m['pulls']:.3f}">{100 * m['share'] / m['pulls']:.0f}%{'' if m['complete'] else '+'}</td>
+                <td class="num">{m['hits'] if m['complete'] else '<span class="muted">—</span>'}</td>
+                <td class="num" data-v="{m['damage']}">{fmt_amount(m['damage'])}</td>
+                <td>{tag_buttons(encounter_id, difficulty, ability_id, m['name'], tag, sources.get(ability_id),
+                                 here + '#mechanics')}</td>
+            </tr>""")
+
+    scope_links = ' · '.join(
+        f'<a href="{here}{"?nights=" + str(n) if n else ""}" style="color:{"#fff" if n == last_n else "#8b9cff"}">'
+        f'{label}</a>'
+        for n, label in ((1, 'last night'), (3, 'last 3 nights'), (0, 'all nights')) if n <= len(nights))
+
+    kills = sum(1 for p in pulls if p['kill'])
+    best_all = min((p['fight_pct'] or 0 for p in pulls if not p['kill']), default=None)
+    body = f"""
+    <div class="card">
+        <p><a href="/admin/raids">← Raid Analysis</a></p>
+        <h1>{esc(name)} {difficulty_pill(difficulty)}</h1>
+        {_flash(request)}
+        <div class="stats">
+            <div class="stat"><div class="stat-value">{len(pulls)}</div><div class="stat-label">Pulls</div></div>
+            <div class="stat"><div class="stat-value">{len(nights)}</div><div class="stat-label">Nights</div></div>
+            <div class="stat"><div class="stat-value">{kills or (f'{best_all:.1f}%' if best_all is not None else '—')}</div>
+                <div class="stat-label">{'Kills' if kills else 'Best pull'}</div></div>
+            <div class="stat"><div class="stat-value">{fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in pulls))}</div>
+                <div class="stat-label">Time on boss</div></div>
+        </div>
+        <h2 style="margin-top:24px">📈 Progression</h2>
+        {progress_chart(points, separators=separators if len(nights) > 1 else ())}
+        <div class="table-wrapper"><table class="compact">
+            <tr><th>Date</th><th>Report</th><th class="num">Pulls</th><th class="num">Time</th><th>Result</th></tr>
+            {''.join(reversed(night_rows))}
+        </table></div>
+    </div>
+    <div class="card">
+        <h2>👥 Players — {scope_links}</h2>
+        <p class="muted small">{len(scoped)} pulls. Deaths and first deaths only count before the wipe was called.</p>
+        <div class="grid-2" style="margin-bottom:20px">
+            <div><h3>💀 What's killing us</h3>{killers_table(analyzer.killers(analyses), guide_for=guide_for)}</div>
+            <div><h3>🧪 Avoidable damage by mechanic</h3>{_avoidable_summary(analyses, tags, guide_for)}</div>
+        </div>
+        {scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags))}
+    </div>
+    {_guides_card(encounter_id, difficulty, here)}
+    <div class="card" id="mechanics">
+        <h2>🎯 Mechanics</h2>
+        <p class="muted small">Every enemy ability that hit the raid on this boss. Tags marked <em>auto</em> come
+           from the boss's Mythic Trap guide ("Dodge…" → avoidable, frontals and tail swipes → non-tanks, soaks and
+           tankbusters → expected); anything that lands on ~90% of the raid every pull is never auto-blamed.
+           Clicking a tag overrides it for this boss; <strong>↺ auto</strong> undoes that.
+           <strong>Avoidable</strong> = any hit is a mistake; <strong>Non-tanks</strong> = the same, except tanks
+           are meant to take it. Only direct hits count, not damage-over-time ticks — except for auras and pools
+           that only ever tick. <span class="pill pill-suggest">suggested</span> = not in the guide, but it only
+           ever hits a few players at a time.
+           Newly tagged raid-wide abilities need a <em>Re-analyze</em> of a night to get per-player hits.</p>
+        <div class="table-wrapper"><table class="compact">
+            <tr><th data-sort>Ability</th><th>Source</th><th data-sort class="num">Pulls seen</th>
+                <th data-sort class="num" title="Average share of the raid hit per pull">Raid hit</th>
+                <th data-sort class="num">Hits</th><th data-sort class="num">Damage</th><th>Tag</th></tr>
+            {''.join(mech_rows)}
+        </table></div>
+    </div>"""
+    return _page(name, session, body)
+
+
+def _guides_card(encounter_id, difficulty, here):
+    """The boss's Mythic Trap ability list (clips + tips) and scan status."""
+    scan = db.get_guide_scan(encounter_id)
+    boss_guides = db.get_guides(encounter_id)
+    rescan = (f'<form method="post" action="{here}/guides" class="inline-form">'
+              f'<button class="btn btn-secondary btn-sm">🔎 {"Rescan" if scan else "Look up"} Mythic Trap</button></form>')
+    if not scan:
+        status = 'Not looked up yet — happens automatically on the next sync.'
+    elif scan['status'] == 'not_found':
+        status = f"No Mythic Trap page found for this boss (checked {ts(scan['scanned_at'].timestamp() * 1000)})."
+    elif scan['status'] == 'error':
+        status = f"Last lookup failed: {esc(scan['error'])}"
+    else:
+        clips = sum(1 for g in boss_guides if g['video_url'])
+        status = (f"{clips} clips for {len(boss_guides)} abilities from "
+                  f"<a href=\"{esc(scan['page_url'])}\" target=\"_blank\" rel=\"noopener\">Mythic Trap ↗</a> · "
+                  f"updated {ts(scan['scanned_at'].timestamp() * 1000)} · refreshed every few days")
+    items = ''.join(
+        f'<tr><td>{esc(g["name"])}{guide_button(g)}</td>'
+        f'<td class="small muted">{esc(g["subtitle"])}</td><td class="small">{esc(g["category"])}</td>'
+        f'<td class="small">{esc(g["tip"] or g["description"])}</td></tr>'
+        for g in sorted(boss_guides, key=lambda g: (not g['video_url'], g['name'])))
+    table = (f'<div class="table-wrapper" style="margin-top:12px"><table class="compact">'
+             f'<tr><th>Ability</th><th>Type</th><th>What to do</th><th>Tip</th></tr>{items}</table></div>'
+             if items else '')
+    return f"""
+    <div class="card" id="guides">
+        <h2>📺 Mechanic guides</h2>
+        <p class="muted small">{status}</p>
+        {rescan}
+        {table}
+    </div>"""
+
+
+async def handle_rescan_guides(request):
+    _session(request)
+    encounter_id = int(request.match_info['encounter_id'])
+    back = f"/admin/raids/boss/{encounter_id}/{request.match_info['difficulty']}"
+    await guides.scan_missing(encounter_ids=[encounter_id])
+    raise web.HTTPFound(back + '?msg=' + quote('Mythic Trap guide refreshed.') + '#guides')
+
+
+def _short_date(epoch_ms):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).strftime('%d %b')
+
+
+# ============================================================================
+# POST /admin/raids/boss/{encounter_id}/{difficulty}/tag
+# ============================================================================
+
+async def handle_tag(request):
+    session = _session(request)
+    data = await request.post()
+    encounter_id = int(request.match_info['encounter_id'])
+    back = data.get('back') or f"/admin/raids/boss/{encounter_id}/{request.match_info['difficulty']}"
+    if not back.startswith('/admin/raids'):
+        back = '/admin/raids'
+    try:
+        ability_id = int(data['ability_id'])
+    except (KeyError, ValueError):
+        raise web.HTTPFound(back)
+    db.set_tag(encounter_id, ability_id, data.get('ability_name') or '', data.get('tag') or '',
+               session.get('username'))
+    raise web.HTTPFound(back)

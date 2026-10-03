@@ -66,6 +66,9 @@ tree = discord.app_commands.CommandTree(client)
 import mythicplus
 mythicplus.setup(client, tree)
 
+# --- Raid analysis (Wipefest-style pull breakdowns on the admin site) ---
+import raidanalysis
+
 # --- Automatic Log Detection Task ---
 @tasks.loop(minutes=10)
 async def check_for_new_logs():
@@ -343,6 +346,7 @@ async def on_ready():
     if not check_raid_reminders.is_running():
         check_raid_reminders.start()
     mythicplus.start_tasks(client)  # M+ deadline watcher (guards itself)
+    raidanalysis.start_tasks()      # WCL raid log sync for the admin analysis pages (guards itself)
     
     # Start OAuth web server for Battle.net integration
     if not hasattr(client, 'oauth_server_started'):

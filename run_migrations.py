@@ -657,6 +657,15 @@ def run_migrations():
 
         logger.info("[MIGRATIONS] ✓ team_role_members table ready")
 
+        # ============================================================================
+        # RAID ANALYSIS (schema lives in raidanalysis/db.py)
+        # ============================================================================
+
+        from raidanalysis.db import ensure_schema as ensure_raid_analysis_schema
+        ensure_raid_analysis_schema(cursor)
+
+        logger.info("[MIGRATIONS] ✓ raid analysis tables ready")
+
         conn.commit()
         cursor.close()
         conn.close()

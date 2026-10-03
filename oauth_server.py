@@ -1614,6 +1614,7 @@ def render_nav(session, active='characters'):
         <a href="/admin/discord-users" class="{'active' if active == 'discord-users' else ''}">👥 Discord Users</a>
         <a href="/admin/events" class="{'active' if active == 'events' else ''}">📅 Events</a>
         <a href="/admin/mplus" class="{'active' if active == 'mplus' else ''}">🔑 Mythic+</a>
+        <a href="/admin/raids" class="{'active' if active == 'raids' else ''}">⚔️ Raid Analysis</a>
         {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">⚙️ Admin Users</a>' if is_admin else ''}
         <a href="/admin/change-password" class="{'active' if active == 'password' else ''}">🔑 Password</a>
         <div class="spacer"></div>
@@ -5397,6 +5398,10 @@ def create_app(bot=None):
     # Mythic+ admin pages (routes live in the mythicplus package)
     from mythicplus.web import register_routes as register_mplus_routes
     register_mplus_routes(app)
+
+    # Raid analysis pages (routes live in the raidanalysis package)
+    from raidanalysis.web import register_routes as register_raid_routes
+    register_raid_routes(app)
 
     # Legacy redirect (old /characters URL)
     app.router.add_get('/characters', handle_characters_redirect)
