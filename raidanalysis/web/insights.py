@@ -8,6 +8,13 @@ from .render import (ability as ability_html, bar_table, esc, fmt_amount, guide_
                      per_pull_columns, player_name)
 
 
+CAUSE_TITLES = {
+    'tank': 'A tank died', 'healers': 'Healers went down', 'attrition': 'Early deaths piled up',
+    'mass': 'Failed raid-wide mechanic', 'enrage': 'Enrage', 'called': 'Wipe called (raid died together)',
+    'chain': 'One mechanic killed several in a row', 'reset': 'Early reset', 'reset_called': 'Reset called',
+}
+
+
 def _row(icon, sentence, body, tone=''):
     return (f'<details class="insight {tone}"><summary><span>{icon}</span><span>{sentence}</span></summary>'
             f'<div class="insight-body">{body}</div></details>')
@@ -17,10 +24,10 @@ def _plural(n, word, plural=None):
     return f"{n} {word if n == 1 else (plural or word + 's')}"
 
 
-def build(pulls, tags, guide_for):
+def build(pulls, tags, guide_for, code):
     """
-    pulls: [{'number', 'kill', 'analysis' (with _duration), 'phases': [ms]}] - one
-    entry for an individual pull, several for the Overall view.
+    pulls: [{'number', 'fight_id', 'kill', 'reason', 'analysis' (with _duration), 'phases': [ms]}] -
+    one entry for an individual pull, several for the Overall view. code: the WCL report code.
     """
     single = len(pulls) == 1
     analyses = [p['analysis'] for p in pulls]
@@ -37,7 +44,28 @@ def build(pulls, tags, guide_for):
         return bar_table([(pname(n), c, fmt(c), (notes or {}).get(n, '')) for n, c in rows],
                          value_head, 'Damage' if notes else '')
 
-    groups = {'Deaths': [], 'Avoidable mechanics': [], 'Interrupts & dispels': [], 'Consumables': []}
+    groups = {'Why we wiped': [], 'Deaths': [], 'Avoidable mechanics': [], 'Interrupts & dispels': [],
+              'Consumables': []}
+
+    # --- Why pulls ended ------------------------------------------------------
+    by_cause = {}
+    for p in pulls:
+        if p.get('reason'):
+            by_cause.setdefault(p['reason']['code'], []).append(p)
+    for cause, cause_pulls in sorted(by_cause.items(), key=lambda kv: -len(kv[1])):
+        numbers = ', '.join(f'#{p["number"]}' for p in cause_pulls)
+        title = CAUSE_TITLES.get(cause, cause_pulls[0]['reason']['label'])
+        if single:
+            sentence = (f'<strong>{esc(cause_pulls[0]["reason"]["label"])}</strong> — '
+                        f'{esc(cause_pulls[0]["reason"]["detail"])}')
+            groups['Why we wiped'].append(_row('🧯', sentence, '', 'bad'))
+            continue
+        body = ''.join(
+            f'<p class="small"><a href="/admin/raids/report/{esc(code)}/{p["fight_id"]}">#{p["number"]}</a> '
+            f'<strong>{esc(p["reason"]["label"])}</strong> — <span class="muted">{esc(p["reason"]["detail"])}</span></p>'
+            for p in cause_pulls)
+        groups['Why we wiped'].append(_row('🧯', f'{title} — <strong>{_plural(len(cause_pulls), "pull")}</strong> '
+                                                 f'<span class="muted small">({numbers})</span>', body, 'bad'))
 
     # --- Deaths ---------------------------------------------------------------
     counted = [d for a in analyses for d in a.get('deaths') or [] if not d.get('after_wipe')]

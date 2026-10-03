@@ -213,3 +213,34 @@ async def scan_missing(encounter_ids=None):
             total += await scan_boss(session, boss['encounter_id'], boss['name'], boss['zone_name'])
             await asyncio.sleep(1)  # one page per boss, spaced out
         return total
+
+
+def effective_tags(encounter_id):
+    """
+    ({ability_id: tag}, {ability_id: 'auto'|'manual'}) for a boss: tags derived
+    from Mythic Trap's mechanic categories, with officers' overrides on top.
+    """
+    from . import db
+    tags = auto_tags(db.get_guides(encounter_id), db.ability_shares(encounter_id))
+    sources = {ability_id: 'auto' for ability_id in tags}
+    for ability_id, tag in db.get_tags(encounter_id).items():
+        sources[ability_id] = 'manual'
+        if tag in db.TAGS:
+            tags[ability_id] = tag
+        else:
+            tags.pop(ability_id, None)
+    return tags, sources
+
+
+def guide_lookup(encounter_id):
+    """(ability_id, name) -> cached Mythic Trap guide for this boss, or None."""
+    from . import db
+    boss_guides = db.get_guides(encounter_id)
+    cache = {}
+
+    def guide_for(ability_id, name):
+        key = (ability_id, name)
+        if key not in cache:
+            cache[key] = match_guide(boss_guides, ability_id, name)
+        return cache[key]
+    return guide_for

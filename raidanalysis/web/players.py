@@ -6,7 +6,8 @@ with the pull-by-pull breakdown. Numbers come from analyzer.player_report.
 import re
 from urllib.parse import quote
 
-from .render import (ROLE_ICONS, esc, fmt_duration, guide_button, per_pull_columns, player_name)
+from .render import (ROLE_ICONS, SERIES_PULL, esc, fmt_duration, guide_button, per_pull_columns, player_name,
+                     sparkline)
 
 SUBSCORES = (('survival', 'Survival', 'Share of pull time alive until the wipe was called'),
              ('mechanics', 'Mechanics', 'Avoidable hits compared to the raid — 100 = never hit, ~70 = raid average'),
@@ -164,3 +165,160 @@ def player_page(p, guide_for, pull_href):
 def player_url(code, name, boss_key, fight_id=None):
     base = f'/admin/raids/report/{code}/player/{quote(name)}?boss={boss_key[0]}-{boss_key[1]}'
     return base + (f'&pull={fight_id}' if fight_id else '')
+
+
+# ============================================================================
+# Trends across nights (boss page)
+# ============================================================================
+
+def player_history(night_data):
+    """{name: [(night_label, report_code, player_row)]} in night order, from boss-page night data."""
+    history = {}
+    for nd in night_data:
+        for p in nd['players']:
+            history.setdefault(p['name'], []).append((nd['label'], nd['code'], p))
+    return history
+
+
+def _delta(first, last):
+    change = last - first
+    if abs(change) < 3:
+        return '<span class="muted">±0</span>'
+    arrow = '▲' if change > 0 else '▼'
+    return f'<span class="{"trend-up" if change > 0 else "trend-down"}">{arrow} {abs(change):.0f}</span>'
+
+
+def trends_card(night_data, trend_href):
+    if len(night_data) < 2:
+        return ('<div class="card"><h2>📈 Player trends</h2><p class="muted">Trends show up once this boss has been '
+                'pulled on two or more nights.</p></div>')
+    rows = []
+    for name, nights in player_history(night_data).items():
+        if len(nights) < 2:
+            continue
+        p_last = nights[-1][2]
+        scores = [row['score'] for _, _, row in nights]
+        hits = [row['avoidable_hits'] / row['pulls'] for _, _, row in nights]
+        rows.append((scores[-1] - scores[0], f"""
+            <tr onclick="location='{esc(trend_href(name))}'" style="cursor:pointer">
+                <td data-v="{esc(name)}">{player_name(name, p_last['class'], p_last['role'])}</td>
+                <td class="num">{len(nights)}</td>
+                <td>{sparkline(scores)}</td>
+                <td class="num" data-v="{scores[-1]}">{scores[0]} → <b>{scores[-1]}</b></td>
+                <td class="num" data-v="{scores[-1] - scores[0]}">{_delta(scores[0], scores[-1])}</td>
+                <td class="num" data-v="{hits[-1]:.2f}">{hits[0]:.1f} → {hits[-1]:.1f}</td>
+            </tr>"""))
+    if not rows:
+        return ''
+    body = ''.join(r for _, r in sorted(rows, key=lambda r: -r[0]))
+    return f"""
+    <div class="card">
+        <h2>📈 Player trends</h2>
+        <p class="muted small">Each player's score on this boss, night by night (most improved first). Click a player
+           for the full picture.</p>
+        <div class="table-wrapper"><table class="compact">
+            <tr><th data-sort>Player</th><th data-sort class="num">Nights</th><th>Score per night</th>
+                <th data-sort class="num">First → latest</th><th data-sort class="num">Change</th>
+                <th data-sort class="num" title="Avoidable hits per pull, first night → latest">Avoidable hits / pull</th></tr>
+            {body}
+        </table></div>
+    </div>"""
+
+
+def trend_chart(points):
+    """Score per night (single series, 0-100) with each value printed beside its point."""
+    if len(points) < 2:
+        return ''
+    width, height, left, right, top, bottom = 900, 220, 40, 20, 20, 30
+    inner_w, inner_h = width - left - right, height - top - bottom
+    step = inner_w / (len(points) - 1)
+
+    def y(v):
+        return top + inner_h * (1 - v / 100)
+
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Score per night">']
+    for v in (0, 50, 70, 85, 100):
+        parts.append(f'<line class="grid" x1="{left}" x2="{width - right}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>'
+                     f'<text x="{left - 8}" y="{y(v) + 4:.1f}" text-anchor="end">{v}</text>')
+    line = ' '.join(f'{left + i * step:.1f},{y(v):.1f}' for i, (_, v) in enumerate(points))
+    parts.append(f'<polyline points="{line}" fill="none" stroke="{SERIES_PULL}" stroke-width="2" '
+                 f'stroke-linejoin="round"/>')
+    for i, (label, v) in enumerate(points):
+        cx = left + i * step
+        parts.append(f'<circle cx="{cx:.1f}" cy="{y(v):.1f}" r="5" fill="{SERIES_PULL}" stroke="#161a2c" '
+                     f'stroke-width="2"><title>{esc(label)}: {v}</title></circle>'
+                     f'<text x="{cx:.1f}" y="{y(v) - 10:.1f}" text-anchor="middle">{v}</text>'
+                     f'<text x="{cx:.1f}" y="{height - 8}" text-anchor="middle">{esc(label)}</text>')
+    parts.append('</svg>')
+    return ''.join(parts)
+
+
+def _subscore_cells(row):
+    return ''.join(f'<td class="num">{row["scores"][key]:.0f}</td>' if key in row['scores']
+                   else '<td class="num muted">—</td>' for key, _, _ in SUBSCORES)
+
+
+def _mechanics_heat(nights, guide_for):
+    """Avoidable hits per pull for each mechanic, per night - lighter to the right = learning it."""
+    mechanics = {}
+    for _, _, row in nights:
+        for ability_id, a in row['avoidable'].items():
+            mechanics.setdefault(ability_id, a)
+    if not mechanics:
+        return ''
+    peak = max((row['avoidable'].get(aid, {}).get('hits', 0) / row['pulls']
+                for _, _, row in nights for aid in mechanics), default=0) or 1
+    head = ''.join(f'<th class="num">{esc(label)}</th>' for label, _, _ in nights)
+    body = []
+    for ability_id, a in sorted(mechanics.items(), key=lambda kv: kv[1]['name']):
+        cells = []
+        for _, _, row in nights:
+            per_pull = row['avoidable'].get(ability_id, {}).get('hits', 0) / row['pulls']
+            cells.append(f'<td class="num heat" style="--a:{0.06 + 0.74 * per_pull / peak:.2f}" '
+                         f'title="{per_pull:.2f} hits per pull">{per_pull:.1f}</td>')
+        clip = guide_button(guide_for(ability_id, a['name']), a['name'])
+        body.append(f'<tr><td>{esc(a["name"])}{clip}</td>{"".join(cells)}</tr>')
+    return (f'<h3>Avoidable hits per pull, night by night</h3>'
+            f'<p class="muted small">Darker = hit more often. Getting lighter to the right = learning the mechanic.</p>'
+            f'<div class="table-wrapper"><table class="compact heatmap"><tr><th>Mechanic</th>{head}</tr>'
+            f'{"".join(body)}</table></div>')
+
+
+def trend_page(name, nights, guide_for, night_href):
+    """One player on one boss across nights. nights: [(label, code, row)]."""
+    last = nights[-1][2]
+    rows = []
+    for label, code, row in reversed(nights):
+        top_issue = next((n['text'] for n in row['feedback'] if n['tone'] == 'bad'), '')
+        rows.append(f"""
+            <tr onclick="location='{esc(night_href(code, name))}'" style="cursor:pointer">
+                <td>{esc(label)}</td><td class="num">{row['pulls']}</td>
+                <td class="num"><b>{row['score']}</b></td>{_subscore_cells(row)}
+                <td class="num">{row['deaths']}</td>
+                <td class="num">{row['avoidable_hits'] / row['pulls']:.1f}</td>
+                <td class="small">{esc(top_issue)}</td>
+            </tr>""")
+    sub_heads = ''.join(f'<th class="num" title="{esc(hint)}">{label}</th>' for _, label, hint in SUBSCORES)
+    return f"""
+    <div class="card">
+        <div class="player-hero">
+            {score_ring(last['score'], 'lg')}
+            <div>
+                <h2>{player_name(name, last['class'])}</h2>
+                <p class="muted">{ROLE_ICONS.get(last['role'], '')} {esc(last['spec'])} {esc(_class_label(last['class']))} ·
+                   {len(nights)} night{'s' if len(nights) != 1 else ''} on this boss · latest score {last['score']}
+                   ({_delta(nights[0][2]['score'], last['score'])} since the first night)</p>
+            </div>
+        </div>
+        {f'<h3 style="margin-top:18px">Score per night</h3>{trend_chart([(label, row["score"]) for label, _, row in nights])}'
+         if len(nights) > 1 else ''}
+    </div>
+    <div class="card">
+        <h2>🗓️ Night by night</h2>
+        <div class="table-wrapper"><table class="compact">
+            <tr><th>Night</th><th class="num">Pulls</th><th class="num">Score</th>{sub_heads}
+                <th class="num">Deaths</th><th class="num">Avoidable hits / pull</th><th>Biggest issue</th></tr>
+            {''.join(rows)}
+        </table></div>
+        {_mechanics_heat(nights, guide_for)}
+    </div>"""

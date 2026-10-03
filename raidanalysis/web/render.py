@@ -196,6 +196,15 @@ table.bars td.bar-cell { width: 55%; }
 .note.bad { background: var(--bad-soft); }
 .note.good { background: var(--good-soft); }
 
+/* Phase heatmap + wipe reasons + trends */
+table.heatmap td.heat { background: rgba(116,132,236,var(--a)); color: var(--text); font-weight: 600; }
+table.heatmap td.heat small { color: var(--muted); font-weight: 400; }
+.reason { font-weight: 600; }
+.reason-detail { display: block; font-size: 12px; color: var(--muted); }
+.trend-up { color: var(--good); font-weight: 600; }
+.trend-down { color: var(--bad); font-weight: 600; }
+.spark { width: 120px; height: 28px; vertical-align: middle; }
+
 /* Clips */
 .clip-btn { margin-left: 6px; padding: 1px 8px; font-size: 11px; border: none; border-radius: 10px;
     background: #c92a2a; color: #fff; cursor: pointer; vertical-align: middle; }
@@ -712,3 +721,62 @@ def per_pull_columns(values, label='per pull'):
             parts.append(f'<text x="{cx:.1f}" y="{height - bottom - h - 4:.1f}" text-anchor="middle">{value}</text>')
     parts.append('</svg>')
     return ''.join(parts)
+
+
+def phase_funnel(phases, total):
+    """How many pulls reached each phase, with when they got there and how long they stayed."""
+    if not phases:
+        return ''
+    rows = []
+    for ph in phases:
+        share = ph['reached'] / total if total else 0
+        rows.append(
+            f'<tr><td>{esc(ph["name"])}</td>'
+            f'<td class="bar-cell"><div class="bar" style="width:{max(2, 100 * share):.1f}%"></div></td>'
+            f'<td class="num">{ph["reached"]}/{total}</td>'
+            f'<td class="num small muted" title="Average / best time into the pull this phase started">'
+            f'{fmt_duration(ph["avg_entry"])} <span class="muted">(best {fmt_duration(ph["best_entry"])})</span></td>'
+            f'<td class="num small muted">{fmt_duration(ph["avg_time"])}</td></tr>')
+    return (f'<div class="table-wrapper"><table class="compact bars"><tr><th>Phase</th><th></th>'
+            f'<th class="num">Pulls reached</th><th class="num">Reached at</th><th class="num">Avg. time in phase</th></tr>'
+            f'{"".join(rows)}</table></div>')
+
+
+def phase_heatmap(nights, phase_order):
+    """
+    Nights x phases: share of each night's pulls that reached each phase.
+    Single-hue sequential shading (darker = more pulls got there); the number is printed in every cell.
+    nights: [(label_html, {phase_id: reached}, total_pulls)]; phase_order: [(phase_id, name)].
+    """
+    if not nights or not phase_order:
+        return ''
+    head = ''.join(f'<th class="num" title="{esc(name)}">{esc(name.split(":")[0])}</th>' for _, name in phase_order)
+    rows = []
+    for label, reached, total in nights:
+        cells = []
+        for phase_id, _ in phase_order:
+            n = reached.get(phase_id, 0)
+            share = n / total if total else 0
+            cells.append(f'<td class="num heat" style="--a:{0.08 + 0.72 * share:.2f}" '
+                         f'title="{n} of {total} pulls">{n}<small>/{total}</small></td>')
+        rows.append(f'<tr><td>{label}</td>{"".join(cells)}</tr>')
+    return (f'<div class="table-wrapper"><table class="compact heatmap"><tr><th>Night</th>{head}</tr>'
+            f'{"".join(rows)}</table></div>')
+
+
+def sparkline(values, low=0, high=100):
+    """Tiny single-series line (e.g. a player's score per night) - the last point is marked."""
+    values = [v for v in values if v is not None]
+    if len(values) < 2:
+        return ''
+    width, height, pad = 120, 28, 4
+    step = (width - 2 * pad) / (len(values) - 1)
+
+    def y(v):
+        return height - pad - (height - 2 * pad) * (max(low, min(high, v)) - low) / ((high - low) or 1)
+
+    points = ' '.join(f'{pad + i * step:.1f},{y(v):.1f}' for i, v in enumerate(values))
+    return (f'<svg class="spark" viewBox="0 0 {width} {height}" aria-hidden="true">'
+            f'<polyline points="{points}" fill="none" stroke="{SERIES_PULL}" stroke-width="2" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+            f'<circle cx="{pad + (len(values) - 1) * step:.1f}" cy="{y(values[-1]):.1f}" r="3" fill="{SERIES_PULL}"/></svg>')

@@ -2323,9 +2323,18 @@ async def handle_user_raid_stats_api(request):
                 'log_url': signup['log_url']
             })
         
+        # Who actually showed up, from the analyzed raid logs (raidanalysis package)
+        try:
+            from raidanalysis.attendance import user_attendance
+            attendance = user_attendance(discord_id)
+        except Exception as e:
+            logger.warning(f"[RAIDS] Attendance lookup failed for {discord_id}: {e}")
+            attendance = None
+
         return web.json_response({
             'success': True,
             'stats': dict(stats),
+            'attendance': attendance,
             'signups': signups_list,
             'role_distribution': [dict(r) for r in role_distribution],
             'top_characters': [dict(c) for c in top_characters]
@@ -3174,8 +3183,8 @@ async def handle_discord_user_detail(request):
                             return;
                         }}
                         
-                        const {{ stats, signups, role_distribution, top_characters }} = result;
-                        
+                        const {{ stats, signups, role_distribution, top_characters, attendance }} = result;
+
                         // Build stats overview
                         let html = '<div class="stats" style="margin-bottom:20px">';
                         html += `
@@ -3185,9 +3194,24 @@ async def handle_discord_user_detail(request):
                             </div>
                             <div class="stat">
                                 <div class="stat-value">${{stats.signed_count || 0}}</div>
-                                <div class="stat-label">Attended</div>
+                                <div class="stat-label">Signed up</div>
                             </div>
                         `;
+                        // Real attendance from analyzed raid logs (absent / benched signups excluded)
+                        if (attendance && attendance.tracked > 0) {{
+                            const rate = Math.round(100 * attendance.present / attendance.tracked);
+                            const missed = attendance.no_shows.map(n => n.title + (n.date ? ' (' + n.date + ')' : '')).join('\\n');
+                            html += `
+                                <div class="stat" title="Signed / late / tentative signups whose character was in the raid log">
+                                    <div class="stat-value">${{attendance.present}}/${{attendance.tracked}}</div>
+                                    <div class="stat-label">Showed up (${{rate}}%)</div>
+                                </div>
+                                <div class="stat" title="${{missed || 'None'}}">
+                                    <div class="stat-value" style="color:${{attendance.no_shows.length ? '#ff6b6b' : '#51cf66'}}">${{attendance.no_shows.length}}</div>
+                                    <div class="stat-label">No-shows</div>
+                                </div>
+                            `;
+                        }}
                         html += '</div>';
                         
                         // Status breakdown
@@ -3447,11 +3471,13 @@ async def handle_events_page(request):
             if match:
                 log_codes[e['id']] = match.group(1)
         try:
+            from raidanalysis.attendance import event_attendance
             from raidanalysis.db import analyzed_codes
             analyzed = analyzed_codes(set(log_codes.values()))
+            attendance = event_attendance(events)
         except Exception as e:
             logger.warning(f"[RAIDS] Could not look up analyzed logs: {e}")
-            analyzed = set()
+            analyzed, attendance = set(), {}
 
         # Get all signups for these events with Discord user info
         event_ids = [e['id'] for e in events]
@@ -3745,6 +3771,18 @@ async def handle_events_page(request):
             if event.get('description'):
                 description_html = f'<p style="margin:5px 0;color:rgba(255,255,255,0.55);font-size:13px;white-space:pre-line">{html_escape(event["description"])}</p>'
 
+            # Attendance from the analyzed log (absent / benched signups never count as no-shows)
+            attendance_html = ''
+            att = attendance.get(event_id)
+            if att:
+                parts = [f'👥 <strong>{len(att["present"])}/{att["expected"]}</strong> signed-up players showed up']
+                if att['no_shows']:
+                    parts.append(f'<span style="color:#ff8787">No-shows: {html_escape(", ".join(att["no_shows"]))}</span>')
+                if att['unsigned']:
+                    parts.append(f'<span style="color:rgba(255,255,255,0.6)">Played without signing up: '
+                                 f'{html_escape(", ".join(att["unsigned"]))}</span>')
+                attendance_html = f'<p style="margin:5px 0;font-size:13px">{" · ".join(parts)}</p>'
+
             events_html += f"""
             <div class="card event-card" data-event-id="{event_id}">
                 <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:10px">
@@ -3753,6 +3791,7 @@ async def handle_events_page(request):
                         <p style="margin:5px 0;color:rgba(255,255,255,0.7)">
                             📅 {event_date} at {event_time} {date_badge}{signups_closed_badge}
                         </p>
+                        {attendance_html}
                         {description_html}
                     </div>
                     <div style="display:flex;align-items:center;gap:10px">

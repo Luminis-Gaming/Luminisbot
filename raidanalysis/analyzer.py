@@ -562,6 +562,12 @@ def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by
                 10 + a['hits'] / max(raid_avg, 0.1), a)
     if has_tags and not p['avoidable_hits'] and raid_hits >= 0.5:
         add('good', 'Never hit by an avoidable mechanic', 6)
+    # A low Mechanics score should always come with the reason, even on small samples.
+    if p['avoidable'] and p['scores'].get('mechanics', 100) < 60 and not any(n['ability'] for n in notes):
+        a = max(p['avoidable'].values(), key=lambda a: a['hits'])
+        raid_avg = raid_by_ability[a['id']] / raid_size
+        add('bad', f"Hit by {a['name']} {a['hits']} time{'s' if a['hits'] != 1 else ''} "
+                   f"(raid average {raid_avg:.1f})", 8, a)
 
     # Deaths
     if len(p['first_deaths']) >= 2:
@@ -597,3 +603,134 @@ def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by
         add('good', f"Most dispels in the raid ({p['dispels']})", 5)
 
     return sorted(notes, key=lambda f: ({'bad': 0, 'good': 1, 'info': 2}[f['tone']], -f['weight']))
+
+
+# ============================================================================
+# Why a pull ended, and how far pulls got (render-time, from stored analyses)
+# ============================================================================
+
+BURST_WINDOW_MS = 10000      # deaths this close together count as one burst
+TANK_DEATH_LEAD_MS = 45000   # a tank death this long before the end counts as the trigger
+ENRAGE_WORDS = ('berserk', 'enrage', 'frenzy')
+
+
+def _fmt_ms(ms):
+    seconds = int(ms / 1000)
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _top(deaths):
+    counts = {}
+    for d in deaths:
+        counts[d['ability']] = counts.get(d['ability'], 0) + 1
+    return sorted(counts.items(), key=lambda kv: -kv[1])
+
+
+def wipe_reason(analysis, kill, duration, enrage_ids=()):
+    """
+    {'code', 'label', 'detail'} explaining how a wipe ended, or None for kills.
+
+    When most of the raid dies together, what happened *before* that burst
+    decides the story: after a tank death, lost healers or a pile of early
+    deaths the burst is the consequence (raid collapsed or the wipe was
+    called); with a healthy raid it's a failed raid-wide mechanic (or enrage),
+    and a mixed-ability burst out of nowhere is most likely a called wipe.
+    enrage_ids: ability IDs known to be enrage timers (e.g. from the Mythic Trap guide).
+    """
+    if kill:
+        return None
+    deaths = sorted(analysis.get('deaths') or [], key=lambda d: d['t'])
+    counted = [d for d in deaths if not d.get('after_wipe')]
+    roles = {p['name']: p.get('role') for p in analysis.get('players') or []}
+    raid = max(1, len(roles))
+
+    if duration < 30000 and len(counted) <= 2:
+        return {'code': 'reset', 'label': 'Early reset', 'detail': f'Pull ended after {_fmt_ms(duration)}'}
+
+    burst = []
+    if deaths:
+        last = deaths[-1]['t']
+        burst = [d for d in deaths if d['t'] >= last - BURST_WINDOW_MS]
+        if len(burst) < max(4, 0.35 * raid):
+            burst = []
+    end = burst[0]['t'] if burst else duration
+    before = [d for d in deaths if d['t'] < end]
+
+    # What went wrong before the end (if anything)
+    tank = next((d for d in before if roles.get(d['name']) == 'tank' and end - d['t'] <= TANK_DEATH_LEAD_MS), None)
+    healers = [d for d in before if roles.get(d['name']) == 'healer']
+    trigger = None
+    if tank:
+        trigger = ('tank', f'Tank died ({tank["name"]})',
+                   f'{tank["name"]} died to {tank["ability"]} at {_fmt_ms(tank["t"])}')
+    elif len(healers) >= 2:
+        trigger = ('healers', f'Lost {len(healers)} healers',
+                   ', '.join(f'{d["name"]} ({d["ability"]}, {_fmt_ms(d["t"])})' for d in healers[:3]))
+    elif len(before) >= 0.3 * raid:
+        top = ', '.join(f'{a} ×{n}' for a, n in _top(before)[:3])
+        trigger = ('attrition', f'{len(before)} early deaths', top)
+
+    if burst:
+        ability, n = _top(burst)[0]
+        dominant = n / len(burst) >= 0.5
+        span = max((burst[-1]['t'] - burst[0]['t']) / 1000, 1)
+        burst_text = (f'{n} died to {ability} within {span:.0f}s' if dominant
+                      else f'{len(burst)} died within {span:.0f}s')
+        if trigger:
+            code, label, detail = trigger
+            then = ability if dominant else 'wipe'
+            return {'code': code, 'label': f'{label} → {then}',
+                    'detail': f'{detail}; then {burst_text} at {_fmt_ms(burst[0]["t"])}'}
+        if dominant:
+            ability_id = next(d.get('ability_id') for d in burst if d['ability'] == ability)
+            if ability_id in enrage_ids or any(w in ability.lower() for w in ENRAGE_WORDS):
+                return {'code': 'enrage', 'label': 'Enrage', 'detail': f'{burst_text} at {_fmt_ms(burst[0]["t"])}'}
+            return {'code': 'mass', 'label': f'{ability} wiped the raid',
+                    'detail': f'Failed mechanic: {burst_text} at {_fmt_ms(burst[0]["t"])}, '
+                              f'with {len(before)} death{"s" if len(before) != 1 else ""} before'}
+        return {'code': 'called', 'label': 'Wipe called (raid died together)',
+                'detail': f'{burst_text} at {_fmt_ms(burst[0]["t"])} from different abilities, '
+                          f'with {len(before)} death{"s" if len(before) != 1 else ""} before'}
+
+    # No big final burst: the trigger, a mechanic chain, a reset, or slow attrition.
+    if trigger and trigger[0] in ('tank', 'healers'):
+        return {'code': trigger[0], 'label': trigger[1], 'detail': trigger[2]}
+    for i, d in enumerate(counted):
+        chain = [x for x in counted[i:] if x['ability'] == d['ability'] and x['t'] - d['t'] <= BURST_WINDOW_MS]
+        if len(chain) >= 3:
+            return {'code': 'chain', 'label': f'{d["ability"]} chain',
+                    'detail': f'{len(chain)} deaths to {d["ability"]} within '
+                              f'{(chain[-1]["t"] - d["t"]) / 1000:.0f}s at {_fmt_ms(d["t"])}'}
+    if analysis.get('wipe_at') is None:
+        first = counted[0] if counted else None
+        detail = (f'First death: {first["name"]} to {first["ability"]} at {_fmt_ms(first["t"])}'
+                  if first else 'No deaths before the reset')
+        return {'code': 'reset_called', 'label': 'Reset called', 'detail': detail}
+    top = ', '.join(f'{a} ×{n}' for a, n in _top(counted)[:3])
+    span = (counted[-1]['t'] - counted[0]['t']) / 1000 if counted else 0
+    return {'code': 'attrition', 'label': 'Attrition', 'detail': f'{len(counted)} deaths over {span:.0f}s — {top}'}
+
+
+def phase_progress(pulls, phase_names):
+    """
+    How far pulls got: [{'id', 'name', 'intermission', 'reached', 'avg_entry', 'best_entry', 'avg_time'}]
+    in phase order. pulls: [{'phases': [{'id', 'start'}], 'duration'}]; phase_names: {id: {name, intermission}}.
+    """
+    stats = {}
+    for pull in pulls:
+        phases = pull.get('phases') or []
+        for i, phase in enumerate(phases):
+            end = phases[i + 1]['start'] if i + 1 < len(phases) else pull['duration']
+            s = stats.setdefault(phase['id'], {'reached': 0, 'entries': [], 'times': []})
+            s['reached'] += 1
+            s['entries'].append(phase['start'])
+            s['times'].append(max(0, end - phase['start']))
+    out = []
+    for phase_id in sorted(stats):
+        s = stats[phase_id]
+        info = (phase_names or {}).get(str(phase_id)) or {}
+        out.append({'id': phase_id, 'name': info.get('name') or f'Phase {phase_id}',
+                    'intermission': bool(info.get('intermission')), 'reached': s['reached'],
+                    'avg_entry': sum(s['entries']) / len(s['entries']), 'best_entry': min(s['entries']),
+                    'avg_time': sum(s['times']) / len(s['times'])})
+    return out

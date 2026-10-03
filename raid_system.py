@@ -1636,7 +1636,10 @@ def create_raid_buttons_view(log_url: str = None):
             row=2
         )
         view.add_item(show_logs_button)
-    
+        # Private per-player recap of the night (raid analysis)
+        from raidanalysis.discord_recap import add_button as add_my_analysis_button
+        add_my_analysis_button(view, row=2)
+
     return view
 
 

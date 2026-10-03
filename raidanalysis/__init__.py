@@ -26,6 +26,13 @@ SYNC_REPORT_LIMIT = 10
 _sync_loop = None
 
 
+def register_views(client):
+    """Make the 'My analysis' button work on existing messages after a restart. Call from on_ready."""
+    from .discord_recap import MyAnalysisView
+    client.add_view(MyAnalysisView())
+    logger.info("[RAIDS] 'My analysis' button registered")
+
+
 def start_tasks():
     """Start the periodic WCL sync. Call from on_ready (needs an event loop)."""
     global _sync_loop

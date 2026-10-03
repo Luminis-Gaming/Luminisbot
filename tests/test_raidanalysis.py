@@ -128,6 +128,41 @@ class TestPlayerReport(unittest.TestCase):
         self.assertNotIn('mechanics', out['A']['scores'])
 
 
+class TestWipeReasons(unittest.TestCase):
+    def pull(self, deaths, roles=None, wipe_at=1):
+        roles = roles or {}
+        players = [{'name': n, 'role': roles.get(n, 'dps')} for n in 'ABCDEFGHIJ']
+        return {'players': players, 'wipe_at': wipe_at,
+                'deaths': [{'t': t, 'name': n, 'ability': a, 'ability_id': 1} for t, n, a in deaths]}
+
+    def test_failed_mechanic_with_healthy_raid(self):
+        deaths = [(300000 + i * 500, n, 'Mother\'s Wrath') for i, n in enumerate('ABCDEF')]
+        r = analyzer.wipe_reason(self.pull(deaths), False, 310000)
+        self.assertEqual(r['code'], 'mass')
+        self.assertIn("Mother's Wrath", r['label'])
+
+    def test_tank_death_then_wipe(self):
+        deaths = [(280000, 'A', 'Stone Venom')] + [(300000 + i * 500, n, 'Melee') for i, n in enumerate('BCDEF')]
+        r = analyzer.wipe_reason(self.pull(deaths, roles={'A': 'tank'}), False, 310000)
+        self.assertEqual(r['code'], 'tank')
+        self.assertTrue(r['label'].startswith('Tank died (A)'))
+
+    def test_mixed_burst_from_healthy_raid_is_a_called_wipe(self):
+        deaths = [(300000 + i * 400, n, f'Ability {i}') for i, n in enumerate('ABCDEF')]
+        self.assertEqual(analyzer.wipe_reason(self.pull(deaths), False, 310000)['code'], 'called')
+
+    def test_early_reset_and_kills(self):
+        self.assertEqual(analyzer.wipe_reason(self.pull([], wipe_at=None), False, 15000)['code'], 'reset')
+        self.assertIsNone(analyzer.wipe_reason(self.pull([]), True, 300000))
+
+    def test_phase_progress(self):
+        pulls = [{'phases': [{'id': 1, 'start': 0}, {'id': 2, 'start': 100000}], 'duration': 200000},
+                 {'phases': [{'id': 1, 'start': 0}], 'duration': 80000}]
+        out = {p['id']: p for p in analyzer.phase_progress(pulls, {'2': {'name': 'Stage Two'}})}
+        self.assertEqual((out[1]['reached'], out[2]['reached'], out[2]['name']), (2, 1, 'Stage Two'))
+        self.assertEqual(out[2]['avg_time'], 100000)
+
+
 class TestMistakeCounting(unittest.TestCase):
     def test_dot_ticks_after_a_direct_hit_are_one_mistake(self):
         players = actors('A')
