@@ -8,7 +8,8 @@ Battle.net characters, appears in the report's raid pulls.
 """
 import re
 
-from .db import _run
+from .db import _run, character_owners
+from .people import own_characters
 
 EXPECTED_STATUSES = ('signed', 'late', 'tentative')
 _REPORT_CODE_RE = re.compile(r'reports/([A-Za-z0-9]{16})')
@@ -30,14 +31,16 @@ def report_roster(code):
 
 
 def _linked_characters(discord_ids):
+    """{discord_id: characters} - linked Battle.net characters that really are theirs (see people.py)."""
     if not discord_ids:
         return {}
     rows = _run("SELECT discord_id, LOWER(character_name) AS name FROM wow_characters WHERE discord_id = ANY(%s)",
                 (list(discord_ids),), fetch='all')
-    out = {}
+    by_user = {}
     for r in rows:
-        out.setdefault(r['discord_id'], set()).add(r['name'])
-    return out
+        by_user.setdefault(r['discord_id'], []).append(r['name'])
+    owners = character_owners()
+    return {discord_id: own_characters(discord_id, names, owners) for discord_id, names in by_user.items()}
 
 
 def event_attendance(events):

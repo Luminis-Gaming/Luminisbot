@@ -400,3 +400,26 @@ def ability_shares(encounter_id):
         GROUP BY 1
     """, (encounter_id,), fetch='all')
     return {r['id']: {'name': r['name'], 'share': r['share']} for r in rows}
+
+
+def character_owners():
+    """
+    {lower-case character: {'key', 'discord_id', 'display'}} - who plays which character
+    (raid signups first, then linked Battle.net characters; see raidanalysis/people.py).
+    """
+    from .people import resolve_owners
+    try:
+        signups = _run("""
+            SELECT character_name, discord_id, COUNT(*) AS n FROM raid_signups
+            GROUP BY character_name, discord_id
+        """, fetch='all')
+        linked = _run("SELECT character_name, discord_id FROM wow_characters", fetch='all')
+        displays = _run("""
+            SELECT discord_id, COALESCE(discord_display_name, discord_username) AS display FROM wow_connections
+        """, fetch='all')
+    except Exception as e:  # character / signup tables missing (fresh install)
+        logger.warning(f"[RAIDS] Character owners unavailable: {e}")
+        return {}
+    return resolve_owners([(r['character_name'], r['discord_id'], r['n']) for r in signups],
+                          [(r['character_name'], r['discord_id']) for r in linked],
+                          {r['discord_id']: r['display'] for r in displays})

@@ -208,13 +208,44 @@ def player_url(code, name, boss_key, fight_id=None):
 # Trends across nights (boss page)
 # ============================================================================
 
-def player_history(night_data):
-    """{name: [(night_label, report_code, player_row)]} in night order, from boss-page night data."""
+def person_key(character, owners):
+    """Who plays this character: their Discord id when we know it, else the character itself."""
+    owner = (owners or {}).get(character.lower())
+    return owner['key'] if owner else character
+
+
+def player_history(night_data, owners=None):
+    """
+    {person_key: {'key', 'display', 'characters', 'nights': [(night_label, report_code, player_row)]}}
+    in night order. Characters belonging to the same person (linked Battle.net characters or
+    raid signups) are one history; if they played two characters in one night, the one with
+    more pulls counts.
+    """
     history = {}
     for nd in night_data:
+        tonight = {}
         for p in nd['players']:
-            history.setdefault(p['name'], []).append((nd['label'], nd['code'], p))
+            key = person_key(p['name'], owners)
+            if key not in tonight or p['pulls'] > tonight[key]['pulls']:
+                tonight[key] = p
+        for key, p in tonight.items():
+            entry = history.setdefault(key, {'key': key, 'characters': [], 'nights': [],
+                                             'display': ((owners or {}).get(p['name'].lower()) or {}).get('display')})
+            if p['name'] not in entry['characters']:
+                entry['characters'].append(p['name'])
+            entry['nights'].append((nd['label'], nd['code'], p))
     return history
+
+
+def _person_label(entry):
+    """Latest character (class-colored), plus the Discord name and other characters for alt-hoppers."""
+    last = entry['nights'][-1][2]
+    chars = entry['characters']
+    name = player_name(chars[-1], last['class'], last['role'])
+    if len(chars) == 1:
+        return name
+    lead = f'{esc(entry["display"])} · ' if entry.get('display') else ''
+    return f'{lead}{name} <span class="muted small">(also {" / ".join(esc(c) for c in chars[:-1])})</span>'
 
 
 def _delta(first, last):
@@ -225,20 +256,20 @@ def _delta(first, last):
     return f'<span class="{"trend-up" if change > 0 else "trend-down"}">{arrow} {abs(change):.0f}</span>'
 
 
-def trends_card(night_data, trend_href):
+def trends_card(night_data, trend_href, owners=None):
     if len(night_data) < 2:
         return ('<div class="card"><h2>📈 Player trends</h2><p class="muted">Trends show up once this boss has been '
                 'pulled on two or more nights.</p></div>')
     rows = []
-    for name, nights in player_history(night_data).items():
+    for key, entry in player_history(night_data, owners).items():
+        nights = entry['nights']
         if len(nights) < 2:
             continue
-        p_last = nights[-1][2]
         scores = [row['score'] for _, _, row in nights]
         hits = [row['avoidable_hits'] / row['pulls'] for _, _, row in nights]
         rows.append((scores[-1] - scores[0], f"""
-            <tr onclick="location='{esc(trend_href(name))}'" style="cursor:pointer">
-                <td data-v="{esc(name)}">{player_name(name, p_last['class'], p_last['role'])}</td>
+            <tr onclick="location='{esc(trend_href(key))}'" style="cursor:pointer">
+                <td data-v="{esc(entry.get('display') or entry['characters'][-1])}">{_person_label(entry)}</td>
                 <td class="num">{len(nights)}</td>
                 <td>{sparkline(scores)}</td>
                 <td class="num" data-v="{scores[-1]}">{scores[0]} → <b>{scores[-1]}</b></td>
@@ -251,8 +282,8 @@ def trends_card(night_data, trend_href):
     return f"""
     <div class="card">
         <h2>📈 Player trends</h2>
-        <p class="muted small">Each player's score on this boss, night by night (most improved first). Click a player
-           for the full picture.</p>
+        <p class="muted small">Each player's score on this boss, night by night (most improved first). Alts are
+           combined per person through their linked characters and signups. Click a player for the full picture.</p>
         <div class="table-wrapper"><table class="compact">
             <tr><th data-sort>Player</th><th data-sort class="num">Nights</th><th>Score per night</th>
                 <th data-sort class="num">First → latest</th><th data-sort class="num">Change</th>
@@ -321,15 +352,18 @@ def _mechanics_heat(nights, guide_for):
             f'{"".join(body)}</table></div>')
 
 
-def trend_page(name, nights, guide_for, night_href):
-    """One player on one boss across nights. nights: [(label, code, row)]."""
+def trend_page(entry, guide_for, night_href):
+    """One person on one boss across nights (all their characters). entry: from player_history."""
+    nights = entry['nights']
     last = nights[-1][2]
+    alts = len(entry['characters']) > 1
     rows = []
     for label, code, row in reversed(nights):
         top_issue = next((n['text'] for n in row['feedback'] if n['tone'] == 'bad'), '')
+        character = f'<td>{player_name(row["name"], row["class"])}</td>' if alts else ''
         rows.append(f"""
-            <tr onclick="location='{esc(night_href(code, name))}'" style="cursor:pointer">
-                <td>{esc(label)}</td><td class="num">{row['pulls']}</td>
+            <tr onclick="location='{esc(night_href(code, row['name']))}'" style="cursor:pointer">
+                <td>{esc(label)}</td>{character}<td class="num">{row['pulls']}</td>
                 <td class="num"><b>{row['score']}</b></td>{_subscore_cells(row)}
                 <td class="num">{row['deaths']}</td>
                 <td class="num">{row['avoidable_hits'] / row['pulls']:.1f}</td>
@@ -341,7 +375,7 @@ def trend_page(name, nights, guide_for, night_href):
         <div class="player-hero">
             {score_ring(last['score'], 'lg')}
             <div>
-                <h2>{player_name(name, last['class'])}</h2>
+                <h2>{_person_label(entry)}</h2>
                 <p class="muted">{ROLE_ICONS.get(last['role'], '')} {esc(last['spec'])} {esc(_class_label(last['class']))} ·
                    {len(nights)} night{'s' if len(nights) != 1 else ''} on this boss · latest score {last['score']}
                    ({_delta(nights[0][2]['score'], last['score'])} since the first night)</p>
@@ -353,7 +387,7 @@ def trend_page(name, nights, guide_for, night_href):
     <div class="card">
         <h2>🗓️ Night by night</h2>
         <div class="table-wrapper"><table class="compact">
-            <tr><th>Night</th><th class="num">Pulls</th><th class="num">Score</th>{sub_heads}
+            <tr><th>Night</th>{'<th>Character</th>' if alts else ''}<th class="num">Pulls</th><th class="num">Score</th>{sub_heads}
                 <th class="num">Deaths</th><th class="num">Avoidable hits / pull</th><th>Biggest issue</th></tr>
             {''.join(rows)}
         </table></div>

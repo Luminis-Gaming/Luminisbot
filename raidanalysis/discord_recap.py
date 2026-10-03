@@ -30,17 +30,20 @@ _REPORT_CODE_RE = re.compile(r'reports/([A-Za-z0-9]{16})')
 # ============================================================================
 
 def _player_characters(discord_id, message_id=None):
-    """Character names (lower-case) linked to a Discord user, plus their signup for this event."""
+    """
+    Character names (lower-case) that are this Discord user's: their linked characters that nobody
+    else plays (shared Battle.net accounts link both people's characters), plus their signup here.
+    """
+    from .people import own_characters
     rows = db._run("SELECT character_name FROM wow_characters WHERE discord_id = %s",
                    (str(discord_id),), fetch='all')
-    names = {r['character_name'].lower() for r in rows}
+    signed = []
     if message_id:
-        rows = db._run("""
+        signed = [r['character_name'] for r in db._run("""
             SELECT rs.character_name FROM raid_signups rs JOIN raid_events re ON re.id = rs.event_id
             WHERE re.message_id = %s AND rs.discord_id = %s
-        """, (message_id, str(discord_id)), fetch='all')
-        names |= {r['character_name'].lower() for r in rows}
-    return names
+        """, (message_id, str(discord_id)), fetch='all')]
+    return own_characters(discord_id, [r['character_name'] for r in rows], db.character_owners(), signed)
 
 
 def _event_log_code(message_id):

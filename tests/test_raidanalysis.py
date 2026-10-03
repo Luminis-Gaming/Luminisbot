@@ -181,6 +181,14 @@ class TestWipeReasons(unittest.TestCase):
         self.assertEqual((out[1]['reached'], out[2]['reached'], out[2]['name']), (2, 1, 'Stage Two'))
         self.assertEqual(out[2]['avg_time'], 100000)
 
+    def test_revisited_phases_count_once_per_pull(self):
+        # Council fights bounce between "phases" (active bosses) within one pull.
+        pulls = [{'phases': [{'id': 1, 'start': 0}, {'id': 2, 'start': 10000}, {'id': 1, 'start': 20000},
+                             {'id': 2, 'start': 30000}], 'duration': 40000}]
+        out = {p['id']: p for p in analyzer.phase_progress(pulls, {})}
+        self.assertEqual((out[1]['reached'], out[2]['reached']), (1, 1))
+        self.assertEqual((out[2]['avg_entry'], out[2]['avg_time']), (10000, 20000))
+
 
 class TestMistakeCounting(unittest.TestCase):
     def test_dot_ticks_after_a_direct_hit_are_one_mistake(self):
@@ -226,6 +234,40 @@ class TestConsumables(unittest.TestCase):
         potions, defensives = analyzer.consumable_ids(casts)
         self.assertEqual(potions, [999001, 1236616])
         self.assertEqual(defensives, [6262, 1295247])
+
+
+class TestTrendsAcrossAlts(unittest.TestCase):
+    def test_characters_of_one_person_are_one_trend(self):
+        from raidanalysis.web.players import player_history
+        row = lambda name, score, pulls=5: {'name': name, 'score': score, 'pulls': pulls}
+        nights = [
+            {'label': '24 Sep', 'code': 'A', 'players': [row('Boopsboops', 60), row('Solo', 70)]},
+            {'label': '29 Sep', 'code': 'B', 'players': [row('Boopsproops', 80, 9), row('Boopsboops', 50, 2)]},
+        ]
+        owners = {'boopsboops': {'key': 'd1', 'display': 'Boops'}, 'boopsproops': {'key': 'd1', 'display': 'Boops'}}
+        history = player_history(nights, owners)
+        boops = history['d1']
+        self.assertEqual([r['name'] for _, _, r in boops['nights']], ['Boopsboops', 'Boopsproops'])
+        self.assertEqual(boops['characters'], ['Boopsboops', 'Boopsproops'])
+        self.assertEqual(len(history['Solo']['nights']), 1)  # unknown owner: tracked per character
+
+
+class TestCharacterOwners(unittest.TestCase):
+    def test_shared_battlenet_account_split_by_signups(self):
+        from raidanalysis.people import own_characters, resolve_owners
+        # Gastronomic's Battle.net account links both characters; Naautilus signs up with his own Discord.
+        owners = resolve_owners(signups=[('Gastronomic', 'G', 4), ('Naautilus', 'N', 5)],
+                                linked=[('Gastronomic', 'G'), ('Naautilus', 'G')])
+        self.assertEqual(owners['naautilus']['discord_id'], 'N')
+        self.assertEqual(own_characters('G', ['Gastronomic', 'Naautilus'], owners), {'gastronomic'})
+        self.assertEqual(own_characters('N', [], owners, signed_with=['Naautilus']), {'naautilus'})
+
+    def test_alt_without_signups_follows_battlenet_link(self):
+        from raidanalysis.people import resolve_owners
+        owners = resolve_owners(signups=[('Boopsboops', 'B', 3)],
+                                linked=[('Boopsboops', 'B'), ('Boopsproops', 'B')], displays={'B': 'Boops'})
+        self.assertEqual(owners['boopsproops']['key'], owners['boopsboops']['key'])
+        self.assertEqual(owners['boopsproops']['display'], 'Boops')
 
 
 class TestConsumableUses(unittest.TestCase):

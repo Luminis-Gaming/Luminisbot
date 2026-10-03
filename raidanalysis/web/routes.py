@@ -901,7 +901,8 @@ def _trend_url(encounter_id, difficulty, name):
 
 
 def _player_trends(night_data, encounter_id, difficulty):
-    return players.trends_card(night_data, lambda name: _trend_url(encounter_id, difficulty, name))
+    return players.trends_card(night_data, lambda key: _trend_url(encounter_id, difficulty, key),
+                               db.character_owners())
 
 
 def _boss_night_data(encounter_id, difficulty, tags, guide_for):
@@ -936,16 +937,20 @@ async def handle_player_trend(request):
     tags, _ = _effective_tags(encounter_id)
     guide_for = _guide_lookup(encounter_id)
     night_data = _boss_night_data(encounter_id, difficulty, tags, guide_for)
-    history = players.player_history(night_data).get(name)
+    owners = db.character_owners()
+    history = players.player_history(night_data, owners)
+    # The link carries a person key; a plain character name (e.g. from a night's player page) works too.
+    entry = history.get(name) or history.get(players.person_key(name, owners))
     back = f'/admin/raids/boss/{encounter_id}/{difficulty}'
-    if not history:
+    if not entry:
         raise web.HTTPFound(back + '?error=' + quote(f'No pulls for {name} on this boss.'))
     boss_name = night_data[-1]['pulls'][0]['encounter_name']
+    title = entry.get('display') or entry['characters'][-1]
     body = (f'<div class="card"><p><a href="{back}">← {esc(boss_name)} {difficulty_pill(difficulty)}</a></p>'
-            f'<h1>{esc(name)} on {esc(boss_name)}</h1></div>'
-            + players.trend_page(name, history, guide_for,
+            f'<h1>{esc(title)} on {esc(boss_name)}</h1></div>'
+            + players.trend_page(entry, guide_for,
                                  lambda code, player: players.player_url(code, player, (encounter_id, difficulty))))
-    return _page(f'{name} · {boss_name} trend', session, body)
+    return _page(f'{title} · {boss_name} trend', session, body)
 
 
 def _short_date(epoch_ms):

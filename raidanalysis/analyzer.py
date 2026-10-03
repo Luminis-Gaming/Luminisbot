@@ -893,12 +893,18 @@ def phase_progress(pulls, phase_names):
     stats = {}
     for pull in pulls:
         phases = pull.get('phases') or []
+        # Council-style fights revisit phases within a pull: count each phase once per pull,
+        # entered at its first visit, with all visits' time added up.
+        first_entry, time_in = {}, {}
         for i, phase in enumerate(phases):
             end = phases[i + 1]['start'] if i + 1 < len(phases) else pull['duration']
-            s = stats.setdefault(phase['id'], {'reached': 0, 'entries': [], 'times': []})
+            first_entry.setdefault(phase['id'], phase['start'])
+            time_in[phase['id']] = time_in.get(phase['id'], 0) + max(0, end - phase['start'])
+        for phase_id, entry in first_entry.items():
+            s = stats.setdefault(phase_id, {'reached': 0, 'entries': [], 'times': []})
             s['reached'] += 1
-            s['entries'].append(phase['start'])
-            s['times'].append(max(0, end - phase['start']))
+            s['entries'].append(entry)
+            s['times'].append(time_in[phase_id])
     out = []
     for phase_id in sorted(stats):
         s = stats[phase_id]
