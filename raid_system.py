@@ -35,6 +35,10 @@ WOW_MAX_LEVEL = 90
 # Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 DEFAULT_TIMEZONE = "Europe/Berlin"  # Change this to your guild's timezone
 
+# Max length of the optional event description (e.g. "Starting at Lair, then ...")
+# Discord caps a whole embed at 6000 chars, and the roster needs most of that budget
+MAX_EVENT_DESCRIPTION_LENGTH = 400
+
 # ============================================================================
 # WoW CLASS AND SPEC DATA
 # ============================================================================
@@ -156,7 +160,6 @@ MELEE_SPECS = {
     'Death Knight': ['Frost', 'Unholy'],
     'Demon Hunter': ['Havoc'],
     'Druid': ['Feral'],
-    'Evoker': ['Augmentation'],
     'Hunter': ['Survival'],
     'Monk': ['Windwalker'],
     'Paladin': ['Retribution'],
@@ -168,7 +171,7 @@ MELEE_SPECS = {
 RANGED_SPECS = {
     'Demon Hunter': ['Devourer'],
     'Druid': ['Balance'],
-    'Evoker': ['Devastation'],
+    'Evoker': ['Devastation', 'Augmentation'],
     'Hunter': ['Beast Mastery', 'Marksmanship'],
     'Mage': ['Arcane', 'Fire', 'Frost'],
     'Priest': ['Shadow'],
@@ -378,6 +381,27 @@ def text_to_emoji_letters(text: str, max_chars: int = 20) -> str:
     
     return ' '.join(result)
 
+def format_event_description(text: str) -> str:
+    """
+    Format an event description for the embed as an italic block quote,
+    so it reads as a note under the title rather than loose text.
+
+    Each line is italicized separately (Discord italics don't span newlines)
+    and runs of blank lines are collapsed so the embed can't be stretched.
+
+    Examples:
+        "Starting at Lair\\nthen Vexie" -> ">>> *Starting at Lair*\\n*then Vexie*"
+    """
+    lines = []
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if line:
+            lines.append(f"*{line}*")
+        elif lines and lines[-1]:
+            lines.append("")
+
+    return ">>> " + "\n".join(lines)
+
 def format_countdown(event_datetime: datetime) -> tuple[str, bool]:
     """
     Format a countdown string for the event.
@@ -541,16 +565,17 @@ def get_dps_type(character_class: str, spec: str):
 # ============================================================================
 
 def create_raid_event(guild_id: int, channel_id: int, message_id: int, title: str, 
-                     event_date: date, event_time: time, created_by: int, signup_deadline=None):
+                     event_date: date, event_time: time, created_by: int, signup_deadline=None,
+                     description: str = None):
     """Create a new raid event in the database"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
-        INSERT INTO raid_events (guild_id, channel_id, message_id, title, event_date, event_time, created_by, signup_deadline)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO raid_events (guild_id, channel_id, message_id, title, event_date, event_time, created_by, signup_deadline, description)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
-    """, (guild_id, channel_id, message_id, title, event_date, event_time, created_by, signup_deadline))
+    """, (guild_id, channel_id, message_id, title, event_date, event_time, created_by, signup_deadline, description))
     
     event_id = cursor.fetchone()[0]
     conn.commit()
@@ -1109,8 +1134,11 @@ def generate_raid_embed(event_id: int):
     emoji_title = text_to_emoji_letters(event['title'])
     
     # Create embed with emoji title (no date emoji)
+    # The optional description renders between the title and the date field
+    raw_description = (event.get('description') or '').strip()
     embed = discord.Embed(
         title=emoji_title,
+        description=format_event_description(raw_description) if raw_description else None,
         color=embed_color,
         timestamp=datetime.now()
     )
@@ -1360,6 +1388,15 @@ def generate_raid_embed(event_id: int):
         embed.add_field(name=f"❌ Absence ({len(absent_signups)})", value=absence_text, inline=False)
 
     embed.set_footer(text="🔒 Signups are closed" if signups_closed else "Click a button below to sign up or change your status")
+
+    # Discord rejects embeds over 6000 chars - shorten the description rather than
+    # letting a big roster plus a long description break signups for everyone
+    # (trims the raw text and re-formats, so the italics/quote markup stays intact)
+    if len(embed) > 6000 and raw_description:
+        keep = len(raw_description) - (len(embed) - 6000) - 3
+        shortened = raw_description[:keep].rstrip() if keep > 0 else ''
+        embed.description = format_event_description(shortened + "...") if shortened else None
+
     view = create_raid_buttons_view(event.get('log_url'))
     return embed, view
 
@@ -1934,7 +1971,17 @@ class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
             required=True
         )
         self.add_item(self.title_input)
-        
+
+        self.description_input = discord.ui.TextInput(
+            label="Description (optional)",
+            style=discord.TextStyle.paragraph,
+            default=event.get('description') or None,
+            placeholder="e.g., Starting at Lair, then Vexie and Cauldron",
+            max_length=MAX_EVENT_DESCRIPTION_LENGTH,
+            required=False
+        )
+        self.add_item(self.description_input)
+
         self.date_input = discord.ui.TextInput(
             label="Date (YYYY-MM-DD or DD/MM/YYYY)",
             default=event['event_date'].strftime("%Y-%m-%d"),
@@ -1960,16 +2007,17 @@ class EditEventModal(discord.ui.Modal, title="Edit Raid Event"):
             new_date = parse_date(self.date_input.value)
             new_time = parse_time(self.time_input.value)
             new_title = self.title_input.value
-            
+            new_description = self.description_input.value.strip() or None
+
             # Update event in database
             conn = get_db_connection()
             cursor = conn.cursor()
-            
+
             cursor.execute("""
                 UPDATE raid_events
-                SET title = %s, event_date = %s, event_time = %s
+                SET title = %s, description = %s, event_date = %s, event_time = %s
                 WHERE id = %s
-            """, (new_title, new_date, new_time, self.event['id']))
+            """, (new_title, new_description, new_date, new_time, self.event['id']))
             
             conn.commit()
             cursor.close()
