@@ -205,6 +205,17 @@ table.heatmap td.heat small { color: var(--muted); font-weight: 400; }
 .trend-down { color: var(--bad); font-weight: 600; }
 .spark { width: 120px; height: 28px; vertical-align: middle; }
 
+/* Score breakdown */
+.breakdown { display: grid; gap: 10px; margin-top: 10px; }
+.comp-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.comp-head b { font-variant-numeric: tabular-nums; }
+.comp .subscore-track { margin: 4px 0 3px; }
+.comp-detail { font-size: 12px; color: var(--muted); }
+.subscore-fill.neutral { background: var(--faint); }
+details.breakdown-toggle > summary { cursor: pointer; font-size: 13px; color: #9aa6ff; list-style: none; }
+details.breakdown-toggle > summary::before { content: '▸ '; }
+details.breakdown-toggle[open] > summary::before { content: '▾ '; }
+
 /* Clips */
 .clip-btn { margin-left: 6px; padding: 1px 8px; font-size: 11px; border: none; border-radius: 10px;
     background: #c92a2a; color: #fff; cursor: pointer; vertical-align: middle; }

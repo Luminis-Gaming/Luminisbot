@@ -14,7 +14,7 @@ from urllib.parse import quote
 from aiohttp import web
 
 from .. import analyzer, db, guides, sync
-from . import insights, players
+from . import consumables, insights, players
 from .render import (CLIP_MODAL, PAGE_CSS, PAGE_JS, ability, deaths_strip, difficulty_pill, phase_funnel,
                      phase_heatmap, esc, fmt_amount, fmt_duration,
                      guide_button, killers_table, phase_label, player_name, progress_chart, pull_timeline,
@@ -410,6 +410,21 @@ def _roster_names(analysis):
     return pname
 
 
+def _consumables_card(insight_pulls, roster):
+    """WCL-style timeline: enemy casts on top, every player's potions / healthstones / deaths below."""
+    analyses = [p['analysis'] for p in insight_pulls]
+    if not consumables.has_details(analyses):
+        return ('<div class="card"><h2>🧪 Consumables timeline</h2>' + insights.REANALYZE_HINT + '</div>')
+    single = len(insight_pulls) == 1
+    hint = ('Enemy casts on top; each player\'s potions (bar = buff duration), healthstones / healing potions '
+            '(diamonds) and deaths underneath. Hover anything for details.' if single else
+            'Every potion and healthstone from every pull on one axis — clusters show each player\'s habits '
+            '(e.g. always potting at the pull and again around 5:00). Open a single pull for the exact timeline '
+            'with boss abilities.')
+    return (f'<div class="card"><h2>🧪 Consumables timeline</h2><p class="muted small">{hint}</p>'
+            f'{consumables.timeline(insight_pulls, roster)}</div>')
+
+
 def _insight_pulls(numbered, enrage_ids=()):
     return [{'number': number, 'kill': pull['kill'], 'analysis': _with_duration(pull),
              'fight_id': pull['fight_id'], 'reason': _pull_reason(pull, enrage_ids),
@@ -498,6 +513,7 @@ async def handle_night(request):
         <h2>📋 Mechanics</h2>
         {insights.build(insight_pulls, tags, guide_for, code)}
     </div>
+    {_consumables_card(insight_pulls, merged['players'])}
     <div class="card">
         <h2>💀 Deaths in every pull</h2>
         <p class="muted small">One row per pull, along its own length: red ticks are deaths, grey ones came after
@@ -555,7 +571,8 @@ async def handle_pull(request):
         for d in analysis.get('deaths') or [])
 
     result = 'Kill' if pull['kill'] else f"Wipe at {pull['fight_pct'] or 0:.1f}%"
-    reason = _pull_reason(pull, _enrage_ids(encounter_id, guide_for))
+    pull_insights = _insight_pulls([(number, pull)], _enrage_ids(encounter_id, guide_for))
+    reason = pull_insights[0]['reason']
     reason_html = f'<p>🧯 {_reason_html(reason)}</p>' if reason else ''
     body = _night_header(request, report, code, pulls, (encounter_id, difficulty), fight_id) + f"""
     <div class="card">
@@ -570,8 +587,9 @@ async def handle_pull(request):
     </div>
     <div class="card">
         <h2>📋 Mechanics</h2>
-        {insights.build(_insight_pulls([(number, pull)], _enrage_ids(encounter_id, guide_for)), tags, guide_for, code)}
+        {insights.build(pull_insights, tags, guide_for, code)}
     </div>
+    {_consumables_card(pull_insights, analysis.get('players') or [])}
     <div class="card">
         <h2>💀 Deaths</h2>
         <div class="table-wrapper"><table class="compact"><tr><th class="num">Time</th><th>Player</th>

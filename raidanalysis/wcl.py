@@ -131,6 +131,8 @@ async def get_fight_tables(session, code, fight_id):
               dispels: table(fightIDs: $fights, dataType: Dispels)
               casts: table(fightIDs: $fights, dataType: Casts,
                            hostilityType: Friendlies, viewBy: Ability)
+              enemyCasts: table(fightIDs: $fights, dataType: Casts,
+                                hostilityType: Enemies, viewBy: Ability)
               playerDetails(fightIDs: $fights)
             }
           }
@@ -142,23 +144,24 @@ async def get_fight_tables(session, code, fight_id):
             for key, value in report.items()}
 
 
-async def get_events(session, code, fight_id, data_type, filter_expression, max_events=20000):
+async def get_events(session, code, fight_id, data_type, filter_expression, max_events=20000,
+                     hostility='Friendlies'):
     """All events matching filter_expression in one pull, following pagination."""
     events = []
     start = None
     while True:
         variables = {'code': code, 'fights': [fight_id], 'dataType': data_type,
-                     'filter': filter_expression}
+                     'filter': filter_expression, 'hostility': hostility}
         start_arg = ''
         if start is not None:
             variables['start'] = start
             start_arg = ', startTime: $start'
         data = await query(session, f"""
-            query($code: String!, $fights: [Int]!, $dataType: EventDataType!,
+            query($code: String!, $fights: [Int]!, $dataType: EventDataType!, $hostility: HostilityType!,
                   $filter: String{', $start: Float' if start is not None else ''}) {{
               reportData {{
                 report(code: $code) {{
-                  events(fightIDs: $fights, dataType: $dataType, hostilityType: Friendlies,
+                  events(fightIDs: $fights, dataType: $dataType, hostilityType: $hostility,
                          filterExpression: $filter, limit: 10000{start_arg}) {{
                     data
                     nextPageTimestamp

@@ -6,9 +6,7 @@ The stored analysis is tag-independent: which abilities count as "avoidable"
 is applied at render time, so retagging a mechanic never needs a re-sync.
 """
 
-import math
-
-ANALYSIS_VERSION = 3
+ANALYSIS_VERSION = 4
 
 # Officer tags on boss abilities (stored in raid_ability_tags).
 TAG_AVOIDABLE = 'avoidable'                   # any hit is a mistake
@@ -130,7 +128,102 @@ def _roster(fight, actors, player_details):
     return roster
 
 
-def analyze_fight(fight, actors, tables, damage_events, consumable_events, potion_ids, defensive_ids):
+PREPOT_GRACE_MS = 2000       # a cast this close to a buff's start belongs to it
+HEAL_MERGE_MS = 1500         # heal events this close together are one healthstone / potion
+BOSS_CAST_SPAM_LIMIT = 40    # enemy abilities cast more often than this per pull are left off the timeline
+
+
+def _consumable_uses(fight_start, duration, names_by_id, roster, casts_table, consumable_events,
+                     buff_events, heal_events, potion_ids, defensive_ids):
+    """
+    Every potion / healthstone use in a pull: who, what, when (ms into the pull),
+    how long a combat potion's buff lasted, whether it was a pre-pot, and how
+    much a healthstone / healing potion healed for.
+    """
+    meta = {e['guid']: {'name': e.get('name'), 'icon': e.get('abilityIcon')}
+            for e in _entries(casts_table) if e.get('guid') in potion_ids | defensive_ids}
+
+    def info(guid, event):
+        fallback = (event.get('ability') or {})
+        m = meta.get(guid) or {'name': fallback.get('name') or f'Spell {guid}', 'icon': fallback.get('abilityIcon')}
+        return m['name'], m['icon']
+
+    # Combat-potion buff windows, per (player, potion). A removebuff with no applybuff = pre-pot.
+    windows = []
+    open_buffs = {}
+    for event in sorted(buff_events, key=lambda e: e['timestamp']):
+        guid, name = _event_ability(event), names_by_id.get(event.get('targetID'))
+        if guid not in potion_ids or name not in roster:
+            continue
+        t = event['timestamp'] - fight_start
+        if event.get('type') == 'applybuff':
+            open_buffs[(name, guid)] = {'name': name, 'guid': guid, 'start': t, 'end': None, 'event': event}
+        elif event.get('type') == 'removebuff':
+            window = open_buffs.pop((name, guid), None) or {'name': name, 'guid': guid, 'start': None,
+                                                           'event': event}
+            window['end'] = t
+            windows.append(window)
+    for window in open_buffs.values():
+        window['end'] = duration
+        windows.append(window)
+
+    uses = []
+    casts = [e for e in consumable_events if e.get('type') == 'cast']
+    for event in sorted(casts, key=lambda e: e['timestamp']):
+        guid, name = _event_ability(event), names_by_id.get(event.get('sourceID'))
+        if name not in roster or guid not in potion_ids:
+            continue
+        t = event['timestamp'] - fight_start
+        window = next((w for w in windows if w['name'] == name and w['guid'] == guid and w['start'] is not None
+                       and abs(w['start'] - t) <= PREPOT_GRACE_MS and not w.get('used')), None)
+        if window:
+            window['used'] = True
+        ability, icon = info(guid, event)
+        uses.append({'t': t, 'name': name, 'ability_id': guid, 'ability': ability, 'icon': icon, 'kind': 'potion',
+                     'end': window['end'] if window else None, 'prepot': False})
+    for window in windows:
+        if window['start'] is None:  # buff was already up when the pull started
+            ability, icon = info(window['guid'], window['event'])
+            uses.append({'t': 0, 'name': window['name'], 'ability_id': window['guid'], 'ability': ability,
+                         'icon': icon, 'kind': 'potion', 'end': window['end'], 'prepot': True})
+
+    # Healthstones / healing potions, with how much they healed for.
+    last = {}
+    for event in sorted(heal_events, key=lambda e: e['timestamp']):
+        guid, name = _event_ability(event), names_by_id.get(event.get('sourceID'))
+        if guid not in defensive_ids or name not in roster or event.get('type') != 'heal':
+            continue
+        t = event['timestamp'] - fight_start
+        amount = (event.get('amount') or 0) + (event.get('absorbed') or 0)
+        previous = last.get((name, guid))
+        if previous and t - previous['t'] <= HEAL_MERGE_MS:
+            previous['healing'] += amount
+            continue
+        ability, icon = info(guid, event)
+        use = {'t': t, 'name': name, 'ability_id': guid, 'ability': ability, 'icon': icon, 'kind': 'defensive',
+               'healing': amount}
+        uses.append(use)
+        last[(name, guid)] = use
+    return sorted(uses, key=lambda u: (u['t'], u['name']))
+
+
+def _boss_timeline(fight_start, enemy_casts_table, enemy_cast_events):
+    """Enemy ability casts for the timeline: ([[t, ability_id], ...], [{'id', 'name', 'icon', 'source'}])."""
+    meta = {}
+    for entry in _entries(enemy_casts_table):
+        source = entry.get('actorName') or ''
+        if source == 'Environment' or (entry.get('total') or 0) > BOSS_CAST_SPAM_LIMIT:
+            continue
+        meta[entry['guid']] = {'id': entry['guid'], 'name': entry.get('name'), 'icon': entry.get('abilityIcon'),
+                               'source': source}
+    casts = [[e['timestamp'] - fight_start, _event_ability(e)] for e in enemy_cast_events
+             if e.get('type') == 'cast' and _event_ability(e) in meta]
+    used = {guid for _, guid in casts}
+    return sorted(casts), [m for guid, m in meta.items() if guid in used]
+
+
+def analyze_fight(fight, actors, tables, damage_events, consumable_events, potion_ids, defensive_ids,
+                  buff_events=(), heal_events=(), enemy_cast_events=()):
     """
     Build the stored analysis for one pull.
 
@@ -234,6 +327,10 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
             potions[name] = potions.get(name, 0) + 1
         elif guid in defensive_ids:
             defensives[name] = defensives.get(name, 0) + 1
+    duration = fight['endTime'] - fight_start
+    uses = _consumable_uses(fight_start, duration, names_by_id, roster, tables.get('casts'), consumable_events,
+                            buff_events, heal_events, set(potion_ids), set(defensive_ids))
+    boss_casts, boss_abilities = _boss_timeline(fight_start, tables.get('enemyCasts'), enemy_cast_events)
 
     return {
         'version': ANALYSIS_VERSION,
@@ -245,6 +342,9 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         'dispels': dispels,
         'potions': potions,
         'defensives': defensives,
+        'consumables': uses,
+        'boss_casts': boss_casts,
+        'boss_abilities': boss_abilities,
     }
 
 
@@ -429,19 +529,31 @@ def suggest_avoidable(analyses, tagged_ids):
 # Player report: score + feedback (the "Players" tab)
 # ============================================================================
 
-# Sub-score weights. Survival = share of pull time alive until the wipe call;
-# Mechanics = avoidable hits relative to the raid; Potions = pulls potted.
-SCORE_WEIGHTS = {'survival': 0.40, 'mechanics': 0.45, 'potions': 0.15}
-SCORE_WEIGHTS_NO_TAGS = {'survival': 0.70, 'potions': 0.30}
+# The score is a weighted mean of 0-100 components (100 = best), like Wipefest:
+# survival, deaths, one per avoidable mechanic, potions and healthstones.
+# Interrupts / dispels are contributions: shown, and averaged into a separate
+# bonus score, but they don't move the main score.
+COMPONENT_WEIGHTS = {'survival': 2.0, 'deaths': 1.0, 'mechanic': 1.0, 'potions': 1.0, 'defensives': 0.5}
 
 
-def _relative_score(value, raid_average):
-    """100 = clean, ~70 = raid average, ~50 = twice the average, falling smoothly from there."""
+def _rank_lower_better(value, values):
+    """100 = clean (zero); otherwise the share of the raid doing worse, ties split."""
     if value <= 0:
         return 100.0
-    if raid_average <= 0:
+    if len(values) <= 1:
         return 50.0
-    return 100.0 * math.exp(-0.35 * value / raid_average)
+    worse = sum(1 for v in values if v > value)
+    ties = sum(1 for v in values if v == value) - 1
+    return 100.0 * (worse + 0.5 * ties) / (len(values) - 1)
+
+
+def _rank_higher_better(value, values):
+    """100 = top of the raid; the share of the raid doing less, ties split."""
+    if len(values) <= 1:
+        return 100.0 if value > 0 else 50.0
+    less = sum(1 for v in values if v < value)
+    ties = sum(1 for v in values if v == value) - 1
+    return 100.0 * (less + 0.5 * ties) / (len(values) - 1)
 
 
 def _new_player_row(player):
@@ -459,7 +571,7 @@ def player_report(pulls, tags):
     given pulls of one boss. pulls: [{'number', 'kill', 'analysis' (with _duration)}].
     Sorted best score first.
     """
-    rows = {}
+    rows, mechanics_seen = {}, {}
     for pull in pulls:
         analysis = pull['analysis']
         duration = analysis.get('_duration') or 0
@@ -476,6 +588,7 @@ def player_report(pulls, tags):
             tag = tags.get(ability['id'])
             if tag not in AVOIDABLE_TAGS:
                 continue
+            mechanics_seen.setdefault(ability['id'], {'name': ability['name'], 'icon': ability.get('icon'), 'tag': tag})
             for name, n in mistake_counts(ability).items():
                 if n and not (tag == TAG_AVOIDABLE_NON_TANK and roster.get(name, {}).get('role') == 'tank'):
                     avoidable.setdefault(name, {})[ability['id']] = (ability['name'], ability.get('icon'), n)
@@ -532,40 +645,101 @@ def player_report(pulls, tags):
     dispel_rank = sorted((p for p in players if p['dispels']), key=lambda p: -p['dispels'])
 
     for p in players:
-        n = p['pulls']
-        p['scores'] = {
-            'survival': 100.0 * p['alive_ms'] / p['pull_ms'] if p['pull_ms'] else 100.0,
-            'potions': 100.0 * p['potion_pulls'] / n,
-        }
-        if has_tags:
-            p['scores']['mechanics'] = _relative_score(p['avoidable_hits'] / n, raid_hits)
-        weights = SCORE_WEIGHTS if has_tags else SCORE_WEIGHTS_NO_TAGS
-        p['score'] = round(sum(p['scores'][k] * w for k, w in weights.items()))
-        p['feedback'] = _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by_ability,
-                                  len(players), interrupt_rank, dispel_rank)
+        p['components'] = _components(p, players, mechanics_seen, raid_by_ability)
+        scored = [c for c in p['components'] if not c['bonus']]
+        p['score'] = round(sum(c['value'] * c['weight'] for c in scored) / sum(c['weight'] for c in scored))
+        bonus = [c['value'] for c in p['components'] if c['bonus']]
+        p['contribution'] = round(sum(bonus) / len(bonus)) if bonus else None
+        mechanic_values = [c['value'] for c in scored if c['key'] == 'mechanic']
+        p['scores'] = {'survival': next(c['value'] for c in scored if c['key'] == 'survival'),
+                       'potions': next(c['value'] for c in scored if c['key'] == 'potions')}
+        if mechanic_values:
+            p['scores']['mechanics'] = sum(mechanic_values) / len(mechanic_values)
+        p['feedback'] = _feedback(p, p['pulls'], has_tags, raid_hits, raid_deaths, raid_no_defensive,
+                                  raid_by_ability, len(players), interrupt_rank, dispel_rank)
     return sorted(players, key=lambda p: -p['score'])
+
+
+def _components(p, players, mechanics_seen, raid_by_ability):
+    """Every 0-100 value behind a player's score, with the raw numbers that produced it."""
+    n = p['pulls']
+    out = []
+
+    def add(key, label, value, detail, bonus=False, ability=None):
+        out.append({'key': key, 'label': label, 'value': round(value, 1), 'detail': detail, 'bonus': bonus,
+                    'ability': ability, 'weight': COMPONENT_WEIGHTS.get(key, 1.0)})
+
+    survival = 100.0 * p['alive_ms'] / p['pull_ms'] if p['pull_ms'] else 100.0
+    add('survival', 'Survival', survival, f'Alive {survival:.0f}% of the time until the wipe call')
+
+    death_rates = [q['deaths'] / q['pulls'] for q in players]
+    add('deaths', 'Deaths', _rank_lower_better(p['deaths'] / n, death_rates),
+        f"{p['deaths']} before the wipe call in {n} pull{'s' if n != 1 else ''} "
+        f"(raid average {sum(death_rates) / len(death_rates) * n:.1f})")
+
+    for ability_id, m in mechanics_seen.items():
+        if not raid_by_ability.get(ability_id):
+            continue  # nobody got hit - nothing to compare
+        eligible = [q for q in players if not (m['tag'] == TAG_AVOIDABLE_NON_TANK and q['role'] == 'tank')]
+        if p not in eligible:
+            continue
+        rates = [q['avoidable'].get(ability_id, {}).get('hits', 0) / q['pulls'] for q in eligible]
+        hits = p['avoidable'].get(ability_id, {}).get('hits', 0)
+        hit_share = sum(1 for r in rates if r > 0) / len(rates)
+        raid_avg = sum(rates) / len(rates) * n  # what an average raider would have taken over these pulls
+        add('mechanic', m['name'], _rank_lower_better(hits / n, rates),
+            f"Hit {hits}× (raid average {raid_avg:.1f}; {hit_share:.0%} of the raid got hit)",
+            ability={'id': ability_id, 'name': m['name'], 'icon': m['icon'], 'hit_share': hit_share,
+                     'raid_avg': raid_avg})
+
+    add('potions', 'Potions', 100.0 * p['potion_pulls'] / n, f"Combat potion in {p['potion_pulls']} of {n} pulls")
+
+    defensive_rates = [q['defensives'] / q['pulls'] for q in players]
+    if any(defensive_rates):
+        add('defensives', 'Healthstones / healing potions', _rank_higher_better(p['defensives'] / n, defensive_rates),
+            f"Used {p['defensives']} (raid average {sum(defensive_rates) / len(defensive_rates) * n:.1f})")
+
+    for key, label in (('interrupts', 'Interrupts'), ('dispels', 'Dispels')):
+        rates = [q[key] / q['pulls'] for q in players]
+        if any(rates):
+            add(key, label, _rank_higher_better(p[key] / n, rates),
+                f"{p[key]} (raid average {sum(rates) / len(rates) * n:.1f})", bonus=True)
+
+    order = {'survival': 0, 'deaths': 1, 'mechanic': 2, 'potions': 3, 'defensives': 4, 'interrupts': 5, 'dispels': 6}
+    return sorted(out, key=lambda c: (order[c['key']], c['value'] if c['key'] == 'mechanic' else 0))
 
 
 def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by_ability, raid_size,
               interrupt_rank, dispel_rank):
     """Plain-language notes for one player, problems first (most serious on top)."""
     notes = []
+    # Same per-player raid averages as the score breakdown, so the numbers always agree.
+    breakdown_avg = {c['ability']['id']: c['ability']['raid_avg']
+                     for c in p.get('components') or [] if c['key'] == 'mechanic'}
 
     def add(tone, text, weight, ability=None):
         notes.append({'tone': tone, 'text': text, 'weight': weight, 'ability': ability})
 
     # Mechanics this player gets hit by far more than the rest of the raid
     for ability_id, a in sorted(p['avoidable'].items(), key=lambda kv: -kv[1]['hits']):
-        raid_avg = raid_by_ability[ability_id] / raid_size
+        raid_avg = breakdown_avg.get(ability_id, raid_by_ability[ability_id] / raid_size)
         if a['hits'] >= 3 and a['hits'] >= 2 * raid_avg:
             add('bad', f"Hit by {a['name']} {a['hits']} times — {a['hits'] / raid_avg:.1f}× the raid average",
                 10 + a['hits'] / max(raid_avg, 0.1), a)
     if has_tags and not p['avoidable_hits'] and raid_hits >= 0.5:
         add('good', 'Never hit by an avoidable mechanic', 6)
+    else:
+        # Mechanics this player handled cleanly while most of the raid didn't.
+        clean = [c for c in p.get('components') or [] if c['key'] == 'mechanic' and c['value'] == 100
+                 and c['ability']['hit_share'] >= 0.5]
+        for c in sorted(clean, key=lambda c: -c['ability']['hit_share'])[:2]:
+            add('good', f"Clean on {c['label']} while {c['ability']['hit_share']:.0%} of the raid got hit",
+                4 + c['ability']['hit_share'], c['ability'])
     # A low Mechanics score should always come with the reason, even on small samples.
-    if p['avoidable'] and p['scores'].get('mechanics', 100) < 60 and not any(n['ability'] for n in notes):
+    if p['avoidable'] and p['scores'].get('mechanics', 100) < 60 \
+            and not any(n['ability'] and n['tone'] == 'bad' for n in notes):
         a = max(p['avoidable'].values(), key=lambda a: a['hits'])
-        raid_avg = raid_by_ability[a['id']] / raid_size
+        raid_avg = breakdown_avg.get(a['id'], raid_by_ability[a['id']] / raid_size)
         add('bad', f"Hit by {a['name']} {a['hits']} time{'s' if a['hits'] != 1 else ''} "
                    f"(raid average {raid_avg:.1f})", 8, a)
 

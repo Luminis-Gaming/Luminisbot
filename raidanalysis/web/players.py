@@ -16,9 +16,9 @@ SUBSCORES = (('survival', 'Survival', 'Share of pull time alive until the wipe w
 
 def _band(score):
     """Score band - always shown as text next to the color."""
-    if score >= 85:
+    if score >= 80:
         return 'good', 'Great'
-    if score >= 70:
+    if score >= 60:
         return 'ok', 'OK'
     return 'bad', 'Improve'
 
@@ -41,13 +41,41 @@ def _subscore_bars(scores):
             continue
         value = scores[key]
         out.append(f'<div class="subscore" title="{esc(hint)}"><span>{label}</span>'
-                   f'<div class="subscore-track"><div class="subscore-fill {_band(value)[0]}" '
+                   f'<div class="subscore-track"><div class="subscore-fill {_component_band(value)}" '
                    f'style="width:{value:.0f}%"></div></div><b>{value:.0f}</b></div>')
     return ''.join(out)
 
 
+def _component_band(value):
+    """Breakdown bars: ~50 is raid-average for relative components, so it gets amber, not red."""
+    if value >= 75:
+        return 'good'
+    if value >= 45:
+        return 'ok'
+    return 'bad'
+
+
+def breakdown(p, guide_for):
+    """Every component behind the score - Wipefest-style bars with the raw numbers."""
+    rows = []
+    for c in p.get('components') or []:
+        band = 'neutral' if c['bonus'] else _component_band(c['value'])
+        clip = guide_button(guide_for(c['ability']['id'], c['ability']['name']), c['label']) if c['ability'] else ''
+        tag = ' <small class="muted">bonus</small>' if c['bonus'] else (
+            ' <small class="muted">×2</small>' if c['weight'] >= 2 else
+            ' <small class="muted">×½</small>' if c['weight'] < 1 else '')
+        rows.append(f'<div class="comp"><div class="comp-head"><span>{esc(c["label"])}{clip}{tag}</span>'
+                    f'<b>{c["value"]:.0f}</b></div>'
+                    f'<div class="subscore-track"><div class="subscore-fill {band}" style="width:{c["value"]:.0f}%">'
+                    f'</div></div><div class="comp-detail">{esc(c["detail"])}</div></div>')
+    return f'<div class="breakdown">{"".join(rows)}</div>'
+
+
 def _contributions(p):
     chips = []
+    if p.get('contribution') is not None:
+        chips.append(f'<span class="chip" title="Average of the bonus components (interrupts, dispels) - '
+                     f'not part of the score">⭐ Contribution {p["contribution"]}</span>')
     if p['interrupts']:
         chips.append(f'<span class="chip">✋ {p["interrupts"]} interrupt{"s" if p["interrupts"] != 1 else ""}</span>')
     if p['dispels']:
@@ -93,15 +121,18 @@ def players_view(players, guide_for, player_href):
             <div class="subscores">{_subscore_bars(p['scores'])}</div>
             <div class="chips">{_contributions(p)}</div>
             <ul class="notes">{notes or '<li class="note info"><span>👍</span><span>Nothing stands out.</span></li>'}</ul>
+            <details class="breakdown-toggle"><summary>Score breakdown ({len(p.get('components') or [])})</summary>
+                {breakdown(p, guide_for)}</details>
             <a class="card-link" href="{esc(player_href(p['name']))}">
                 {f'+{more} more · ' if more > 0 else ''}Pull-by-pull details →</a>
         </article>""")
     return f"""
     <div class="card">
         <h2>👥 Players</h2>
-        <p class="muted small">Score = Survival 40% + Mechanics 45% + Potions 15% (Survival 70% + Potions 30% while no
-           avoidable mechanics are known for this boss). Mechanics compares avoidable hits to the raid: 100 = never hit,
-           about 70 = raid average.</p>
+        <p class="muted small">Score = weighted average of 0–100 components: Survival (×2), Deaths, one per avoidable
+           mechanic, Potions and Healthstones (×½). Mechanics and deaths are compared with the raid — 100 means never hit,
+           about 50 means raid average. Interrupts and dispels are shown as contributions and don't lower anyone's score.
+           Open <strong>Score breakdown</strong> on a card to see every number.</p>
         <div class="pull-chips">{filters}</div>
     </div>
     <div class="player-grid">{''.join(cards)}</div>"""
@@ -143,6 +174,12 @@ def player_page(p, guide_for, pull_href):
                 <div class="chips">{_contributions(p)}</div>
             </div>
         </div>
+    </div>
+    <div class="card">
+        <h2>🧮 Score breakdown</h2>
+        <p class="muted small">Every number behind the score. 100 = best; relative components compare with the rest of
+           the raid on the same pulls (about 50 = raid average).</p>
+        {breakdown(p, guide_for)}
     </div>
     <div class="grid-2">
         <div class="card"><h2>📝 Feedback</h2>

@@ -116,6 +116,25 @@ class TestPlayerReport(unittest.TestCase):
         self.assertTrue(any('Hit by Ability 1292403 12 times' in t for t in sloppy_notes), sloppy_notes)
         self.assertIn('Never hit by an avoidable mechanic', [n['text'] for n in out['Clean']['feedback']])
 
+    def test_breakdown_components(self):
+        players = actors('Clean', 'Sloppy', 'C', 'D')
+        pulls = [analyze(players, [damage(2, CAUSTIC, 500, t=1000 + i) for i in range(4)]) for _ in range(3)]
+        for a in pulls:  # Clean interrupts something every pull - a bonus, not part of the score
+            a['interrupts'] = [{'id': 9, 'name': 'Bolt', 'begun': 1, 'count': 1, 'by': {'Clean': 1}}]
+        out = self.report(pulls, {CAUSTIC: analyzer.TAG_AVOIDABLE})
+        clean = {c['key'] if c['key'] != 'mechanic' else c['label']: c for c in out['Clean']['components']}
+        self.assertEqual(clean['Ability 1292403']['value'], 100.0)
+        self.assertTrue(clean['interrupts']['bonus'])
+        self.assertEqual(out['Clean']['contribution'], 100)
+        scored = [c for c in out['Clean']['components'] if not c['bonus']]
+        expected = round(sum(c['value'] * c['weight'] for c in scored) / sum(c['weight'] for c in scored))
+        self.assertEqual(out['Clean']['score'], expected)  # interrupts don't move the score
+        # Notes quote the same raid average as the breakdown
+        sloppy_mech = next(c for c in out['Sloppy']['components'] if c['key'] == 'mechanic')
+        note = next(n['text'] for n in out['Sloppy']['feedback'] if 'Ability 1292403' in n['text'])
+        self.assertIn(f"{sloppy_mech['ability']['raid_avg']:.1f}", sloppy_mech['detail'])
+        self.assertTrue(note)
+
     def test_tanks_exempt_from_non_tank_mechanics(self):
         players = actors('Tank', 'Dps')
         details = {'playerDetails': {'tanks': [{'name': 'Tank', 'type': 'Warrior', 'icon': 'Warrior-Protection'}]}}
@@ -207,6 +226,31 @@ class TestConsumables(unittest.TestCase):
         potions, defensives = analyzer.consumable_ids(casts)
         self.assertEqual(potions, [999001, 1236616])
         self.assertEqual(defensives, [6262, 1295247])
+
+
+class TestConsumableUses(unittest.TestCase):
+    def test_potions_prepots_and_healthstones(self):
+        players = actors('A', 'B')
+        casts = {'entries': [{'guid': 1236616, 'name': "Light's Potential", 'abilityIcon': 'pot.jpg'},
+                             {'guid': 6262, 'name': 'Healthstone', 'abilityIcon': 'hs.jpg'}]}
+        tables = {'damageTaken': damage_table(), 'deaths': {'entries': []}, 'interrupts': {'entries': []},
+                  'dispels': {'entries': []}, 'playerDetails': {}, 'casts': casts}
+        start = 1000
+        cast = lambda src, guid, t: {'type': 'cast', 'sourceID': src, 'abilityGameID': guid, 'timestamp': start + t}
+        buff = lambda kind, tgt, t: {'type': kind, 'targetID': tgt, 'abilityGameID': 1236616, 'timestamp': start + t}
+        heal = lambda src, t, amount: {'type': 'heal', 'sourceID': src, 'abilityGameID': 6262,
+                                       'timestamp': start + t, 'amount': amount}
+        a = analyzer.analyze_fight(
+            fight(players), players, tables, [],
+            [cast(1, 1236616, 120000), cast(2, 6262, 200000)], {1236616}, {6262},
+            buff_events=[buff('removebuff', 2, 25000),            # B pre-potted
+                         buff('applybuff', 1, 120200), buff('removebuff', 1, 150200)],
+            heal_events=[heal(2, 200000, 300000), heal(2, 200500, 50000)])  # one healthstone, two heal events
+        uses = {(u['name'], u['kind'], u.get('prepot')): u for u in a['consumables']}
+        self.assertEqual(uses[('A', 'potion', False)]['end'] - uses[('A', 'potion', False)]['t'], 30200)
+        self.assertEqual(uses[('B', 'potion', True)]['t'], 0)
+        self.assertEqual(uses[('B', 'defensive', None)]['healing'], 350000)
+        self.assertEqual(sum(1 for u in a['consumables'] if u['kind'] == 'defensive'), 1)
 
 
 class TestSuggestions(unittest.TestCase):

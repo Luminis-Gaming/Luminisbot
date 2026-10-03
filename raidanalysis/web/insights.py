@@ -4,9 +4,13 @@ pull (or all pulls of a boss), each expandable into per-player bars and charts.
 Wipefest's insight list is the model.
 """
 from .. import analyzer
+from . import consumables
 from .render import (ability as ability_html, bar_table, esc, fmt_amount, guide_button, hit_timeline,
                      per_pull_columns, player_name)
 
+
+REANALYZE_HINT = ('<p class="muted small">Which potions and when they were used shows up after this night is '
+                  're-analyzed (🔄 Re-analyze at the top).</p>')
 
 CAUSE_TITLES = {
     'tank': 'A tank died', 'healers': 'Healers went down', 'attrition': 'Early deaths piled up',
@@ -166,6 +170,8 @@ def build(pulls, tags, guide_for, code):
     without = [n for n in roster if n not in potions]
     missing = (f'<p class="small muted">No potion: {", ".join(pname(n) for n in sorted(without))}</p>'
                if without else '')
+    detailed = consumables.has_details(analyses)
+    ordered_roster = merged['players']
     if single:
         sentence = (f'Used <strong>{_plural(sum(potions.values()), "combat potion")}</strong> — '
                     f'{len(potions)}/{raid} players drank one')
@@ -175,10 +181,24 @@ def build(pulls, tags, guide_for, code):
         sentence = (f'Used <strong>{_plural(sum(potions.values()), "combat potion")}</strong> — players potted in '
                     f'{share:.0%} of their pulls')
         body = players_bars(potion_pulls, 'Pulls with a potion') + missing
+    if detailed:  # which potions, when, per player (click a player for every use)
+        body = (f'<h4>Which potions</h4>{consumables.type_summary(pulls, {"potion", "mana"})}'
+                f'<h4>Per player — click for every use</h4>'
+                f'{consumables.player_rows(pulls, ordered_roster, {"potion", "mana"}, code)}')
+    else:
+        body += REANALYZE_HINT
     groups['Consumables'].append(_row('🧪', sentence, body, 'bad' if len(without) > raid / 3 else ''))
+
     used = _plural(sum(defensives.values()), 'healthstone / healing potion', 'healthstones / healing potions')
-    sentence = f'Used <strong>{used}</strong>'
-    groups['Consumables'].append(_row('❤️', sentence, players_bars(defensives, 'Used')))
+    healed = sum(u.get('healing') or 0 for a in analyses for u in a.get('consumables') or [] if u['kind'] == 'defensive')
+    sentence = f'Used <strong>{used}</strong>' + (f', healing for <strong>{fmt_amount(healed)}</strong>' if healed else '')
+    if detailed:
+        body = (f'<h4>Which ones</h4>{consumables.type_summary(pulls, {"defensive"})}'
+                f'<h4>Per player — click for every use</h4>'
+                f'{consumables.player_rows(pulls, ordered_roster, {"defensive"}, code)}')
+    else:
+        body = players_bars(defensives, 'Used') + REANALYZE_HINT
+    groups['Consumables'].append(_row('❤️', sentence, body))
 
     out = ['<div style="text-align:right"><button type="button" class="btn btn-secondary btn-sm expand-all">'
            'Expand all</button></div>']

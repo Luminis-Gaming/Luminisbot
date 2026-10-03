@@ -95,9 +95,9 @@ def player_recap(code, character_names):
 # ============================================================================
 
 def _band(score):
-    if score >= 85:
+    if score >= 80:
         return 'Great', 0x51CF66
-    if score >= 70:
+    if score >= 60:
         return 'OK', 0xFCC419
     return 'Room to improve', 0xFF6B6B
 
@@ -155,7 +155,7 @@ def recap_embeds(recap):
         if good:
             embed.add_field(name='Going well', value=_field_text(good), inline=False)
         if not bad and not good:
-            embed.add_field(name='Feedback', value='Nothing stands out — solid night. 👍' if row['score'] >= 70
+            embed.add_field(name='Feedback', value='Nothing stands out — solid night. 👍' if row['score'] >= 60
                             else 'No single thing stands out — see the scores above.', inline=False)
         embeds.append(embed)
     if len(recap['bosses']) > MAX_BOSS_EMBEDS:

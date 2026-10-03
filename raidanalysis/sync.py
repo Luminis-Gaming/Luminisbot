@@ -44,13 +44,22 @@ async def _analyze_pull(session, code, fight, actors):
     if damage_ids:
         damage_events = await wcl.get_events(session, code, fight['id'], 'DamageTaken',
                                              f"ability.id in ({','.join(map(str, damage_ids))})")
-    consumable_events = []
+    consumable_events, buff_events, heal_events = [], [], []
     if potion_ids or defensive_ids:
         consumable_events = await wcl.get_events(session, code, fight['id'], 'Casts',
                                                  f"ability.id in ({','.join(map(str, potion_ids + defensive_ids))})")
+    if potion_ids:  # buff windows: how long each potion lasted, and pre-pots
+        buff_events = await wcl.get_events(session, code, fight['id'], 'Buffs',
+                                           f"ability.id in ({','.join(map(str, potion_ids))})")
+    if defensive_ids:  # how much each healthstone / healing potion healed for
+        heal_events = await wcl.get_events(session, code, fight['id'], 'Healing',
+                                           f"ability.id in ({','.join(map(str, defensive_ids))})")
+    # Enemy casts for the timeline (bosses + adds; ~100 per pull)
+    enemy_cast_events = await wcl.get_events(session, code, fight['id'], 'Casts', "type = 'cast'",
+                                             hostility='Enemies')
 
     return analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
-                                  set(potion_ids), set(defensive_ids))
+                                  set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events)
 
 
 async def sync_report(session, code, source='guild', force=False):
