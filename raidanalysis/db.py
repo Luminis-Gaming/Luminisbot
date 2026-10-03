@@ -5,6 +5,7 @@ Schema is created idempotently by ensure_schema(), called from
 run_migrations.py on every boot (migrations/012 is the documentation copy).
 """
 import logging
+import re
 
 from psycopg2.extras import Json, RealDictCursor
 
@@ -171,13 +172,56 @@ def delete_report(code):
     _run("DELETE FROM raid_reports WHERE code = %s", (code,))
 
 
+# How long after a report's last logged event a sync must have happened before
+# we treat the report as finished (live logs keep moving end_time forward).
+FINAL_AFTER = '2 hours'
+
+
+def report_is_final(code):
+    """True once we've synced the report well after its last pull - nothing new can appear."""
+    row = _run(f"""
+        SELECT synced_at > to_timestamp(end_time / 1000.0) + INTERVAL '{FINAL_AFTER}' AS final
+        FROM raid_reports WHERE code = %s
+    """, (code,), fetch='one')
+    return bool(row and row['final'])
+
+
+_REPORT_CODE_RE = re.compile(r'reports/([A-Za-z0-9]{16})')
+
+
+def event_report_codes():
+    """WCL report codes attached to raid events (raid_system's auto-linker), newest event first."""
+    rows = _run("""
+        SELECT log_url FROM raid_events
+        WHERE log_url IS NOT NULL
+        ORDER BY event_date DESC, event_time DESC
+    """, fetch='all')
+    codes = []
+    for row in rows:
+        match = _REPORT_CODE_RE.search(row['log_url'] or '')
+        if match and match.group(1) not in codes:
+            codes.append(match.group(1))
+    return codes
+
+
 # ============================================================================
 # READS (web)
 # ============================================================================
 
+# The raid event (raid_system) a report is attached to, if any.
+_EVENT_JOIN = """
+    LEFT JOIN LATERAL (
+        SELECT e.id AS event_id, e.title AS event_title FROM raid_events e
+        WHERE e.log_url LIKE '%%' || r.code || '%%'
+        ORDER BY e.event_date DESC LIMIT 1
+    ) ev ON TRUE
+"""
+
+
 def list_reports(limit=50):
-    return _run("""
+    return _run(f"""
         SELECT r.code, r.title, r.owner, r.zone_name, r.start_time, r.end_time, r.synced_at, r.source,
+               MAX(ev.event_id) AS event_id, MAX(ev.event_title) AS event_title,
                COUNT(p.fight_id) AS pulls,
                COUNT(p.fight_id) FILTER (WHERE p.kill) AS kills,
                COALESCE(SUM(p.end_ms - p.start_ms), 0) AS combat_ms,
@@ -185,6 +229,7 @@ def list_reports(limit=50):
                ARRAY_AGG(DISTINCT p.difficulty) FILTER (WHERE p.difficulty IS NOT NULL) AS difficulties
         FROM raid_reports r
         LEFT JOIN raid_pulls p ON p.report_code = r.code
+        {_EVENT_JOIN}
         GROUP BY r.code
         HAVING COUNT(p.fight_id) > 0
         ORDER BY r.start_time DESC
@@ -193,7 +238,17 @@ def list_reports(limit=50):
 
 
 def get_report(code):
-    return _run("SELECT * FROM raid_reports WHERE code = %s", (code,), fetch='one')
+    return _run(f"SELECT r.*, ev.* FROM raid_reports r {_EVENT_JOIN} WHERE r.code = %s",
+                (code,), fetch='one')
+
+
+def analyzed_codes(codes):
+    """Which of these report codes have at least one analyzed raid pull."""
+    if not codes:
+        return set()
+    rows = _run("SELECT DISTINCT report_code FROM raid_pulls WHERE report_code = ANY(%s)",
+                (list(codes),), fetch='all')
+    return {r['report_code'] for r in rows}
 
 
 def get_pulls(code, with_analysis=True):

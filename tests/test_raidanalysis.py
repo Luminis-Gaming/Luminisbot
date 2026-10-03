@@ -65,6 +65,69 @@ class TestDeathsAndWipeCall(unittest.TestCase):
         self.assertIsNone(analyze(players, deaths=deaths, kill=True)['wipe_at'])
 
 
+class TestKillingBlow(unittest.TestCase):
+    def test_missing_killing_blow_is_inferred(self):
+        players = actors('A', 'B')
+        deaths = [
+            {'name': 'A', 'timestamp': 1100, 'killingBlow': {'name': 'Caustic Waves', 'guid': CAUSTIC}},
+            # No killing blow: last damaging hit wins over earlier 0-damage events.
+            {'name': 'B', 'timestamp': 1200, 'events': [
+                {'type': 'damage', 'amount': 0, 'ability': {'name': 'Rune', 'guid': 5}},
+                {'type': 'damage', 'amount': 900, 'ability': {'name': 'Arcane Missiles', 'guid': 6}}],
+             'damage': {'abilities': [{'name': "Death's Whisper", 'guid': 7, 'total': 1}]}},
+        ]
+        a = analyze(players, deaths=deaths)
+        self.assertEqual([(d['ability'], d['likely']) for d in a['deaths']],
+                         [('Caustic Waves', False), ('Arcane Missiles', True)])
+
+    def test_falls_back_to_biggest_damage_source(self):
+        players = actors('A')
+        deaths = [{'name': 'A', 'timestamp': 1100, 'events': [],
+                   'damage': {'abilities': [{'name': "Death's Whisper", 'guid': 7, 'total': 1}]}}]
+        self.assertEqual(analyze(players, deaths=deaths)['deaths'][0]['ability'], "Death's Whisper")
+
+
+class TestMergePulls(unittest.TestCase):
+    def test_overall_sums_pulls(self):
+        players = actors('A', 'B')
+        p1 = analyze(players, [damage(1, CAUSTIC, 500), damage(2, CAUSTIC, 500)])
+        p2 = analyze(players, [damage(1, CAUSTIC, 500)])
+        merged = analyzer.merge_pulls([p1, p2])
+        caustic = next(a for a in merged['abilities'] if a['id'] == CAUSTIC)
+        self.assertEqual(caustic['pulls'], 2)
+        self.assertEqual(analyzer.mistake_counts(caustic), {'A': 2, 'B': 1})
+
+
+class TestPlayerReport(unittest.TestCase):
+    def report(self, pulls, tags):
+        return {p['name']: p for p in analyzer.player_report(
+            [{'number': i, 'kill': False, 'analysis': dict(a, _duration=600000)} for i, a in enumerate(pulls, 1)],
+            tags)}
+
+    def test_scores_and_feedback(self):
+        players = actors('Clean', 'Sloppy', 'C', 'D')
+        pulls = [analyze(players, [damage(2, CAUSTIC, 500, t=1000 + i) for i in range(4)]
+                         + [damage(3, CAUSTIC, 500)]) for _ in range(3)]
+        out = self.report(pulls, {CAUSTIC: analyzer.TAG_AVOIDABLE})
+        self.assertEqual(out['Clean']['scores']['mechanics'], 100.0)
+        self.assertLess(out['Sloppy']['scores']['mechanics'], out['C']['scores']['mechanics'])
+        self.assertGreater(out['Clean']['score'], out['Sloppy']['score'])
+        sloppy_notes = [n['text'] for n in out['Sloppy']['feedback'] if n['tone'] == 'bad']
+        self.assertTrue(any('Hit by Ability 1292403 12 times' in t for t in sloppy_notes), sloppy_notes)
+        self.assertIn('Never hit by an avoidable mechanic', [n['text'] for n in out['Clean']['feedback']])
+
+    def test_tanks_exempt_from_non_tank_mechanics(self):
+        players = actors('Tank', 'Dps')
+        details = {'playerDetails': {'tanks': [{'name': 'Tank', 'type': 'Warrior', 'icon': 'Warrior-Protection'}]}}
+        pulls = [analyze(players, [damage(1, THRASH, 900), damage(1, THRASH, 900)], player_details=details)]
+        out = self.report(pulls, {THRASH: analyzer.TAG_AVOIDABLE_NON_TANK})
+        self.assertEqual(out['Tank']['avoidable_hits'], 0)
+
+    def test_no_tags_drops_mechanics_score(self):
+        out = self.report([analyze(actors('A'))], {})
+        self.assertNotIn('mechanics', out['A']['scores'])
+
+
 class TestMistakeCounting(unittest.TestCase):
     def test_dot_ticks_after_a_direct_hit_are_one_mistake(self):
         players = actors('A')

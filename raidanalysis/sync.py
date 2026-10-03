@@ -14,7 +14,8 @@ from . import analyzer, db, wcl
 logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
-status = {'running': False, 'last_finished': None, 'last_result': None, 'last_error': None}
+status = {'running': False, 'current': None, 'last_finished': None, 'last_result': None,
+          'last_error': None, 'last_new': 0}
 
 
 def _phase_names(report):
@@ -54,19 +55,23 @@ async def _analyze_pull(session, code, fight, actors):
 
 async def sync_report(session, code, source='guild', force=False):
     """Analyze every raid pull in one report that isn't cached yet. Returns pulls analyzed."""
+    status['current'] = f"Checking report {code}…"
     report = await wcl.get_report_overview(session, code)
+    # Recorded even without raid pulls (Mythic+ / trash logs) so they're only checked once -
+    # the pages only list reports that have pulls.
+    db.upsert_report(report, _phase_names(report), source=source)
     pulls = _raid_pulls(report)
     if not pulls:
-        return 0  # Mythic+ / trash-only log - not ours to track
+        return 0
 
-    db.upsert_report(report, _phase_names(report), source=source)
     done = set() if force else db.analyzed_fight_ids(code, analyzer.ANALYSIS_VERSION)
     actors = (report.get('masterData') or {}).get('actors') or []
 
     analyzed = 0
-    for fight in pulls:
+    for number, fight in enumerate(pulls, 1):
         if fight['id'] in done:
             continue
+        status['current'] = f"Analyzing {report.get('title') or code} — pull {number}/{len(pulls)} ({fight['name']})"
         analysis = await _analyze_pull(session, code, fight, actors)
         db.upsert_pull(code, fight, analysis)
         analyzed += 1
@@ -75,8 +80,28 @@ async def sync_report(session, code, source='guild', force=False):
     return analyzed
 
 
+# Older raid-event logs are worked through a few per sync so a large backlog
+# doesn't burn the hourly WCL API budget in one go.
+EVENT_BACKLOG_PER_RUN = 5
+
+
+def _event_codes_to_sync(already_queued):
+    """Raid-event logs (newest first) that still need fetching, capped per run."""
+    out = []
+    for code in db.event_report_codes():
+        if code in already_queued or db.report_is_final(code):
+            continue
+        out.append(code)
+        if len(out) >= EVENT_BACKLOG_PER_RUN:
+            break
+    return out
+
+
 async def sync_guild(limit=10, force_codes=()):
-    """Sync the guild's latest `limit` reports plus any explicitly requested codes."""
+    """
+    Sync the guild's latest `limit` reports, the logs attached to raid events,
+    and any explicitly requested codes (re-analyzed from scratch).
+    """
     if _lock.locked():
         return None
     async with _lock:
@@ -87,8 +112,11 @@ async def sync_guild(limit=10, force_codes=()):
             from wcl_api import WCL_GUILD_ID
             async with aiohttp.ClientSession() as session:
                 listed = await wcl.list_guild_reports(session, WCL_GUILD_ID, limit=limit)
-                codes = [(r['code'], 'guild', False) for r in listed]
-                codes += [(c, 'manual', True) for c in force_codes]
+                codes = [(c, 'manual', True) for c in force_codes]
+                codes += [(r['code'], 'guild', False) for r in listed
+                          if r['code'] not in force_codes and not db.report_is_final(r['code'])]
+                queued = {code for code, _, _ in codes}
+                codes += [(c, 'event', False) for c in _event_codes_to_sync(queued)]
                 for code, source, force in codes:
                     try:
                         count = await sync_report(session, code, source=source, force=force)
@@ -100,13 +128,14 @@ async def sync_guild(limit=10, force_codes=()):
                         if 'rate limit' in str(e):
                             break
             # Mechanic clips for any boss we haven't looked up on Mythic Trap recently.
+            status['current'] = 'Looking up mechanic clips on Mythic Trap…'
             from .guides import scan_missing
             await scan_missing()
         except Exception as e:
             logger.exception("[RAIDS] Sync failed")
             errors.append(str(e))
         finally:
-            status.update(running=False, last_finished=time.time(),
+            status.update(running=False, current=None, last_finished=time.time(), last_new=total,
                           last_result=f"{total} new pull(s) from {reports} report(s) "
                                       f"in {time.time() - started:.0f}s",
                           last_error='; '.join(errors) or None)

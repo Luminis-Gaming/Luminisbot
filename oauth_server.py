@@ -3438,7 +3438,21 @@ async def handle_events_page(request):
         
         cursor.execute(query, params)
         events = cursor.fetchall()
-        
+
+        # Which attached logs have a raid analysis (raidanalysis package) to link to
+        import re
+        log_codes = {}
+        for e in events:
+            match = re.search(r'reports/([A-Za-z0-9]{16})', e['log_url'] or '')
+            if match:
+                log_codes[e['id']] = match.group(1)
+        try:
+            from raidanalysis.db import analyzed_codes
+            analyzed = analyzed_codes(set(log_codes.values()))
+        except Exception as e:
+            logger.warning(f"[RAIDS] Could not look up analyzed logs: {e}")
+            analyzed = set()
+
         # Get all signups for these events with Discord user info
         event_ids = [e['id'] for e in events]
         signups_by_event = {}
@@ -3624,6 +3638,9 @@ async def handle_events_page(request):
             log_html = ''
             if event['log_url']:
                 log_html = f'<a href="{event["log_url"]}" target="_blank" class="btn btn-sm" style="background:#f97316;color:#fff;margin-left:10px">📊 View Logs</a>'
+                if log_codes.get(event['id']) in analyzed:
+                    log_html += (f'<a href="/admin/raids/report/{log_codes[event["id"]]}" class="btn btn-sm" '
+                                 f'style="background:#5865F2;color:#fff;margin-left:6px">⚔️ Analysis</a>')
             
             # Build signups table
             signups_html = ""
