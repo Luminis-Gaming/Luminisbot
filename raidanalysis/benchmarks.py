@@ -15,8 +15,10 @@ potions.
 Timing: phases start at different times for everyone (they're health-based), so casts are
 compared as "time into phase segment n" (the n-th phase change). A *window* is a moment where
 at least 3 of the top 5 pressed the same ability within 20 s of each other; a player hits it
-when they pressed it within ±20 s of its middle. Windows in phases a pull never reached, or past
-the point it ended, don't count.
+when they pressed it within that moment's margin: about 4 s plus 1.5x how far the top players
+themselves are apart, never more than half the ability's effect (pressing a 15 s buff 12 s early
+wastes most of it) or a quarter of its cooldown, and always 3-20 s. Windows in phases a pull never
+reached, or past the point it ended, don't count.
 """
 import logging
 import re
@@ -31,8 +33,12 @@ REFRESH_DAYS = 7
 SPECS_PER_RUN = 3
 TOP_RARE_LIMIT = 25          # a top player's ability cast more often than this per kill is rotational
 MAJOR_COOLDOWN_MS = 30000
-WINDOW_MS = 20000
-TOLERANCE_MS = 20000
+WINDOW_MS = 20000            # top players' casts this close together are one moment
+# Margin for "in line" with a moment (see tolerance()).
+TOLERANCE_BASE_MS = 4000
+SPREAD_FACTOR = 1.5
+TOLERANCE_MIN_MS, TOLERANCE_MAX_MS = 3000, 20000
+NEAR_MS = 60000              # a cast this close to a moment counts toward "usually N s early / late"
 MIN_AGREE = 3
 MIN_PULL_MS = 60000          # shorter pulls say nothing about cooldown usage
 DIFFICULTIES = (3, 4, 5)
@@ -76,6 +82,7 @@ NOT_MAJOR = {
 }
 
 _COOLDOWN_RE = re.compile(r'([\d.]+)\s*(min|sec)\s+cooldown', re.I)
+_DURATION_RE = re.compile(r'\bfor ([\d.]+) (sec|min)', re.I)
 
 
 def metric_for(role):
@@ -88,6 +95,31 @@ def cooldown_ms(meta):
     if not match:
         return None
     return float(match.group(1)) * (60000 if match.group(2).lower() == 'min' else 1000)
+
+
+def duration_ms(description):
+    """How long an effect lasts, from Wowhead's text: '... Haste for 15 sec' -> 15000 (None if unknown)."""
+    match = _DURATION_RE.search(description or '')
+    if not match:
+        return None
+    try:
+        return float(match.group(1)) * (60000 if match.group(2).lower() == 'min' else 1000)
+    except ValueError:
+        return None
+
+
+def tolerance(spread, duration=None, cooldown=None):
+    """
+    How far from a moment a cast may be and still count as in line: tight when the top players agree
+    (spread = how far apart they are), never more than half the effect's duration or a quarter of the
+    cooldown, always between TOLERANCE_MIN_MS and TOLERANCE_MAX_MS.
+    """
+    tol = TOLERANCE_BASE_MS + SPREAD_FACTOR * (spread or 0)
+    if duration:
+        tol = min(tol, duration / 2)
+    if cooldown:
+        tol = min(tol, cooldown / 4)
+    return max(TOLERANCE_MIN_MS, min(TOLERANCE_MAX_MS, tol))
 
 
 def category(spell_id, info):
@@ -238,7 +270,10 @@ def align(t, phases, ref):
 
 
 def windows(top, spell_ids):
-    """Moments where >= MIN_AGREE top players cast one of spell_ids: [{'segment', 'at', 'players'}]."""
+    """
+    Moments where >= MIN_AGREE top players cast one of spell_ids:
+    [{'segment', 'at' (median), 'players', 'spread' (median distance from 'at')}].
+    """
     need = min(MIN_AGREE, len(top))
     points = {}
     for i, player in enumerate(top):
@@ -255,7 +290,9 @@ def windows(top, spell_ids):
                 players = {w for _, w in cluster}
                 if len(players) >= need:
                     times = [c for c, _ in cluster]
-                    out.append({'segment': key, 'at': times[len(times) // 2], 'players': len(players)})
+                    at = times[len(times) // 2]
+                    gaps = sorted(abs(c - at) for c in times)
+                    out.append({'segment': key, 'at': at, 'players': len(players), 'spread': gaps[len(gaps) // 2]})
                 cluster = []
             if who is not None:
                 cluster.append((into, who))
@@ -312,8 +349,15 @@ def compare(pulls, top, spell_info):
                                       else tracked and p.get('tracked'))]
         ours = [[t for t, sid in p['casts'] if sid in ids] for p in pulls]
         ours_casts = sum(len(c) for c in ours)
+        # The effect's duration and the cooldown, from Wowhead, cap each moment's margin.
+        texts = [spell_info.get(sid) or {} for sid in sorted(ids)]
+        effect = next((d for d in (duration_ms(t.get('description')) for t in texts) if d), None)
+        cooldown = next((c for c in (cooldown_ms(t.get('meta')) for t in texts) if c), None)
         wins = windows(top, ids)
+        for w in wins:
+            w['tolerance'] = tolerance(w['spread'], effect, cooldown)
         hits = considered = 0
+        offsets = []  # ms early (-) / late (+) of our nearest cast to each moment, when it's near at all
         for pull, casts in zip(pulls, ours):
             if pull not in known:
                 continue
@@ -323,7 +367,12 @@ def compare(pulls, top, spell_info):
                 if w['segment'] not in lengths or w['at'] > lengths[w['segment']]:
                     continue
                 considered += 1
-                hits += any(key == w['segment'] and abs(into - w['at']) <= TOLERANCE_MS for key, into in mine)
+                deltas = [into - w['at'] for key, into in mine if key == w['segment']]
+                nearest = min(deltas, key=abs) if deltas else None
+                if nearest is not None and abs(nearest) <= w['tolerance']:
+                    hits += 1
+                if nearest is not None and abs(nearest) <= NEAR_MS:
+                    offsets.append(nearest)
         ours_per_min = ours_casts / minutes if minutes else 0
         verdict = None
         timing = top_per_min <= TIMING_MAX_PER_MIN
@@ -339,13 +388,24 @@ def compare(pulls, top, spell_info):
         elif top_per_min:
             ratio = ours_per_min / top_per_min
             verdict = 'good' if ratio >= 0.75 else 'off' if ratio < 0.5 else 'ok'
+        offset = sorted(offsets)[len(offsets) // 2] if offsets and timing else None
         rows.append({'name': name, 'ids': sorted(ids), 'icon_id': min(ids), 'category': g['category'],
                      'top_users': len(g['users']), 'top_per_min': top_per_min, 'ours_per_min': ours_per_min,
                      'ours_casts': ours_casts, 'windows': [dict(w, ref_at=ref.get(w['segment'], 0) + w['at'])
                                                            for w in wins],
-                     'hits': hits, 'considered': considered, 'verdict': verdict, 'known': bool(known)})
+                     'hits': hits, 'considered': considered, 'verdict': verdict, 'known': bool(known),
+                     'offset': offset, 'effect_ms': effect})
     order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
     return sorted(rows, key=lambda r: (order.get(r['category'], 9), -r['top_users'], r['name']))
+
+
+def timing_text(offset):
+    """-12000 -> '12 s early', 800 -> 'on time', None -> ''."""
+    if offset is None:
+        return ''
+    if abs(offset) < 2000:
+        return 'on time'
+    return f"{abs(offset) / 1000:.0f} s {'early' if offset < 0 else 'late'}"
 
 
 def _clock(ms):
@@ -363,9 +423,12 @@ def notes(rows, spec_label, limit=3):
         if r['verdict'] == 'missing':
             bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use it - you never pressed it "
                        f"(talent choice, or a missed cooldown?)")
+        elif r['verdict'] in ('off', 'ok') and r['considered'] >= 2 and timing_text(r['offset']) not in ('', 'on time'):
+            bad.append(f"{r['name']}: top {spec_label} press it around {moments} - you were usually "
+                       f"{timing_text(r['offset'])} ({r['hits']} of {r['considered']} moments in line)")
         elif r['verdict'] == 'off' and r['considered'] >= 2:
             bad.append(f"{r['name']}: top {spec_label} press it around {moments} - across your pulls you "
-                       f"were within {TOLERANCE_MS // 1000} s of {r['hits']} of {r['considered']} such moments")
+                       f"lined up with {r['hits']} of {r['considered']} such moments")
         elif r['verdict'] == 'off':
             bad.append(f"{r['name']}: {r['ours_per_min'] * 5:.1f}× per 5 min - the top {spec_label} manage "
                        f"{r['top_per_min'] * 5:.1f}×")

@@ -51,6 +51,7 @@ def summary(data):
                 <td class="num" data-v="{r['ours_per_min']:.3f}">{r['ours_per_min'] * 5:.1f}</td>
                 <td class="small">{top_when}</td>
                 <td class="num">{moments}</td>
+                <td class="small{' bad-text' if benchmarks.timing_text(r['offset']) not in ('', 'on time') and r['verdict'] in ('off', 'ok') else ''}">{benchmarks.timing_text(r['offset']) or '<span class="muted">—</span>'}</td>
                 <td>{_verdict_pill(r['verdict'], r['known']) if r['category'] in benchmarks.JUDGED else '<span class="muted small">info</span>'}</td>
             </tr>""")
     return f"""<div class="table-wrapper"><table class="compact">
@@ -58,7 +59,8 @@ def summary(data):
             <th data-sort class="num" title="Casts per 5 minutes of fight (how many of the top 5 use it)">Top / 5 min</th>
             <th data-sort class="num" title="Your casts per 5 minutes, over this night's pulls on the boss">You / 5 min</th>
             <th title="Moments (on the aligned timeline) where at least 3 of the top 5 press it">Top players press it at</th>
-            <th class="num" title="Of those moments your pulls reached, how many you pressed it within ±20 s">Lined up</th>
+            <th class="num" title="Of those moments your pulls reached, how many you pressed it within their margin">Lined up</th>
+            <th title="Your nearest cast to each moment, typically (median)">Usually</th>
             <th>Verdict</th></tr>
         {''.join(rows)}</table></div>"""
 
@@ -125,9 +127,10 @@ def timeline(data, pull, boss=None, spell_lookup=None):
         chips.append(f'<button type="button" class="tl-chip" data-g="{g}" aria-pressed="{"true" if judged else "false"}">'
                      + (f'<img class="chip-icon" src="{esc(chip_icon)}" alt="">' if chip_icon else '')
                      + f'{esc(r["name"])}</button>')
-        bands = ''.join(f'<i class="win" style="left:{at(w["ref_at"] - benchmarks.TOLERANCE_MS)};'
-                        f'width:{100 * 2 * benchmarks.TOLERANCE_MS / longest:.3f}%" '
-                        f'data-tip="{w["players"]} of the top {len(top)} press it around {fmt_duration(w["ref_at"])}"></i>'
+        bands = ''.join(f'<i class="win" style="left:{at(w["ref_at"] - w["tolerance"])};'
+                        f'width:{100 * 2 * w["tolerance"] / longest:.3f}%" '
+                        f'data-tip="{w["players"]} of the top {len(top)} press it around {fmt_duration(w["ref_at"])} '
+                        f'(in line = within ±{w["tolerance"] / 1000:.0f} s)"></i>'
                         for w in r['windows'])
         labels.append(f'<div class="tl-lab grp" data-g="{g}"{hidden}>{_ability(r, spells)}'
                       f'{_verdict_pill(r["verdict"], r["known"]) if judged else ""}</div>')

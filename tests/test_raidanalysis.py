@@ -672,3 +672,22 @@ class TestSpecSwap(unittest.TestCase):
         numbered = list(enumerate(pulls, 1))
         self.assertEqual(benchmarks._main_spec_player(numbered, 'Naautilus')['spec'], 'Devourer')
         self.assertEqual([p['fight_id'] for p in benchmarks.our_pulls(numbered, 'Naautilus', spec='Devourer')], [2, 3])
+
+
+class TestTimingMargin(unittest.TestCase):
+    """12 s early on a 15 s buff the top players press within a second of each other is not 'in line'."""
+
+    def test_early_ascendance_is_off(self):
+        from raidanalysis import benchmarks
+        spells = {9: {'name': 'Ascendance', 'meta': 'Instant · 3 min cooldown',
+                      'description': 'Transform into a Flame Ascendant for 15 sec.'}}
+        top = [{'duration': 300000, 'phases': [], 'casts': [[136000 + jitter, 9]]} for jitter in (-800, 0, 300, 600, 900)]
+        haldrik = {'number': 1, 'duration': 300000, 'phases': [], 'casts': [[124000, 9]], 'cast_ids': {9}}
+        on_time = {'number': 2, 'duration': 300000, 'phases': [], 'casts': [[139000, 9]], 'cast_ids': {9}}
+        row = benchmarks.compare([haldrik], top, spells)[0]
+        self.assertLess(row['windows'][0]['tolerance'], 7500)      # at most half the 15 s buff
+        self.assertEqual((row['hits'], row['considered']), (0, 1))
+        self.assertEqual(benchmarks.timing_text(row['offset']), '12 s early')
+        row = benchmarks.compare([on_time], top, spells)[0]
+        self.assertEqual((row['hits'], row['considered']), (1, 1))
+        self.assertEqual(benchmarks.timing_text(row['offset']), '3 s late')

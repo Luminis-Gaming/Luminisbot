@@ -1103,7 +1103,8 @@ def _compare_sections(code, numbered, data, pull, eligible, chip_href):
     summary = f"""
         <p class="muted small">"Lined up" counts the moments where at least 3 of the top {len(data['top'])} press an
            ability (phase by phase, as phases start at different times for everyone) that your pulls reached,
-           and how many of those you pressed it within ±{benchmarks.TOLERANCE_MS // 1000} s. Externals and raid
+           and how many of those you pressed it close enough to: 3-20 s, tighter when the top players agree and
+           never more than half the ability's effect (a 15 s buff pressed 12 s early mostly misses). Externals and raid
            cooldowns are shown for reference only - they depend on your raid's plan.</p>
         {compare.summary(data)}"""
     timeline = f"""
