@@ -321,6 +321,8 @@ def compare(pulls, top, spell_info):
                 continue
             key = POTION_GROUP if cat == POTION else info.get('name') or str(sid)
             g = groups.setdefault(key, {'ids': set(), 'users': set(), 'category': cat, 'counts': Counter()})
+            if cat == TRINKET:  # any of its spell ids is an item: the whole ability is (not a class cooldown)
+                g['category'] = TRINKET
             g['ids'].add(sid)
             g['users'].add(i)
             g['counts'][i] += 1
@@ -343,8 +345,15 @@ def compare(pulls, top, spell_info):
         # the tracked cooldowns (cooldowns.py) and consumables - for anything else they can't tell
         # "never pressed" from "not recorded", so those pulls don't count until re-analyzed.
         tracked = g['category'] in cooldowns.CATEGORY_LABELS or g['category'] == POTION
-        known = [p for p in pulls if (ids & p['cast_ids'] if p.get('cast_ids') is not None
-                                      else tracked and p.get('tracked'))]
+
+        def is_known(p):
+            if p.get('cast_ids') is None:
+                return tracked and p.get('tracked')
+            if ids & p['cast_ids']:
+                return True
+            # Nobody in the raid cast it at all that pull: a real zero (e.g. not talented).
+            return p.get('casts_seen') is not None and not ids & p['casts_seen']
+        known = [p for p in pulls if is_known(p)]
         ours = [[t for t, sid in p['casts'] if sid in ids] for p in pulls]
         ours_casts = sum(len(c) for c in ours)
         # The effect's duration and the cooldown, from Wowhead, cap each moment's margin.
@@ -466,7 +475,7 @@ def notes(rows, spec_label, limit=3):
                         f"it equipped (or never used it) tonight")
         elif r['verdict'] == 'missing':
             bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use it - you never pressed it "
-                       f"(talent choice, or a missed cooldown?)")
+                       f"(not talented, or a missed cooldown?)")
         elif r['verdict'] in ('mostly', 'ok', 'off') and r.get('weak'):
             lead = {'mostly': 'mostly in line, but', 'ok': 'hit and miss -', 'off': 'mostly off -'}[r['verdict']]
             bad.append(f"{r['name']}: {lead} work on {weak_text(r['weak'])} "
@@ -503,10 +512,11 @@ def our_pulls(pulls, name, spec=None):
         if casts is None:  # analyzed before every rare cast was kept: tracked cooldowns + consumables only
             casts = [[c['t'], c['ability_id']] for c in analysis.get('cooldowns') or [] if c['name'] == name]
             casts += [[u['t'], u['ability_id']] for u in analysis.get('consumables') or [] if u['name'] == name]
-        cast_ids = analysis.get('cast_ids')
+        cast_ids, seen = analysis.get('cast_ids'), analysis.get('casts_seen')
         out.append({'number': number, 'fight_id': pull['fight_id'], 'kill': pull.get('kill'),
                     'duration': pull['end_ms'] - pull['start_ms'], 'phases': pull.get('phases') or [],
                     'casts': sorted(casts), 'cast_ids': set(cast_ids) if cast_ids is not None else None,
+                    'casts_seen': set(seen) if seen is not None else None,
                     'tracked': 'cooldowns' in analysis})
     return out
 

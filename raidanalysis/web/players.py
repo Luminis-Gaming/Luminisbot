@@ -235,10 +235,10 @@ def compact_table(report, href):
                 <td data-v="{esc(p['name'])}"><a href="{link}" class="plain-link">{player_name(p['name'], p['class'])}</a>
                     <div class="muted small">{ROLE_ICONS.get(p.get('role'), '')} {spec}{esc(_class_label(p['class']))}</div></td>
                 {subs}
-                <td class="num{' bad' if p['deaths'] else ''}">{p['deaths'] or ''}</td>
-                <td class="num{' bad' if p['avoidable_hits'] else ''}">{p['avoidable_hits'] or ''}</td>
-                <td class="num">{p['interrupts'] or ''}</td>
-                <td class="num">{p['dispels'] or ''}</td>
+                <td class="num {'bad' if p['deaths'] else 'good-text'}">{p['deaths']}</td>
+                <td class="num {'bad' if p['avoidable_hits'] else 'good-text'}">{p['avoidable_hits']}</td>
+                <td class="num{'' if p['interrupts'] else ' muted'}">{p['interrupts']}</td>
+                <td class="num{'' if p['dispels'] else ' muted'}">{p['dispels']}</td>
                 <td class="small tip-cell">{tip_html}</td>
             </tr>""")
     sub_heads = ''.join(f'<th data-sort class="num" title="{esc(hint)}">{label}</th>' for _, label, hint in SUBSCORES)

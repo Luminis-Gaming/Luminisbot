@@ -159,6 +159,7 @@ def recap_embeds(recap):
                      + (f'\nAlso played: {", ".join(recap["other_characters"])}' if recap['other_characters'] else '')),
         color=0x6D7CFF)
     embeds = [header]
+    said = set()  # trinkets already mentioned as not equipped
     for boss in recap['bosses'][:MAX_BOSS_EMBEDS]:
         row = boss['row']
         label, color = _band(row['score'])
@@ -182,9 +183,12 @@ def recap_embeds(recap):
         if not bad and not good:
             embed.add_field(name='Feedback', value='Nothing stands out — solid night. 👍' if row['score'] >= 60
                             else 'No single thing stands out — see the scores above.', inline=False)
-        if boss.get('cd_notes'):
+        # "you don't have trinket X" once per recap, not under every boss
+        cd_notes = [n for n in boss.get('cd_notes') or [] if n['tone'] != 'info' or n['text'].split(':')[0] not in said]
+        said.update(n['text'].split(':')[0] for n in cd_notes if n['tone'] == 'info')
+        if cd_notes:
             icons = {'bad': '⚠️', 'good': '✅', 'info': 'ℹ️'}
-            lines = [f'{icons.get(n["tone"], "•")} {n["text"]}' for n in boss['cd_notes']]
+            lines = [f'{icons.get(n["tone"], "•")} {n["text"]}' for n in cd_notes]
             if boss.get('compare_url'):
                 lines.append(f'[📈 See your cooldowns next to theirs]({boss["compare_url"]})')
             embed.add_field(name='Cooldowns vs top players', value=_field_text(lines), inline=False)

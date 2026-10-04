@@ -1152,9 +1152,10 @@ def _reanalyze_hint(data, code):
     unknown = [r['name'] for r in data['rows'] if not r['known'] and r['category'] in benchmarks.JUDGED]
     if not unknown:
         return ''
-    return (f'<p class="small warn-text">⚠️ This night was analyzed before every cast was kept, so '
-            f'{esc(", ".join(unknown[:6]))}{" and more" if len(unknown) > 6 else ""} can\'t be compared yet - '
-            f'<strong>🔄 Re-analyze</strong> it on the <a href="/admin/raids/report/{quote(code)}">night page</a>.</p>')
+    return (f'<p class="small warn-text">⚠️ This night was analyzed before the comparison knew about '
+            f'{esc(", ".join(unknown[:6]))}{" and more" if len(unknown) > 6 else ""}, so we can\'t tell yet '
+            f'whether they were pressed - <strong>🔄 Re-analyze</strong> it on the '
+            f'<a href="/admin/raids/report/{quote(code)}">night page</a> once.</p>')
 
 
 def _boss_timeline_of(numbered, fight_id):

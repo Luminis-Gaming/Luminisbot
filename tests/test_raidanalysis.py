@@ -735,3 +735,30 @@ class TestFrequentCooldownTiming(unittest.TestCase):
         self.assertEqual(row['hits'], 0)
         self.assertEqual(row['verdict'], 'off')
         self.assertEqual(benchmarks.timing_text(row['offset']), '15 s late')
+
+
+class TestNeverCastVsNotFetched(unittest.TestCase):
+    """Shiv that nobody cast is a real 'never used'; Shiv that was cast but not fetched needs a re-analyze."""
+
+    def test_real_zero_vs_unknown(self):
+        from raidanalysis import benchmarks
+        spells = {5938: {'name': 'Shiv', 'meta': 'Instant · 30 sec cooldown'},
+                  1: {'name': 'Deathmark', 'meta': 'Instant · 2 min cooldown'}}
+        top = [{'duration': 300000, 'phases': [], 'casts': [[30000, 5938], [40000, 1]]} for _ in range(5)]
+        base = {'number': 1, 'duration': 300000, 'phases': [], 'casts': [[41000, 1]], 'cast_ids': {1}}
+        not_talented = dict(base, casts_seen={1, 77})        # no Shiv anywhere in the log
+        not_fetched = dict(base, casts_seen={1, 77, 5938})   # Shiv was cast, we just didn't keep it
+        shiv = lambda pull: next(r for r in benchmarks.compare([pull], top, spells) if r['name'] == 'Shiv')
+        self.assertEqual((shiv(not_talented)['known'], shiv(not_talented)['verdict']), (True, 'missing'))
+        self.assertEqual((shiv(not_fetched)['known'], shiv(not_fetched)['verdict']), (False, None))
+
+
+class TestTrinketWithSeveralIds(unittest.TestCase):
+    def test_item_id_makes_the_whole_ability_a_trinket(self):
+        from raidanalysis import benchmarks
+        spells = {11: {'name': 'Soulcoiler Ritual Vessel', 'meta': 'Channeled (2 sec cast) · 2 min cooldown'},
+                  12: {'name': 'Soulcoiler Ritual Vessel', 'meta': 'Item effect · Channeled (2 sec cast) · 2 min cooldown'}}
+        top = [{'duration': 300000, 'phases': [], 'casts': [[30000, 11], [31000, 12]]} for _ in range(5)]
+        mine = {'number': 1, 'duration': 300000, 'phases': [], 'casts': [], 'cast_ids': {11, 12}, 'casts_seen': {11, 12}}
+        row = benchmarks.compare([mine], top, spells)[0]
+        self.assertEqual((row['category'], row['verdict']), ('trinket', 'not_equipped'))

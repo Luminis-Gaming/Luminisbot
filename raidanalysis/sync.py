@@ -48,10 +48,14 @@ async def _analyze_pull(session, code, fight, actors):
     consumable_events, buff_events, heal_events = [], [], []
     # ...plus everything the top players of any spec press on this boss (benchmarks.py), so a spec
     # several of us play still gets every Ebon Might / Combustion even if the raid casts it often.
+    # Matched by id and by name: our log can record an ability under another spell id than theirs.
     benchmark_ids = set(db.benchmark_spell_ids(fight['encounterID']))
-    used_ids = {e.get('guid') for e in analyzer._entries(tables.get('casts'))}
+    benchmark_names = {info['name'] for info in db.get_spells(benchmark_ids).values() if info.get('name')}
+    entries = analyzer._entries(tables.get('casts'))
+    used_ids = {e.get('guid') for e in entries if e.get('guid')}
+    named = {e['guid'] for e in entries if e.get('guid') and e.get('name') in benchmark_names}
     cast_ids = sorted(set(potion_ids) | set(defensive_ids) | set(cooldown_meta)
-                      | set(analyzer.rare_cast_ids(tables.get('casts'))) | (benchmark_ids & used_ids))
+                      | set(analyzer.rare_cast_ids(tables.get('casts'))) | (benchmark_ids & used_ids) | named)
     if cast_ids:  # potions, healthstones, cooldowns and other rarely cast abilities in one request
         consumable_events = await wcl.get_events(session, code, fight['id'], 'Casts',
                                                  f"ability.id in ({','.join(map(str, cast_ids))})")
@@ -71,6 +75,9 @@ async def _analyze_pull(session, code, fight, actors):
                                   set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events,
                                   combatant_events, cooldown_meta)
     analysis['cast_ids'] = cast_ids  # which spells 'casts' is complete for (benchmarks.compare)
+    # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
+    # (a talent you don't take), as opposed to one we didn't fetch.
+    analysis['casts_seen'] = sorted(used_ids)
     return analysis
 
 

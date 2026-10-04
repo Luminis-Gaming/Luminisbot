@@ -87,6 +87,7 @@ tr:hover td { background: rgba(255,255,255,0.025); }
 table.compact th, table.compact td { padding: 9px 10px; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.bad { color: var(--bad); font-weight: 600; }
+td.good-text { font-weight: 600; }
 td.good { color: var(--good); }
 th[data-sort] { cursor: pointer; user-select: none; }
 th[data-sort]:hover { color: var(--text); }
