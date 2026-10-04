@@ -4,7 +4,7 @@ externals, raid cooldowns and raid utility. Matched by ability *name* (from the
 pull's Casts table), so spell-ID changes between patches and the several IDs one
 ability can have just work - a name that isn't in a log simply never matches.
 """
-from .analyzer import _entries
+from .analyzer import cast_entries
 
 CATEGORIES = (
     ('raid', 'Raid cooldowns', '🛡️'),
@@ -53,4 +53,4 @@ COOLDOWNS = {name: category for category, names in _BY_CATEGORY.items() for name
 def cooldown_meta(casts_table):
     """{spell id: {'name', 'icon', 'category'}} for the cooldowns cast in this pull."""
     return {e['guid']: {'name': e['name'], 'icon': e.get('abilityIcon'), 'category': COOLDOWNS[e['name']]}
-            for e in _entries(casts_table) if e.get('name') in COOLDOWNS and e.get('guid')}
+            for e in cast_entries(casts_table) if e.get('name') in COOLDOWNS and e.get('guid')}

@@ -762,3 +762,18 @@ class TestTrinketWithSeveralIds(unittest.TestCase):
         mine = {'number': 1, 'duration': 300000, 'phases': [], 'casts': [], 'cast_ids': {11, 12}, 'casts_seen': {11, 12}}
         row = benchmarks.compare([mine], top, spells)[0]
         self.assertEqual((row['category'], row['verdict']), ('trinket', 'not_equipped'))
+
+
+class TestNestedCastVariants(unittest.TestCase):
+    """Consuming Fire is listed under Immolation Aura in WCL's Casts table - it must still be fetched."""
+
+    def test_subentries_count(self):
+        table = {'entries': [{'name': 'Immolation Aura', 'guid': 258920, 'total': 8, 'composite': True,
+                              'subentries': [{'name': 'Immolation Aura', 'guid': 258920, 'total': 8},
+                                             {'name': 'Consuming Fire', 'guid': 456640, 'total': 8},
+                                             {'name': 'Consuming Fire', 'guid': 452487, 'total': 8},
+                                             {'name': 'Immolation Aura', 'guid': 427917, 'total': 2}]},
+                             {'name': 'Chaos Strike', 'guid': 162794, 'total': 400}]}
+        ids = {e['guid'] for e in analyzer.cast_entries(table)}
+        self.assertTrue({456640, 452487, 427917} <= ids)
+        self.assertEqual(analyzer.rare_cast_ids(table), [258920, 427917, 452487, 456640])

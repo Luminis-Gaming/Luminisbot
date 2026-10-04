@@ -33,6 +33,20 @@ HOSTILE_SOURCE_TYPES = {'Boss', 'NPC'}
 MELEE_ABILITY_ID = 1
 
 
+def cast_entries(casts_table):
+    """
+    Every ability in a Casts table, including the variants WCL nests under a parent: a 'composite'
+    entry like Immolation Aura lists Consuming Fire (cast during Metamorphosis) only as a sub-entry.
+    The raw cast events carry the variant's own spell id, so anything we fetch or look for has to
+    include them - top-level entries alone miss those casts entirely.
+    """
+    out = []
+    for entry in _entries(casts_table):
+        out.append(entry)
+        out.extend(sub for sub in entry.get('subentries') or [] if isinstance(sub, dict) and sub.get('guid'))
+    return out
+
+
 def _entries(table):
     """Tables nest entries differently (interrupts/dispels add a level)."""
     entries = (table or {}).get('entries') or []
@@ -70,7 +84,7 @@ def consumable_ids(casts_table):
     new expansions just work.
     """
     potions, defensives = set(), set()
-    for entry in _entries(casts_table):
+    for entry in cast_entries(casts_table):
         guid = entry.get('guid')
         name = (entry.get('name') or '').lower()
         if guid in DEFENSIVE_IDS or 'healthstone' in name \
@@ -173,8 +187,8 @@ RARE_CAST_LIMIT = 30
 
 def rare_cast_ids(casts_table):
     """Spell IDs from the pull's Casts table cast rarely enough to keep every cast of (see RARE_CAST_LIMIT)."""
-    return sorted(e['guid'] for e in _entries(casts_table)
-                  if e.get('guid') and 0 < (e.get('total') or 0) <= RARE_CAST_LIMIT)
+    return sorted({e['guid'] for e in cast_entries(casts_table)
+                   if e.get('guid') and 0 < (e.get('total') or 0) <= RARE_CAST_LIMIT})
 
 
 def _player_casts(fight_start, names_by_id, roster, cast_events):
@@ -213,7 +227,7 @@ def _consumable_uses(fight_start, duration, names_by_id, roster, casts_table, co
     much a healthstone / healing potion healed for.
     """
     meta = {e['guid']: {'name': e.get('name'), 'icon': e.get('abilityIcon')}
-            for e in _entries(casts_table) if e.get('guid') in potion_ids | defensive_ids}
+            for e in cast_entries(casts_table) if e.get('guid') in potion_ids | defensive_ids}
 
     def info(guid, event):
         fallback = (event.get('ability') or {})

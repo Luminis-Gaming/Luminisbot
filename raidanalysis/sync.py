@@ -51,7 +51,7 @@ async def _analyze_pull(session, code, fight, actors):
     # Matched by id and by name: our log can record an ability under another spell id than theirs.
     benchmark_ids = set(db.benchmark_spell_ids(fight['encounterID']))
     benchmark_names = {info['name'] for info in db.get_spells(benchmark_ids).values() if info.get('name')}
-    entries = analyzer._entries(tables.get('casts'))
+    entries = analyzer.cast_entries(tables.get('casts'))  # incl. variants nested under a parent ability
     used_ids = {e.get('guid') for e in entries if e.get('guid')}
     named = {e['guid'] for e in entries if e.get('guid') and e.get('name') in benchmark_names}
     cast_ids = sorted(set(potion_ids) | set(defensive_ids) | set(cooldown_meta)
