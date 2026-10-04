@@ -48,9 +48,7 @@ CATEGORY_LABELS = {THROUGHPUT: 'Damage / healing cooldowns', POTION: 'Combat pot
                    **cooldowns.CATEGORY_LABELS}
 CATEGORY_ORDER = (THROUGHPUT, POTION, 'personal', TRINKET, 'external', 'raid', 'utility')
 POTION_GROUP = 'Combat potion'  # any combat potion counts - which one is a stat choice
-# Pressed more often than this (per minute, by the top players) = too frequent for its moments to
-# mean much: judged on how often you press it instead.
-TIMING_MAX_PER_MIN = 0.75
+VERDICT_RANK = ['off', 'ok', 'mostly', 'good']  # worst first
 # Verdicts only for what a player controls alone; externals and raid cooldowns depend on the raid's plan.
 JUDGED = (THROUGHPUT, POTION, 'personal', TRINKET)
 
@@ -380,23 +378,28 @@ def compare(pulls, top, spell_info):
                 else:
                     w['skipped'] += 1
         ours_per_min = ours_casts / minutes if minutes else 0
+        # Judged on timing (the moments the top players agree on) whenever there are moments to judge,
+        # and on how often it's pressed - the verdict is the worse of the two: pressing it at the right
+        # moments but half as often isn't "in line", and neither is pressing it often but off-beat.
         verdict = None
-        timing = top_per_min <= TIMING_MAX_PER_MIN
-        if not timing:  # frequent: overlapping moments say nothing, compare how often instead
-            hits = considered = 0
+        timing = considered >= 2
         if not known:
             verdict = None
         elif not ours_casts:
-            verdict = None if g['category'] == TRINKET else 'missing'
-        elif considered >= 2:
-            rate = hits / considered
-            verdict = ('good' if rate >= GOOD_RATE else 'mostly' if rate >= MOSTLY_RATE
-                       else 'ok' if rate >= OFF_RATE else 'off')
-        elif top_per_min:
-            ratio = ours_per_min / top_per_min
-            verdict = 'good' if ratio >= 0.75 else 'off' if ratio < 0.5 else 'ok'
-        offset = sorted(offsets)[len(offsets) // 2] if offsets and timing else None
-        weak = weak_moments(wins, ref) if timing else []
+            # A trinket you never used all night is one you don't have on - not a missed cast.
+            verdict = 'not_equipped' if g['category'] == TRINKET else 'missing'
+        else:
+            verdicts = []
+            if timing:
+                rate = hits / considered
+                verdicts.append('good' if rate >= GOOD_RATE else 'mostly' if rate >= MOSTLY_RATE
+                                else 'ok' if rate >= OFF_RATE else 'off')
+            if top_per_min:
+                ratio = ours_per_min / top_per_min
+                verdicts.append('good' if ratio >= 0.75 else 'off' if ratio < 0.5 else 'ok')
+            verdict = min(verdicts, key=VERDICT_RANK.index) if verdicts else None
+        offset = sorted(offsets)[len(offsets) // 2] if offsets else None  # shown from one moment on
+        weak = weak_moments(wins, ref) if considered and ours_casts else []  # nothing to work on if never used
         rows.append({'name': name, 'ids': sorted(ids), 'icon_id': min(ids), 'category': g['category'],
                      'top_users': len(g['users']), 'top_per_min': top_per_min, 'ours_per_min': ours_per_min,
                      'ours_casts': ours_casts, 'windows': [dict(w, ref_at=ref.get(w['segment'], 0) + w['at'])
@@ -453,12 +456,15 @@ def _clock(ms):
 
 def notes(rows, spec_label, limit=3):
     """Feedback lines from compare(): [{'tone': 'good'|'bad', 'text'}] - misses first, a couple of wins."""
-    bad, good = [], []
+    bad, good, info = [], [], []
     for r in rows:
         if r['category'] not in JUDGED or not r['verdict']:
             continue
         moments = ', '.join(_clock(w['ref_at']) for w in r['windows'][:4])
-        if r['verdict'] == 'missing':
+        if r['verdict'] == 'not_equipped':
+            info.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use this trinket - you didn't have "
+                        f"it equipped (or never used it) tonight")
+        elif r['verdict'] == 'missing':
             bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use it - you never pressed it "
                        f"(talent choice, or a missed cooldown?)")
         elif r['verdict'] in ('mostly', 'ok', 'off') and r.get('weak'):
@@ -478,7 +484,8 @@ def notes(rows, spec_label, limit=3):
             good.append(f"{r['name']} lined up with the top {spec_label}"
                         + (f" ({r['hits']}/{r['considered']} moments)" if r['considered'] >= 2 else ''))
     return ([{'tone': 'bad', 'text': t} for t in bad[:limit]]
-            + [{'tone': 'good', 'text': t} for t in good[:max(1, limit - len(bad))]])
+            + [{'tone': 'good', 'text': t} for t in good[:max(1, limit - len(bad))]]
+            + [{'tone': 'info', 'text': t} for t in info[:1]])
 
 
 def our_pulls(pulls, name, spec=None):

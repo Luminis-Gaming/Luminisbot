@@ -209,6 +209,48 @@ def player_page(p, guide_for, pull_href):
     </div>"""
 
 
+def compact_table(report, href):
+    """
+    The Players card on the Mechanics tab: a short version of the Players tab - score, sub-scores, the
+    key numbers and each player's top improvement point - one row per player, linking to their page.
+    report: analyzer.player_report rows; href(name) -> the player's page for these pulls.
+    """
+    if not report:
+        return '<p class="muted">No players.</p>'
+    rows = []
+    for p in sorted(report, key=lambda r: ({'tank': 0, 'healer': 1}.get(r.get('role'), 2), -r['score'])):
+        band, label = _band(p['score'])
+        subs = ''.join(
+            f'<td class="num" data-v="{p["scores"][key]:.0f}"><span class="sub-val {_component_band(p["scores"][key])}" '
+            f'title="{esc(hint)}">{p["scores"][key]:.0f}</span></td>' if key in p['scores'] else '<td></td>'
+            for key, _, hint in SUBSCORES)
+        tip = next((n for n in p.get('feedback') or [] if n['tone'] == 'bad'), None)
+        tip_html = (f'<span class="tip-line" title="{esc(tip["text"])}">⚠️ {esc(tip["text"])}</span>' if tip else
+                    '<span class="muted">Nothing stands out 👍</span>')
+        link = esc(href(p['name']))
+        spec = f'{esc(p["spec"])} ' if p.get('spec') else ''
+        rows.append(f"""
+            <tr class="click-row" onclick="location='{link}'" title="Open {esc(p['name'])}'s page for these pulls">
+                <td data-v="{p['score']}"><span class="score-badge {band}" title="{label}">{p['score']}</span></td>
+                <td data-v="{esc(p['name'])}"><a href="{link}" class="plain-link">{player_name(p['name'], p['class'])}</a>
+                    <div class="muted small">{ROLE_ICONS.get(p.get('role'), '')} {spec}{esc(_class_label(p['class']))}</div></td>
+                {subs}
+                <td class="num{' bad' if p['deaths'] else ''}">{p['deaths'] or ''}</td>
+                <td class="num{' bad' if p['avoidable_hits'] else ''}">{p['avoidable_hits'] or ''}</td>
+                <td class="num">{p['interrupts'] or ''}</td>
+                <td class="num">{p['dispels'] or ''}</td>
+                <td class="small tip-cell">{tip_html}</td>
+            </tr>""")
+    sub_heads = ''.join(f'<th data-sort class="num" title="{esc(hint)}">{label}</th>' for _, label, hint in SUBSCORES)
+    return f"""<div class="table-wrapper"><table class="compact players-compact">
+        <tr><th data-sort>Score</th><th data-sort>Player</th>{sub_heads}
+            <th data-sort class="num" title="Early deaths by mistake">Deaths</th>
+            <th data-sort class="num" title="Hits from avoidable mechanics">Avoidable</th>
+            <th data-sort class="num">Interrupts</th><th data-sort class="num">Dispels</th>
+            <th>Top thing to work on</th></tr>
+        {''.join(rows)}</table></div>"""
+
+
 def player_url(code, name, boss_key, fight_id=None):
     base = f'/admin/raids/report/{code}/player/{quote(name)}?boss={boss_key[0]}-{boss_key[1]}'
     return base + (f'&pull={fight_id}' if fight_id else '')

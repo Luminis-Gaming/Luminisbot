@@ -97,8 +97,13 @@ def player_recap(code, character_names):
 
 def _cooldown_notes(code, boss, boss_pulls, character):
     """{'cd_notes', 'compare_url'}: how their major cooldowns line up with the top parses of their spec."""
+    numbered = list(enumerate(boss_pulls, 1))
+    try:  # make sure the spells have Wowhead's text first (trinket or not, cooldown length...)
+        asyncio.run(benchmarks.ensure_spells_for(numbered, character))
+    except Exception:
+        logger.warning('[RAIDS] Spell lookups before the cooldown comparison failed', exc_info=True)
     try:
-        data = benchmarks.for_player(list(enumerate(boss_pulls, 1)), character)
+        data = benchmarks.for_player(numbered, character)
     except Exception:
         logger.exception('[RAIDS] Cooldown comparison failed')
         data = None
@@ -178,7 +183,8 @@ def recap_embeds(recap):
             embed.add_field(name='Feedback', value='Nothing stands out — solid night. 👍' if row['score'] >= 60
                             else 'No single thing stands out — see the scores above.', inline=False)
         if boss.get('cd_notes'):
-            lines = [f'{"⚠️" if n["tone"] == "bad" else "✅"} {n["text"]}' for n in boss['cd_notes']]
+            icons = {'bad': '⚠️', 'good': '✅', 'info': 'ℹ️'}
+            lines = [f'{icons.get(n["tone"], "•")} {n["text"]}' for n in boss['cd_notes']]
             if boss.get('compare_url'):
                 lines.append(f'[📈 See your cooldowns next to theirs]({boss["compare_url"]})')
             embed.add_field(name='Cooldowns vs top players', value=_field_text(lines), inline=False)

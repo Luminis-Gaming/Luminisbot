@@ -416,9 +416,13 @@ class TestTopPlayerComparison(unittest.TestCase):
         self.assertEqual(rows['Essence Break']['verdict'], 'missing')
         # Any combat potion counts, and a trinket we don't have isn't a miss.
         self.assertEqual(rows['Combat potion']['ours_casts'], 1)
-        self.assertIsNone(rows['Cursed Trinket']['verdict'])
+        self.assertEqual(rows['Cursed Trinket']['verdict'], 'not_equipped')
+        self.assertEqual(rows['Cursed Trinket']['weak'], [])
         notes = benchmarks.notes(list(rows.values()), 'Havoc Demon Hunters')
         self.assertTrue(any('Essence Break' in n['text'] and n['tone'] == 'bad' for n in notes))
+        trinket = [n for n in notes if 'Cursed Trinket' in n['text']]
+        self.assertEqual([n['tone'] for n in trinket], ['info'])  # not a missed cast
+        self.assertIn("didn't have it equipped", trinket[0]['text'])
 
     def test_off_timing_and_unreached_phases(self):
         from raidanalysis import benchmarks
@@ -713,3 +717,21 @@ class TestWeakMoments(unittest.TestCase):
         note = benchmarks.notes([row], 'Havoc Demon Hunters')[0]
         self.assertEqual(note['tone'], 'bad')
         self.assertIn('mostly in line, but work on 2:30 usually 9 s early', note['text'])
+
+
+class TestFrequentCooldownTiming(unittest.TestCase):
+    """A cooldown pressed often (Essence Break ~1.6/min) is still judged on timing, not just how often."""
+
+    def test_often_pressed_but_off_beat_is_not_in_line(self):
+        from raidanalysis import benchmarks
+        spells = {7: {'name': 'Essence Break', 'meta': 'Instant · 40 sec cooldown',
+                      'description': 'Slash all enemies, increasing damage taken by 80% for 4 sec.'}}
+        moments = list(range(10000, 290000, 40000))  # 7 casts in 5 min: 1.4 / min
+        top = [{'duration': 300000, 'phases': [], 'casts': [[t, 7] for t in moments]} for _ in range(5)]
+        off_beat = {'number': 1, 'duration': 300000, 'phases': [], 'cast_ids': {7},
+                    'casts': [[t + 15000, 7] for t in moments]}  # same count, always 15 s late
+        row = benchmarks.compare([off_beat], top, spells)[0]
+        self.assertGreater(row['top_per_min'], 1.2)
+        self.assertEqual(row['hits'], 0)
+        self.assertEqual(row['verdict'], 'off')
+        self.assertEqual(benchmarks.timing_text(row['offset']), '15 s late')

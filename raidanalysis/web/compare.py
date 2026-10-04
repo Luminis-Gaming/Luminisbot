@@ -12,7 +12,8 @@ from ..spells import icon_url
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
 
 VERDICTS = {'good': ('pill-kill', 'In line'), 'mostly': ('pill-mostly', 'Mostly in line'),
-            'ok': ('pill', 'Hit & miss'), 'off': ('pill-wipe', 'Off'), 'missing': ('pill-wipe', 'Never used')}
+            'ok': ('pill', 'Hit & miss'), 'off': ('pill-wipe', 'Off'), 'missing': ('pill-wipe', 'Never used'),
+            'not_equipped': ('pill-muted', 'Not equipped')}
 
 
 def _spec_icon_class(spell_id):
@@ -43,6 +44,27 @@ def _weak_line(r):
             f'most important (more top players there) first">⚠ {esc(benchmarks.weak_text(r["weak"]))}</div>')
 
 
+def _not_equipped_line(r):
+    if r.get('verdict') != 'not_equipped':
+        return ''
+    return (f'<div class="muted small" style="margin:3px 0 0 24px">ℹ️ {r["top_users"]} of the top players use it - '
+            f'not equipped (or never used) tonight, so not judged</div>')
+
+
+def _pull_lined_up(r, pull):
+    """(moments in line, moments reached) for one pull - the same rule compare() uses for the night."""
+    ids = set(r['ids'])
+    lengths = benchmarks.segment_lengths(pull['phases'], pull['duration'])
+    mine = [benchmarks.segment_of(t, pull['phases']) for t, sid in pull['casts'] if sid in ids]
+    hits = considered = 0
+    for w in r['windows']:
+        if w['segment'] not in lengths or w['at'] > lengths[w['segment']]:
+            continue
+        considered += 1
+        hits += any(key == w['segment'] and abs(into - w['at']) <= w['tolerance'] for key, into in mine)
+    return hits, considered
+
+
 def summary(data):
     """One row per major ability: top usage, yours, how many top-player moments you hit, verdict."""
     rows = []
@@ -52,7 +74,7 @@ def summary(data):
         top_when = ', '.join(fmt_duration(w['ref_at']) for w in r['windows'][:5]) or '<span class="muted">no shared moment</span>'
         rows.append(f"""
             <tr class="{'' if r['category'] in benchmarks.JUDGED else 'muted-row'}">
-                <td>{_ability(r, data['spells'])}{_weak_line(r)}</td>
+                <td>{_ability(r, data['spells'])}{_weak_line(r)}{_not_equipped_line(r)}</td>
                 <td class="small muted">{esc(benchmarks.CATEGORY_LABELS.get(r['category'], ''))}</td>
                 <td class="num" data-v="{r['top_per_min']:.3f}">{r['top_per_min'] * 5:.1f}
                     <span class="muted small">({r['top_users']}/{len(data['top'])})</span></td>
@@ -142,8 +164,11 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                         f'(in line = within ±{w["tolerance"] / 1000:.0f} s)'
                         f'{" - one you usually miss" if w["ref_at"] in weak_at else ""}"></i>'
                         for w in r['windows'])
+        shown = _pull_lined_up(r, pull) if judged and r['verdict'] != 'not_equipped' else None
+        this_pull = (f'<span class="pull-score" title="Moments in line in the pull shown (the verdict covers '
+                     f'the whole night)">this pull {shown[0]}/{shown[1]}</span>' if shown and shown[1] else '')
         labels.append(f'<div class="tl-lab grp" data-g="{g}"{hidden}>{_ability(r, spells)}'
-                      f'{_verdict_pill(r["verdict"], r["known"]) if judged else ""}</div>')
+                      f'<span class="grp-right">{this_pull}{_verdict_pill(r["verdict"], r["known"]) if judged else ""}</span></div>')
         tracks.append(f'<div class="tl-row grp" data-g="{g}"{hidden}>{bands}</div>')
         for lane in lanes:
             marks = []

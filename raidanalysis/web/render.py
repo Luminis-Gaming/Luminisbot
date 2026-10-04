@@ -124,6 +124,20 @@ th[data-sort]:hover { color: var(--text); }
     .sec-head { flex-direction: column; }
     .sec-icon { width: 32px; height: 32px; font-size: 16px; }
 }
+/* Compact players table (Mechanics tab) */
+tr.click-row { cursor: pointer; }
+tr.click-row:hover td { background: var(--surface-2); }
+.plain-link { color: inherit; }
+.plain-link:hover { text-decoration: none; }
+.score-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; height: 28px;
+    padding: 0 8px; border-radius: 8px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.score-badge.good { background: var(--good-soft); color: var(--good); }
+.score-badge.ok { background: var(--warn-soft); color: var(--warn); }
+.score-badge.bad { background: var(--bad-soft); color: var(--bad); }
+.sub-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sub-val.good { color: var(--good); } .sub-val.ok { color: var(--warn); } .sub-val.bad { color: var(--bad); }
+.tip-cell { max-width: 380px; }
+.tip-line { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: #ffcfc7; }
 /* Mechanics table: filter chips + expandable rows */
 .mech-wrap .tl-chips { margin-bottom: 10px; }
 tr.mech-row { cursor: pointer; }
@@ -156,6 +170,13 @@ tr.muted-row td { opacity: 0.7; }
 .cmp-tl .tl-lab.grp { height: 26px; justify-content: space-between; padding-left: 4px; color: var(--text);
     font-weight: 600; box-shadow: inset 0 1px rgba(255,255,255,0.15); }
 .cmp-tl .tl-lab.grp .pill { font-size: 10px; padding: 1px 7px; }
+.cmp-tl .grp-right { display: inline-flex; align-items: center; gap: 6px; }
+/* ability headers: name on one line, this pull's count + the verdict under it (the label column is narrow) */
+.cmp-tl .tl-lab.grp:not([data-g="boss"]), .cmp-tl .tl-row.grp:not([data-g="boss"]) { height: 44px; }
+.cmp-tl .tl-lab.grp:not([data-g="boss"]) { flex-direction: column; align-items: flex-start; justify-content: center;
+    gap: 3px; }
+.cmp-tl .tl-lab.grp .cmp-ab { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-tl .pull-score { font-size: 10px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .cmp-tl .tl-row { height: 20px; }
 .cmp-tl .tl-row.grp { height: 26px; box-shadow: inset 0 1px rgba(255,255,255,0.15); }
 .cmp-tl .tl-row.you { background: rgba(116,132,236,0.10); }
@@ -167,6 +188,7 @@ tr.muted-row td { opacity: 0.7; }
     border: 1px solid rgba(255,212,59,0.35); }
 .cmp-tl .win.weak { background: rgba(255,107,107,0.16); border-color: rgba(255,107,107,0.55); }
 .pill-mostly { background: rgba(252,196,25,0.16); color: #ffd43b; }
+.pill-muted { background: var(--surface-3); color: var(--muted); font-weight: 500; }
 .weak-line { margin: 3px 0 0 24px; font-size: 12px; color: #ffb4a8; }
 .cmp-tl .ph { position: absolute; top: 2px; bottom: 2px; border-left: 1px dashed rgba(255,255,255,0.35); }
 .cmp-tl.real .al, .cmp-tl:not(.real) .rl, .cmp-tl.real .win { display: none; }

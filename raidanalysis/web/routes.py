@@ -880,9 +880,11 @@ async def handle_night(request):
                           per_pull=insight_pulls, pull_href=lambda p: f'/admin/raids/report/{code}/{p["fight_id"]}')}
     </div>
     <div class="card">
-        {section_head('👥', 'Players', "Tonight's numbers per player on this boss - the Players tab above has "
-                      "scores, feedback and the comparison with top players.")}
-        {scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags))}
+        {section_head('👥', 'Players', "Tonight's scores on this boss. Click a player for their full page: "
+                      "score breakdown, feedback, pull by pull and the comparison with top players.",
+                      f'<a class="btn btn-secondary btn-sm" href="{_players_view_href(code, selected)}">All player cards →</a>')}
+        {players.compact_table(analyzer.player_report(insight_pulls, tags),
+                               lambda n: players.player_url(code, n, selected))}
     </div>"""
     return _page(f"{name} · {report['title']}", session, body)
 
@@ -964,8 +966,9 @@ async def handle_pull(request):
                                     [p['start'] for p in (pull.get('phases') or [])[1:]]))}
     </div>
     <div class="card">
-        {section_head('👥', 'Players', 'This pull per player.')}
-        {scoreboard_table(analyzer.scoreboard([_with_duration(pull)], tags), show_avoidable=_has_avoidable(tags))}
+        {section_head('👥', 'Players', 'Scores for this pull. Click a player for their page for this pull.')}
+        {players.compact_table(analyzer.player_report(pull_insights, tags),
+                               lambda n: players.player_url(code, n, (encounter_id, difficulty), fight_id))}
     </div>"""
     return _page(f"{pull['encounter_name']} pull {number}", session, body)
 
@@ -1057,6 +1060,10 @@ async def handle_spell(request):
 def compare_url(code, selected, name, fight_id=None):
     return (f'/admin/raids/report/{quote(code)}/compare/{quote(name)}?boss={selected[0]}-{selected[1]}'
             + (f'&pull={fight_id}' if fight_id else ''))
+
+
+def _players_view_href(code, selected):
+    return f'/admin/raids/report/{quote(code)}?boss={selected[0]}-{selected[1]}&view=players'
 
 
 def _benchmark_status(data):
