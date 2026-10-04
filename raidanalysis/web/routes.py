@@ -521,11 +521,18 @@ def _consumables_card(insight_pulls, roster):
     if not consumables.has_details(analyses):
         return ('<div class="card"><h2>🧪 Consumables timeline</h2>' + insights.REANALYZE_HINT + '</div>')
     single = len(insight_pulls) == 1
-    hint = ('Enemy casts on top; each player\'s potions (bar = buff duration), healthstones / healing potions '
-            '(diamonds) and deaths underneath. Hover anything for details.' if single else
-            'Every potion and healthstone from every pull on one axis — clusters show each player\'s habits '
-            '(e.g. always potting at the pull and again around 5:00). Open a single pull for the exact timeline '
-            'with boss abilities.')
+    reference = consumables.reference_pull(insight_pulls)
+    if single:
+        hint = ('Enemy casts on top; each player\'s potions (bar = buff duration), healthstones / healing potions '
+                '(diamonds) and deaths underneath. Hover anything for details.')
+    else:
+        hint = ('Every potion and healthstone from every pull on one axis — clusters show each player\'s habits '
+                '(e.g. always potting at the pull and again around 5:00).')
+        if reference:
+            which = 'the kill' if reference.get('kill') else 'the longest pull'
+            hint += (f' Enemy casts on top are from pull #{reference["number"]} ({which}); boss timers are mostly '
+                     'the same every pull, but shift when a phase is pushed faster or slower. Open a single pull '
+                     'for its exact timeline.')
     return (f'<div class="card"><h2>🧪 Consumables timeline</h2><p class="muted small">{hint}</p>'
             f'{consumables.timeline(insight_pulls, roster)}</div>')
 

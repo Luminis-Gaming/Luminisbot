@@ -44,19 +44,32 @@ def legend():
 # Timeline
 # ============================================================================
 
+def reference_pull(pulls):
+    """
+    The pull whose enemy casts the timeline shows: the only pull, else the (longest) kill, else the
+    longest pull with casts - it saw the most of the fight. Boss timers are mostly scripted, so they
+    line up roughly with the other pulls, drifting where a phase was pushed faster or slower.
+    """
+    with_casts = [p for p in pulls if p['analysis'].get('boss_casts')]
+    if len(pulls) == 1 or not with_casts:
+        return pulls[0] if len(pulls) == 1 else None
+    return max(with_casts, key=lambda p: (bool(p.get('kill')), p['analysis'].get('_duration') or 0))
+
+
 def timeline(pulls, roster):
     """
-    pulls: [{'number', 'analysis' (with _duration), 'phases': [ms]}]. One pull = exact WCL-style
-    timeline with the enemy's casts; several = every use from every pull on one axis (habits show
-    up as clusters), with deaths left out to keep it readable.
+    pulls: [{'number', 'kill', 'analysis' (with _duration), 'phases': [ms]}]. One pull = exact
+    WCL-style timeline with the enemy's casts and deaths; several = every use from every pull on one
+    axis (habits show up as clusters) under the enemy casts of reference_pull(), deaths left out.
     """
     single = len(pulls) == 1
     longest = max((p['analysis'].get('_duration') or 0) for p in pulls) or 1
     lanes = []  # (label, kind, marks)
+    reference = reference_pull(pulls)
 
-    if single:
+    if reference:
         # One lane per ability *name* - bosses often cast the same ability under several spell IDs.
-        analysis = pulls[0]['analysis']
+        analysis = reference['analysis']
         names = {a['id']: a['name'] for a in analysis.get('boss_abilities') or []}
         by_name = {}
         for t, guid in analysis.get('boss_casts') or []:
@@ -85,8 +98,8 @@ def timeline(pulls, roster):
         parts.append(f'<line class="grid" x1="{x(minute * 60000):.1f}" x2="{x(minute * 60000):.1f}" '
                      f'y1="{top}" y2="{height - 22}"/><text x="{x(minute * 60000):.1f}" y="{height - 6}" '
                      f'text-anchor="middle">{minute}:00</text>')
-    if single:
-        for start in pulls[0]['phases']:
+    if reference:
+        for start in reference['phases']:
             parts.append(f'<line x1="{x(start):.1f}" x2="{x(start):.1f}" y1="{top}" y2="{height - 22}" '
                          f'stroke="rgba(255,255,255,0.3)" stroke-dasharray="4 3"/>')
 
@@ -95,16 +108,18 @@ def timeline(pulls, roster):
     for label, lane_kind, marks in lanes:
         h = boss_h if lane_kind == 'boss' else row_h
         mid = y + h / 2
-        if lane_kind == 'player' and not boss_done and single and any(k == 'boss' for _, k, _ in lanes):
+        if lane_kind == 'player' and not boss_done and any(k == 'boss' for _, k, _ in lanes):
             parts.append(f'<line x1="0" x2="{width}" y1="{y:.1f}" y2="{y:.1f}" stroke="rgba(255,255,255,0.15)"/>')
             boss_done = True
         short = label if len(label) <= 22 else label[:21] + '…'
         parts.append(f'<text x="{left - 8}" y="{mid + 4:.1f}" text-anchor="end"'
                      f'{" class=axis-label" if lane_kind == "boss" else ""}>{esc(short)}</text>')
         if lane_kind == 'boss':
+            source = '' if single else f' (pull #{reference["number"]})'
             for t in marks:
                 parts.append(f'<line x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{y + 3:.1f}" y2="{y + h - 3:.1f}" '
-                             f'stroke="{BOSS_TICK}" stroke-width="2"><title>{esc(label)} — {fmt_duration(t)}</title></line>')
+                             f'stroke="{BOSS_TICK}" stroke-width="2"><title>{esc(label)} — {fmt_duration(t)}{source}'
+                             f'</title></line>')
         else:
             uses, deaths = marks
             parts.append(f'<line class="grid" x1="{left}" x2="{width - right}" y1="{mid:.1f}" y2="{mid:.1f}"/>')
