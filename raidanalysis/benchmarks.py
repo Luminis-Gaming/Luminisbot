@@ -71,6 +71,8 @@ NOT_MAJOR = {
     'Soulstone', 'Rebirth', 'Raise Ally', 'Intercession', 'Demonic Gateway', 'Fel Domination', 'Summon Felhunter',
     'Raise Dead', 'Call Pet 1', 'Revive Pet', 'Mend Pet', 'Mark of the Wild', 'Battle Shout', 'Arcane Intellect',
     'Power Word: Fortitude', 'Blessing of the Bronze', 'Skyfury',
+    # short rotational absorbs / toggles the top players press often, not burst
+    'Prismatic Barrier', 'Blazing Barrier', 'Ice Barrier', 'Sweeping Strikes',
 }
 
 _COOLDOWN_RE = re.compile(r'([\d.]+)\s*(min|sec)\s+cooldown', re.I)
@@ -401,6 +403,43 @@ async def ensure_spells_for(numbered, name):
     bench = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
     ours = {sid for p in our_pulls(numbered, name) for _, sid in p['casts']}
     return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']} | ours)
+
+
+# Without top-player data for a spec, the raid timeline only treats long cooldowns as major.
+FALLBACK_MAJOR_MS = 60000
+
+
+def spec_majors(encounter_id, difficulty, spell_lookup):
+    """
+    {(class, spec): {ability names}} - the damage / healing cooldowns and trinkets each spec's top
+    players use as majors on this boss (same rule as compare(): at least MIN_AGREE of them), so the
+    raid timeline shows what matters for that spec instead of every 30 s button.
+    """
+    from . import db
+    rows = db.get_benchmarks(encounter_id, difficulty)
+    ids = {sid for r in rows for p in r['players'] or [] for _, sid in p['casts']}
+    info = spell_lookup(list(ids)) if spell_lookup and ids else {}
+    out = {}
+    for r in rows:
+        top = r['players'] or []
+        users = {}
+        for i, p in enumerate(top):
+            for _, sid in p['casts']:
+                if category(sid, info.get(sid)) in (THROUGHPUT, TRINKET):
+                    users.setdefault(info[sid]['name'], set()).add(i)
+        need = min(MIN_AGREE, len(top))
+        out[(r['class'], r['spec'])] = {name for name, who in users.items() if len(who) >= need}
+    return out
+
+
+def is_major_for(player, spell_id, info, majors):
+    """Raid timeline: is this cast one of the player's spec's major damage / healing cooldowns?"""
+    if category(spell_id, info) not in (THROUGHPUT, TRINKET):
+        return False
+    key = (player.get('class'), player.get('spec'))
+    if key in majors:
+        return (info or {}).get('name') in majors[key]
+    return (cooldown_ms((info or {}).get('meta')) or 0) >= FALLBACK_MAJOR_MS
 
 
 def readable(slug):

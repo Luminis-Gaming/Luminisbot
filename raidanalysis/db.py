@@ -623,3 +623,11 @@ def attempted_spell_ids(spell_ids):
           AND (status <> 'error' OR fetched_at > NOW() - INTERVAL '1 hour')
     """, ([int(i) for i in spell_ids], _spell_parser()), fetch='all')
     return {r['spell_id'] for r in rows}
+
+
+def get_benchmarks(encounter_id, difficulty):
+    """Every spec's top players on one boss + difficulty."""
+    return _run("""
+        SELECT class, spec, players FROM raid_benchmarks
+        WHERE encounter_id = %s AND difficulty = %s AND status <> 'empty'
+    """, (encounter_id, difficulty), fetch='all')

@@ -6,7 +6,8 @@ abilities on top and every player's consumables (and deaths) underneath.
 Needs analyses from ANALYSIS_VERSION 4+ ('consumables', 'boss_casts');
 older nights only have counts until they're re-analyzed.
 """
-from .. import cooldowns
+from .. import benchmarks, cooldowns
+from ..spells import icon_url
 from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name, spell_data_json
 
 # What the timeline colors encode is the *kind* of consumable (validated with the
@@ -31,11 +32,50 @@ def has_details(analyses):
     return any('consumables' in a for a in analyses)
 
 
+def _icon_src(icon):
+    """Logs give icon file names (rpglogs); spells found via Wowhead come as full URLs."""
+    return icon if icon.startswith('http') else f'{ICON_BASE}{icon}'
+
+
 def _icon(icon):
-    return f'<img class="ability-icon" src="{ICON_BASE}{esc(icon)}" alt="" loading="lazy">' if icon else ''
+    return f'<img class="ability-icon" src="{esc(_icon_src(icon))}" alt="" loading="lazy">' if icon else ''
 
 
-def toolbar(pulls, single):
+# Cooldown groups on the timeline: each spec's own damage / healing cooldowns (found the way the
+# top-player comparison finds them), then the tracked defensive / utility groups (cooldowns.py).
+THROUGHPUT_GROUP = ('throughput', 'Damage & healing cooldowns', '⚔️')
+TIMELINE_CATEGORIES = (THROUGHPUT_GROUP,) + tuple(cooldowns.CATEGORIES)
+
+
+def cooldowns_by_pull(pulls, spell_lookup=None, majors=None):
+    """
+    {id(pull): [cooldown use]} - the tracked cooldowns (analysis['cooldowns']) plus each player's
+    major damage / healing cooldowns and on-use trinkets from their recorded casts (analysis['casts']):
+    the ones their spec's top players use as majors on this boss (majors = benchmarks.spec_majors),
+    else anything with a 60 s+ cooldown. Spells not looked up on Wowhead yet just don't show.
+    """
+    tracked = {cd['ability_id'] for p in pulls for cd in p['analysis'].get('cooldowns') or []}
+    consumed = {u['ability_id'] for p in pulls for u in p['analysis'].get('consumables') or []}
+    ids = {sid for p in pulls for casts in (p['analysis'].get('casts') or {}).values() for _, sid in casts}
+    ids -= tracked | consumed
+    info = spell_lookup(list(ids)) if spell_lookup and ids else {}
+    majors = majors or {}
+    out = {}
+    for p in pulls:
+        uses = list(p['analysis'].get('cooldowns') or [])
+        roster = {pl['name']: pl for pl in p['analysis'].get('players') or []}
+        for player, casts in (p['analysis'].get('casts') or {}).items():
+            who = roster.get(player, {})
+            for t, sid in casts:
+                if sid in ids and benchmarks.is_major_for(who, sid, info.get(sid), majors):
+                    uses.append({'t': t, 'name': player, 'ability_id': sid, 'ability': info[sid]['name'],
+                                 'icon': icon_url(info[sid].get('icon')), 'category': THROUGHPUT_GROUP[0],
+                                 'target': None})
+        out[id(p)] = uses
+    return out
+
+
+def toolbar(pulls, single, cds):
     """
     Toggle chips for what the timeline shows (they double as its legend): each consumable kind,
     deaths, each cooldown group - and an Abilities dropdown to pick single cooldowns. Only raid
@@ -48,11 +88,11 @@ def toolbar(pulls, single):
                      f'<i style="--c:{DEATH}"></i>Deaths</button>')
     used = {}
     for p in pulls:
-        for cd in p['analysis'].get('cooldowns') or []:
+        for cd in cds[id(p)]:
             entry = used.setdefault((cd['category'], cd['ability']), {'icon': cd.get('icon'), 'count': 0})
             entry['count'] += 1
     groups = []
-    for key, label, emoji in cooldowns.CATEGORIES:
+    for key, label, emoji in TIMELINE_CATEGORIES:
         abilities = sorted(((name, e) for (cat, name), e in used.items() if cat == key), key=lambda x: -x[1]['count'])
         if not abilities:
             continue
@@ -87,7 +127,7 @@ def reference_pull(pulls):
     return max(with_casts, key=lambda p: (bool(p.get('kill')), p['analysis'].get('_duration') or 0))
 
 
-def timeline(pulls, roster, spell_lookup=None):
+def timeline(pulls, roster, spell_lookup=None, majors=None):
     """
     pulls: [{'number', 'kill', 'analysis' (with _duration), 'phases': [ms]}]. One pull = exact
     WCL-style timeline with the enemy's casts and deaths; several = every use from every pull on one
@@ -101,7 +141,8 @@ def timeline(pulls, roster, spell_lookup=None):
     single = len(pulls) == 1
     longest = max((p['analysis'].get('_duration') or 0) for p in pulls) or 1
     reference = reference_pull(pulls)
-    spells = {}  # spell id -> (name, rpglogs icon) as the logs know it
+    spells = {}  # spell id -> (name, rpglogs icon file or icon URL)
+    cds = cooldowns_by_pull(pulls, spell_lookup, majors)
 
     def at(t):
         return f'{100 * max(0, min(t, longest)) / longest:.3f}%'
@@ -149,7 +190,7 @@ def timeline(pulls, roster, spell_lookup=None):
                     width = 100 * (min(end, longest) - max(0, use['t'])) / longest
                     marks.append(f'<i class="m bar k-{k}" data-f="{k}" style="left:{at(use["t"])};width:{width:.3f}%" '
                                  f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}"></i>')
-            for cd in pull['analysis'].get('cooldowns') or []:
+            for cd in cds[id(pull)]:
                 if cd['name'] != player['name']:
                     continue
                 spells.setdefault(cd['ability_id'], (cd['ability'], cd.get('icon')))
@@ -173,12 +214,12 @@ def timeline(pulls, roster, spell_lookup=None):
     grid = ''.join(f'<i style="left:{at(t)}"></i>' for t in range(0, longest + 1, 60000))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{at(t)}">{fmt_duration(t)}</span>'
                     for t in range(0, longest + 1, 60000))
-    icon_css = ''.join(f'.sp{sid}{{background-image:url({ICON_BASE}{esc(icon)})}}'
+    icon_css = ''.join(f'.sp{sid}{{background-image:url({esc(_icon_src(icon))})}}'
                        for sid, (_, icon) in spells.items() if icon)
     return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}"
         style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']}">
         <style>{icon_css}</style>
-        {toolbar(pulls, single)}
+        {toolbar(pulls, single, cds)}
         <div class="tl-tools"><span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom</span>
             <button type="button" data-zoom="out" title="Zoom out">−</button>
             <input type="range" min="0" max="100" value="0" aria-label="Zoom">

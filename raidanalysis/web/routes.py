@@ -569,6 +569,9 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
     </div>"""
 
 
+CHEVRON = ('<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+           'stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>')
+
 # Filter groups for the mechanics table, in chip order: (key, label, shown by default).
 MECH_GROUPS = (('avoidable', '🔴 Avoidable', True), ('nontank', '🟠 Non-tanks', True),
                ('untagged', '⚪ Untagged', True), ('expected', '🟢 Expected', False), ('ignored', '⚫ Ignored', False))
@@ -607,24 +610,22 @@ def _mech_detail(a, counts, pname, per_pull, pull_href, timeline, avoidable=Fals
     players = sorted((a.get('players') or {}).items(),
                      key=lambda kv: -(counts.get(kv[0], 0) * 1e12 + (kv[1].get('damage') or 0)))
     if players:
-        shown = players[:15]
         rows = ''.join(f'<tr><td>{pname(n)}</td><td class="num">{fmt_amount(st.get("damage") or 0)}</td>'
                        f'<td class="num">{st.get("hits") or 0}</td><td class="num">{st.get("ticks") or 0}</td>'
                        + (f'<td class="num">{counts.get(n) or ""}</td>' if avoidable else '') + '</tr>'
-                       for n, st in shown)
-        more = f'<p class="muted small">+{len(players) - 15} more</p>' if len(players) > 15 else ''
+                       for n, st in players)
         note = '' if a.get('complete') else ('<p class="muted small">Raid-wide ability: Warcraft Logs only lists '
                                              'its top 5 targets.</p>')
         parts.append(f'<div><h4>Who took it</h4><div class="table-wrapper"><table class="compact"><tr><th>Player</th>'
                      f'<th class="num">Damage</th><th class="num">Hits</th><th class="num">Ticks</th>'
                      + ('<th class="num" title="Hits that count as a mistake for its tag">Mistakes</th>' if avoidable else '')
                      + f'</tr>{rows}</table>'
-                     f'</div>{more}{note}</div>')
+                     f'</div>{note}</div>')
     if timeline:
         duration, phases = timeline
         times = [(n, st.get('times') or []) for n, st in players if st.get('times')]
         if times:
-            parts.append(f'<div class="mech-wide"><h4>When</h4>{hit_timeline(times[:15], duration, phases)}</div>')
+            parts.append(f'<div class="mech-wide"><h4>When</h4>{hit_timeline(times, duration, phases)}</div>')
     return f'<div class="mech-detail-grid">{"".join(parts)}</div>' if parts else '<p class="muted">No details.</p>'
 
 
@@ -652,7 +653,7 @@ def _mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, di
         hidden = '' if dict((k, on) for k, _, on in MECH_GROUPS)[group] else ' hidden'
         rows.append(f"""
             <tr class="mech-row" data-mg="{group}"{hidden} tabindex="0" title="Click for details">
-                <td><span class="mech-caret">▸</span>{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
+                <td><span class="mech-caret" aria-hidden="true">{CHEVRON}</span>{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
                     {tag_pill(tag, sources.get(a['id'])) if tag != analyzer.TAG_IGNORE else ''}</td>
                 <td class="small muted">{esc(a.get('source') or '')}</td>
                 <td class="num" data-v="{a['total']}">{fmt_amount(a['total'])}</td>
@@ -685,28 +686,30 @@ def _roster_names(analysis):
     return pname
 
 
-def _consumables_card(insight_pulls, roster):
-    """WCL-style timeline: enemy casts on top, every player's potions / healthstones / deaths below."""
+def _consumables_card(insight_pulls, roster, boss=None):
+    """The raid timeline: enemy casts on top; every player's potions, healthstones, cooldowns and deaths below."""
     analyses = [p['analysis'] for p in insight_pulls]
     if not consumables.has_details(analyses):
-        return ('<div class="card"><h2>🧪 Consumables timeline</h2>' + insights.REANALYZE_HINT + '</div>')
+        return ('<div class="card"><h2>🕒 Raid timeline</h2>' + insights.REANALYZE_HINT + '</div>')
     single = len(insight_pulls) == 1
     reference = consumables.reference_pull(insight_pulls)
+    majors = benchmarks.spec_majors(*boss, spells.lookup) if boss else {}
     if single:
-        hint = ('Enemy casts on top; each player\'s potions (bar = buff duration), healthstones / healing potions '
-                '(diamonds), deaths and cooldowns underneath. Toggle what to show with the chips - pick single '
-                'cooldowns under Abilities. Hover anything for details.')
+        hint = ('Boss casts on top; underneath, each player\'s potions (bar = buff duration), healthstones / '
+                'healing potions (diamonds), deaths and cooldowns - damage &amp; healing cooldowns, defensives, '
+                'externals, raid cooldowns and utility. Toggle what to show with the chips, pick single abilities '
+                'under Abilities, hover anything for details.')
     else:
-        hint = ('Every potion and healthstone from every pull on one axis — clusters show each player\'s habits '
-                '(e.g. always potting at the pull and again around 5:00). Toggle consumables and cooldowns with the '
-                'chips.')
+        hint = ('Every pull on one axis: potions, healthstones and cooldowns from all of them - clusters show '
+                'each player\'s habits (e.g. always potting at the pull and again around 5:00, or saving a '
+                'cooldown for the same moment every pull). Toggle what to show with the chips.')
         if reference:
             which = 'the kill' if reference.get('kill') else 'the longest pull'
             hint += (f' Enemy casts on top are from pull #{reference["number"]} ({which}); boss timers are mostly '
                      'the same every pull, but shift when a phase is pushed faster or slower. Open a single pull '
                      'for its exact timeline.')
-    return (f'<div class="card"><h2>🧪 Consumables timeline</h2><p class="muted small">{hint}</p>'
-            f'{consumables.timeline(insight_pulls, roster, spells.lookup)}</div>')
+    return (f'<div class="card"><h2>🕒 Raid timeline</h2><p class="muted small">{hint}</p>'
+            f'{consumables.timeline(insight_pulls, roster, spells.lookup, majors)}</div>')
 
 
 def _insight_pulls(numbered, enrage_ids=()):
@@ -798,7 +801,7 @@ async def handle_night(request):
         <h2>📋 Mechanics</h2>
         {insights.build(insight_pulls, tags, guide_for, code)}
     </div>
-    {_consumables_card(insight_pulls, merged['players'])}
+    {_consumables_card(insight_pulls, merged['players'], (encounter_id, difficulty))}
     <div class="card">
         <h2>💀 Deaths in every pull</h2>
         <p class="muted small">One row per pull, along its own length: red ticks are early deaths by mistake (one of
@@ -878,7 +881,7 @@ async def handle_pull(request):
         <h2>📋 Mechanics</h2>
         {insights.build(pull_insights, tags, guide_for, code)}
     </div>
-    {_consumables_card(pull_insights, analysis.get('players') or [])}
+    {_consumables_card(pull_insights, analysis.get('players') or [], (encounter_id, difficulty))}
     <div class="card">
         <h2>💀 Deaths</h2>
         <div class="table-wrapper"><table class="compact"><tr><th class="num">Time</th><th>Player</th>

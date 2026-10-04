@@ -103,8 +103,12 @@ th[data-sort]:hover { color: var(--text); }
 tr.mech-row { cursor: pointer; }
 tr.mech-row:hover td { background: var(--surface-2); }
 tr.mech-row.open td { background: var(--accent-soft); }
-.mech-caret { display: inline-block; width: 14px; color: var(--faint); transition: transform .15s; }
-tr.mech-row.open .mech-caret { transform: rotate(90deg); color: var(--text); }
+.mech-caret { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+    margin-right: 8px; vertical-align: middle; border-radius: 50%; border: 1px solid var(--border-strong);
+    background: var(--surface-3); color: var(--text); transition: transform .15s, background .15s, border-color .15s; }
+.mech-caret svg { width: 12px; height: 12px; }
+tr.mech-row:hover .mech-caret { border-color: var(--accent); color: #fff; }
+tr.mech-row.open .mech-caret { transform: rotate(90deg); background: var(--accent); border-color: var(--accent); color: #fff; }
 tr.mech-detail > td { background: var(--surface-2); padding: 12px 16px 16px; }
 .mech-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px 24px; }
 .mech-detail-grid h4 { margin: 0 0 6px; }
@@ -1057,7 +1061,8 @@ def spell_data_json(spells, spell_lookup=None):
     for sid, (name, icon) in spells.items():
         info = known.get(sid) or {}
         out[sid] = {'name': info.get('name') or name,
-                    'icon': f'{ICON_BASE}{icon}' if icon else icon_url(info.get('icon')),
+                    'icon': (icon if icon.startswith('http') else f'{ICON_BASE}{icon}') if icon
+                            else icon_url(info.get('icon')),
                     'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
     # Inside <script>: keep "</script>" from ever closing it early.
     return json.dumps(out, ensure_ascii=False).replace('</', '<' + chr(92) + '/')
