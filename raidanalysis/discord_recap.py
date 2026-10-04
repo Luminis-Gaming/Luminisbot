@@ -129,7 +129,7 @@ def _note_line(note, guide_for):
     if ability:
         guide = guide_for(ability['id'], ability['name'])
         if guide and guide.get('video_url'):
-            line += f' — [▶ how it works]({guide["embed_url"]})'
+            line += f' — [🎞 watch the clip]({guide["embed_url"]})'
     return line
 
 

@@ -137,6 +137,8 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
             continue
         try:
             fight = await wcl.get_player_fight(session, r['code'], r['fight_id'], r['name'])
+        except wcl.WCLRateLimited:
+            raise
         except wcl.WCLError as e:
             logger.info(f"[RAIDS] Skipping top parse {r['code']}#{r['fight_id']}: {e}")
             continue
@@ -168,6 +170,9 @@ async def refresh(session, budget_ok, limit=SPECS_PER_RUN):
             # whenever the general backlog gets there (a spell without it silently drops out).
             await ensure_spells({sid for p in players for _, sid in p['casts']})
         except Exception as e:  # retried after a day
+            from .wcl import WCLRateLimited
+            if isinstance(e, WCLRateLimited):
+                raise  # not this spec's fault: stop, and let the sync pause
             logger.warning(f"[RAIDS] Top players for {key} failed: {e}")
             db.save_benchmark(*key, metric_for(combo['role']), [], 'error', str(e)[:300])
         done += 1
@@ -269,17 +274,25 @@ def compare(pulls, top, spell_info):
             g['counts'][i] += 1
     rows = []
     minutes = sum(p['duration'] for p in pulls) / 60000
-    # Every potion we drank counts for the potion group, not just the ones the top players picked.
-    if POTION_GROUP in groups:
-        groups[POTION_GROUP]['ids'] |= {sid for p in pulls for _, sid in p['casts']
-                                        if category(sid, spell_info.get(sid)) == POTION}
+    # Every potion we drank counts for the potion group, not just the ones the top players picked -
+    # and an ability our log records under another spell ID than theirs still counts (same name).
+    for sid in {sid for p in pulls for _, sid in p['casts']}:
+        info = spell_info.get(sid) or {}
+        if category(sid, info) == POTION and POTION_GROUP in groups:
+            groups[POTION_GROUP]['ids'].add(sid)
+        elif info.get('name') in groups:
+            groups[info['name']]['ids'].add(sid)
     for name, g in groups.items():
         if len(g['users']) < need:
             continue
         ids = g['ids']
         top_per_min = sum(g['counts'][i] / (top[i]['duration'] / 60000) for i in g['users']) / len(g['users'])
-        # Pulls where we fetched these spells at all (older analyses only kept tracked cooldowns).
-        known = [p for p in pulls if p.get('cast_ids') is None or ids & p['cast_ids']]
+        # Pulls where we fetched these spells at all. Analyses from before the comparison only kept
+        # the tracked cooldowns (cooldowns.py) and consumables - for anything else they can't tell
+        # "never pressed" from "not recorded", so those pulls don't count until re-analyzed.
+        tracked = g['category'] in cooldowns.CATEGORY_LABELS or g['category'] == POTION
+        known = [p for p in pulls if (ids & p['cast_ids'] if p.get('cast_ids') is not None
+                                      else tracked and p.get('tracked'))]
         ours = [[t for t, sid in p['casts'] if sid in ids] for p in pulls]
         ours_casts = sum(len(c) for c in ours)
         wins = windows(top, ids)
@@ -360,7 +373,8 @@ def our_pulls(pulls, name):
         cast_ids = analysis.get('cast_ids')
         out.append({'number': number, 'fight_id': pull['fight_id'], 'kill': pull.get('kill'),
                     'duration': pull['end_ms'] - pull['start_ms'], 'phases': pull.get('phases') or [],
-                    'casts': sorted(casts), 'cast_ids': set(cast_ids) if cast_ids is not None else None})
+                    'casts': sorted(casts), 'cast_ids': set(cast_ids) if cast_ids is not None else None,
+                    'tracked': 'cooldowns' in analysis})
     return out
 
 
@@ -385,7 +399,8 @@ async def ensure_spells_for(numbered, name):
         return 0
     first = numbered[0][1]
     bench = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
-    return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']})
+    ours = {sid for p in our_pulls(numbered, name) for _, sid in p['casts']}
+    return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']} | ours)
 
 
 def readable(slug):

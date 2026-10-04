@@ -175,6 +175,7 @@ tr.muted-row td { opacity: 0.7; }
 .tl-track a:hover .tl-hit { fill: rgba(255,255,255,0.04); }
 .tl-track .tl-hit-line { stroke: transparent; stroke-width: 12; }
 .tl-track .tl-mark { cursor: help; }
+.warn-text { color: #ffd43b; }
 .ability-cell[data-spell] { cursor: help; }
 .tl-track .tl-mark:hover line:first-child { stroke: #fff; }
 .tl-ruler { position: relative; height: 20px; font-size: 11px; color: var(--muted); }
@@ -370,9 +371,12 @@ details.breakdown-toggle > summary::before { content: '▸ '; }
 details.breakdown-toggle[open] > summary::before { content: '▾ '; }
 
 /* Clips */
-.clip-btn { margin-left: 6px; padding: 1px 8px; font-size: 11px; border: none; border-radius: 10px;
-    background: #c92a2a; color: #fff; cursor: pointer; vertical-align: middle; }
-.clip-btn:hover { background: #e03131; }
+.clip-btn { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 2px 8px 2px 6px;
+    font: inherit; font-size: 11px; font-weight: 600; line-height: 16px; border-radius: 999px; cursor: pointer;
+    vertical-align: middle; color: #b9c2ff; background: var(--accent-soft); border: 1px solid rgba(109,124,255,0.45); }
+.clip-btn svg { width: 13px; height: 13px; flex: none; }
+.clip-btn:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
+.clip-eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
 .guide-info { margin-left: 4px; cursor: help; font-size: 13px; }
 .clip-modal { position: fixed; inset: 0; background: rgba(5,7,15,0.75); display: flex; align-items: center;
     justify-content: center; z-index: 100; padding: 16px; backdrop-filter: blur(4px); }
@@ -664,9 +668,15 @@ document.addEventListener('keydown', e => {
 });
 """
 
+# A film strip: reads as "short clip" (and not as a YouTube logo, which a red ▶ did).
+FILM_ICON = ('<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">'
+             '<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4.5 2.5v11M11.5 2.5v11M1.5 6h3M1.5 10h3'
+             'M11.5 6h3M11.5 10h3"/><path d="M7 6.3v3.4l2.6-1.7z" fill="currentColor" stroke="none"/></svg>')
+
 CLIP_MODAL = """
 <div id="clip-modal" class="clip-modal" hidden>
   <div class="clip-box" role="dialog" aria-modal="true">
+    <div class="clip-eyebrow">🎞 Mechanic clip</div>
     <div class="clip-head"><h3></h3><button class="clip-close" aria-label="Close">✕</button></div>
     <p class="clip-tip muted small"></p>
     <iframe title="Mechanic clip" loading="lazy" allow="autoplay; fullscreen"></iframe>
@@ -740,14 +750,18 @@ def ability(name, icon=None, ability_id=None, guide=None):
 
 
 def guide_button(guide, name=''):
-    """▶ opens the Mythic Trap clip; abilities without a clip get their tip as a hover ℹ️."""
+    """
+    A "🎞 Clip" chip that opens the Mythic Trap clip in a pop-up player right on the page (not a
+    link away); abilities without a clip get their tip as a hover ℹ️.
+    """
     if not guide:
         return ''
     tip = guide.get('tip') or guide.get('description') or ''
     if guide.get('video_url'):
-        return (f' <button class="clip-btn" data-embed="{esc(guide["embed_url"])}" '
+        return (f' <button type="button" class="clip-btn" data-embed="{esc(guide["embed_url"])}" '
                 f'data-title="{esc(guide["name"] or name)}" data-tip="{esc(tip)}" '
-                f'title="Watch how {esc(guide["name"] or name)} works">▶</button>')
+                f'title="Watch a short clip of how {esc(guide["name"] or name)} works - plays right here">'
+                f'{FILM_ICON}Clip</button>')
     if tip:
         return f' <span class="guide-info" title="{esc(tip)}">ℹ️</span>'
     return ''

@@ -21,7 +21,9 @@ def _spec_icon_class(spell_id):
     return f'sp{spell_id}'
 
 
-def _verdict_pill(verdict):
+def _verdict_pill(verdict, known=True):
+    if not known:
+        return '<span class="muted small" title="These pulls were analyzed before every cast was kept">re-analyze</span>'
     if not verdict:
         return '<span class="muted small">—</span>'
     cls, text = VERDICTS[verdict]
@@ -51,7 +53,7 @@ def summary(data):
                 <td class="num" data-v="{r['ours_per_min']:.3f}">{r['ours_per_min'] * 5:.1f}</td>
                 <td class="small">{top_when}</td>
                 <td class="num">{moments}</td>
-                <td>{_verdict_pill(r['verdict']) if r['category'] in benchmarks.JUDGED else '<span class="muted small">info</span>'}</td>
+                <td>{_verdict_pill(r['verdict'], r['known']) if r['category'] in benchmarks.JUDGED else '<span class="muted small">info</span>'}</td>
             </tr>""")
     return f"""<div class="table-wrapper"><table class="compact">
         <tr><th data-sort>Ability</th><th>Kind</th>
@@ -130,7 +132,7 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                         f'data-tip="{w["players"]} of the top {len(top)} press it around {fmt_duration(w["ref_at"])}"></i>'
                         for w in r['windows'])
         labels.append(f'<div class="tl-lab grp" data-g="{g}"{hidden}>{_ability(r, spells)}'
-                      f'{_verdict_pill(r["verdict"]) if judged else ""}</div>')
+                      f'{_verdict_pill(r["verdict"], r["known"]) if judged else ""}</div>')
         tracks.append(f'<div class="tl-row grp" data-g="{g}"{hidden}>{bands}</div>')
         for lane in lanes:
             marks = []

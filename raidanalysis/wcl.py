@@ -28,6 +28,13 @@ class WCLError(Exception):
     pass
 
 
+class WCLRateLimited(WCLError):
+    """WCL said 429. retry_after: seconds from its Retry-After header, when it sends one."""
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 async def _get_token(session):
     global _token, _token_expires
     if _token and time.time() < _token_expires - 300:
@@ -54,7 +61,9 @@ async def query(session, gql, variables=None):
     async with session.post(API_URL, json={'query': gql, 'variables': variables or {}},
                             headers={'Authorization': f'Bearer {token}'}) as resp:
         if resp.status == 429:
-            raise WCLError("WCL rate limit reached - try again later")
+            retry = resp.headers.get('Retry-After')
+            raise WCLRateLimited("WCL rate limit reached - try again later",
+                                 int(retry) if retry and retry.isdigit() else None)
         if resp.status != 200:
             raise WCLError(f"WCL API returned {resp.status}: {(await resp.text())[:300]}")
         body = await resp.json()

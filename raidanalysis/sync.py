@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
 status = {'running': False, 'current': None, 'last_finished': None, 'last_result': None,
-          'last_error': None, 'last_new': 0, 'wcl': None, 'last_points': None}
+          'last_error': None, 'last_new': 0, 'wcl': None, 'last_points': None, 'paused_until': None}
 
 
 def _phase_names(report):
@@ -92,6 +92,10 @@ async def sync_report(session, code, source='guild', force=False):
     for number, fight in enumerate(pulls, 1):
         if fight['id'] in done:
             continue
+        # A long night is dozens of requests: check the budget as we go, not only between nights.
+        # What's left is picked up next sync (already analyzed pulls are skipped).
+        if analyzed and analyzed % BUDGET_CHECK_EVERY == 0 and not await _budget_ok(session):
+            raise wcl.WCLError(_pause_message() if _paused() else _budget_message())
         status['current'] = f"Analyzing {report.get('title') or code} — pull {number}/{len(pulls)} ({fight['name']})"
         analysis = await _analyze_pull(session, code, fight, actors)
         db.upsert_pull(code, fight, analysis)
@@ -100,6 +104,8 @@ async def sync_report(session, code, source='guild', force=False):
                     f"({'kill' if fight.get('kill') else 'wipe'})")
     return analyzed
 
+
+BUDGET_CHECK_EVERY = 3  # pulls
 
 # Raid-event logs are picked up automatically only for recent events (older nights can be
 # imported by URL), a few per sync so a backlog doesn't burn the hourly WCL API budget.
@@ -132,8 +138,36 @@ def _event_codes_to_sync(already_queued):
 WCL_BUDGET_SHARE = 0.7
 
 
+# After WCL answers 429 we leave it alone until its hourly budget resets (or for this long when
+# we can't tell when that is), instead of knocking again every sync.
+RATE_LIMIT_PAUSE_FALLBACK = 15 * 60
+
+
+def _paused():
+    return bool(status.get('paused_until') and status['paused_until'] > time.time())
+
+
+def _pause_message():
+    from datetime import datetime
+    until = datetime.fromtimestamp(status['paused_until']).strftime('%H:%M')
+    return f"WCL rate limit hit - pausing WCL requests until {until} (the hourly budget resets)"
+
+
+def _rate_limited(error):
+    """WCL said 429: pause until its budget resets. Returns the message to show."""
+    w = status.get('wcl') or {}
+    wait = getattr(error, 'retry_after', None)
+    if not wait and w.get('reset_in') and w.get('checked'):
+        wait = w['reset_in'] - (time.time() - w['checked'])
+    status['paused_until'] = time.time() + max(60, wait or RATE_LIMIT_PAUSE_FALLBACK)
+    logger.warning(f"[RAIDS] {_pause_message()}")
+    return _pause_message()
+
+
 async def _budget_ok(session):
     """Refresh status['wcl'] from WCL's own counter; False once we're past our share of the hour."""
+    if _paused():
+        return False
     try:
         limits = await wcl.get_rate_limit(session)
     except wcl.WCLError:
@@ -151,6 +185,9 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
     """
     if _lock.locked():
         return None
+    if _paused():  # WCL said 429 earlier: wait for its budget to reset instead of knocking again
+        status.update(running=False, current=None, last_result=_pause_message(), last_error=_pause_message())
+        return 0
     async with _lock:
         status.update(running=True, last_error=None)
         started = time.time()
@@ -178,21 +215,31 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
                         count = await sync_report(session, code, source=source, force=force)
                         total += count
                         reports += 1 if count else 0
+                    except wcl.WCLRateLimited as e:
+                        errors.append(_rate_limited(e))
+                        break
                     except wcl.WCLError as e:
                         errors.append(f"{code}: {e}")
                         logger.warning(f"[RAIDS] Sync of {code} failed: {e}")
-                        if 'rate limit' in str(e):
+                        if _paused() or not await _budget_ok(session):
                             break
                 # Top parses for the specs we played lately (a few per run; see benchmarks.py)
                 try:
                     from . import benchmarks
                     status['current'] = 'Fetching top-player benchmarks…'
                     await benchmarks.refresh(session, _budget_ok)
+                except wcl.WCLRateLimited as e:
+                    errors.append(_rate_limited(e))
                 except Exception as e:
                     logger.warning(f"[RAIDS] Benchmarks skipped: {e}")
                 await _budget_ok(session)
                 if spent_before is not None and status.get('wcl'):
                     status['last_points'] = max(0, status['wcl']['spent'] - spent_before)
+        except wcl.WCLRateLimited as e:
+            errors.append(_rate_limited(e))
+        except wcl.WCLError as e:  # budget pause, WCL down: a warning, not a stack trace
+            logger.warning(f"[RAIDS] Sync stopped: {e}")
+            errors.append(str(e))
         except Exception as e:
             logger.exception("[RAIDS] Sync failed")
             errors.append(str(e))
@@ -254,6 +301,8 @@ async def fetch_all_benchmarks():
             status['current'] = 'Looking up spell tooltips on Wowhead…'
             while await fill_missing() >= 400:  # spells.PER_RUN at a time until none are left
                 pass
+        except wcl.WCLRateLimited as e:
+            error = _rate_limited(e)
         except Exception as e:
             logger.exception("[RAIDS] Fetching all benchmarks failed")
             error = str(e)

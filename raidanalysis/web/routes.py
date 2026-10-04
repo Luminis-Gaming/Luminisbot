@@ -359,6 +359,8 @@ async def handle_sync(request):
 
     if sync.status['running']:
         raise web.HTTPFound('/admin/raids?error=' + quote('A sync is already running.'))
+    if sync._paused():
+        raise web.HTTPFound('/admin/raids?error=' + quote(sync._pause_message()))
     # Mark it running now, so the page we redirect to already shows (and polls) the progress banner.
     sync.status.update(running=True, current='Starting sync…')
     asyncio.create_task(sync.sync_guild(limit=limit, force_codes=codes))
@@ -376,6 +378,8 @@ async def handle_fetch_benchmarks(request):
     _session(request)
     if sync.status['running']:
         raise web.HTTPFound('/admin/raids?error=' + quote('A sync is already running - try again when it is done.'))
+    if sync._paused():
+        raise web.HTTPFound('/admin/raids?error=' + quote(sync._pause_message()))
     sync.status.update(running=True, current='Fetching top players…')
     asyncio.create_task(sync.fetch_all_benchmarks())
     raise web.HTTPFound('/admin/raids?msg=' + quote('Fetching the top players for every spec in the background - '
@@ -911,6 +915,16 @@ def _compare_card(code, selected, name, numbered):
     </div>"""
 
 
+def _reanalyze_hint(data, code):
+    """Some abilities can't be judged: tonight's pulls were analyzed before every cast was kept."""
+    unknown = [r['name'] for r in data['rows'] if not r['known'] and r['category'] in benchmarks.JUDGED]
+    if not unknown:
+        return ''
+    return (f'<p class="small warn-text">⚠️ This night was analyzed before every cast was kept, so '
+            f'{esc(", ".join(unknown[:6]))}{" and more" if len(unknown) > 6 else ""} can\'t be compared yet - '
+            f'<strong>🔄 Re-analyze</strong> it on the <a href="/admin/raids/report/{quote(code)}">night page</a>.</p>')
+
+
 def _boss_timeline_of(numbered, fight_id):
     """The boss's casts in one of our pulls: {'abilities', 'casts'} from its analysis."""
     analysis = next((p.get('analysis') or {} for _, p in numbered if p['fight_id'] == fight_id), {})
@@ -943,10 +957,16 @@ async def handle_compare(request):
     wanted = request.query.get('pull')
     pull = next((p for p in eligible if wanted and str(p['fight_id']) == wanted), None) or \
         max(eligible, key=lambda p: (bool(p.get('kill')), p['duration']))
-    pull_links = ' · '.join(
-        f'<a href="{compare_url(code, selected, name, p["fight_id"])}" '
-        f'style="color:{"#fff" if p is pull else "#8b9cff"}">#{p["number"]} '
-        f'{"kill" if p.get("kill") else fmt_duration(p["duration"])}</a>' for p in eligible)
+    # Same chips as the night header: which of tonight's pulls the timeline shows.
+    rows_by_fight = {p['fight_id']: p for _, p in numbered}
+
+    def chip_label(p):
+        return '✔ Kill' if p.get('kill') else f"{rows_by_fight[p['fight_id']]['fight_pct'] or 0:.0f}%"
+    pull_chips = ''.join(
+        f'<a class="pull-chip{" kill" if p.get("kill") else ""}{" active" if p is pull else ""}" '
+        f'href="{compare_url(code, selected, name, p["fight_id"])}" '
+        f'title="Pull {p["number"]}: {esc(_result_text(rows_by_fight[p["fight_id"]]))}">'
+        f'#{p["number"]} {chip_label(p)}</a>' for p in eligible)
     fetched = data['benchmark'].get('fetched_at')
     body = head + f"""
         <p class="small">Your major cooldowns, potions and defensives next to the top {len(data['top'])}
@@ -954,6 +974,7 @@ async def handle_compare(request):
            "Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives.
            Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.</p>
         {compare.top_players(data)}
+        {_reanalyze_hint(data, code)}
     </div>
     <div class="card">
         <h2>📋 Summary</h2>
@@ -969,7 +990,8 @@ async def handle_compare(request):
            moments most of them agree on; the boss's abilities on top are from your pull.
            <strong>Align phases</strong> lines everyone's phases up;
            <strong>Real time</strong> shows each fight as it happened. Pick abilities with the chips; hover
-           anything for details. Pull: {pull_links}</p>
+           anything for details.</p>
+        <div class="pull-chips" style="margin-bottom:12px"><span class="chips-label">Pulls</span>{pull_chips}</div>
         {compare.timeline(data, pull, _boss_timeline_of(numbered, pull['fight_id']), spells.lookup)}
     </div>"""
     return _page(f'{name} vs top players · {boss_name}', session, body)
@@ -1103,14 +1125,14 @@ async def handle_boss(request):
                                  here + '#mechanics')}</td>
             </tr>""")
 
-    team_links = ' · '.join(
-        f'<a href="{base}{_team_query(key, nights=last_n or None)}" style="color:{"#fff" if key == team else "#8b9cff"}">'
+    team_links = '<span class="chips-label">Team</span>' + ''.join(
+        f'<a class="pull-chip{" active" if key == team else ""}" href="{base}{_team_query(key, nights=last_n or None)}">'
         f'{esc(teams.label(key) if key else "All teams")}</a>'
         for key in [None] + [k for k, _ in teams.options()])
-    scope_links = ' · '.join(
-        f'<a href="{base}{_team_query(team, nights=n or None)}" style="color:{"#fff" if n == last_n else "#8b9cff"}">'
+    scope_links = '<span class="chips-label">Nights</span>' + ''.join(
+        f'<a class="pull-chip{" active" if n == last_n else ""}" href="{base}{_team_query(team, nights=n or None)}">'
         f'{label}</a>'
-        for n, label in ((1, 'last night'), (3, 'last 3 nights'), (0, 'all nights')) if n <= len(nights))
+        for n, label in ((1, 'Last night'), (3, 'Last 3 nights'), (0, 'All nights')) if n <= len(nights))
 
     kills = sum(1 for p in pulls if p['kill'])
     best_all = min((p['fight_pct'] or 0 for p in pulls if not p['kill']), default=None)
@@ -1118,7 +1140,7 @@ async def handle_boss(request):
     <div class="card">
         <p><a href="/admin/raids{_team_query(team)}">← Raid Analysis</a></p>
         <h1>{boss_portrait(encounter_id, 'lg', killed=any(p['kill'] for p in pulls))}{esc(name)} {difficulty_pill(difficulty)}</h1>
-        <p class="small">{team_links}</p>
+        <div class="pull-chips">{team_links}</div>
         {_flash(request)}
         <div class="stats">
             <div class="stat"><div class="stat-value">{len(pulls)}</div><div class="stat-label">Pulls</div></div>
@@ -1140,7 +1162,8 @@ async def handle_boss(request):
     {comparison_html}
     {trends_html}
     <div class="card">
-        <h2>👥 Players — {scope_links}</h2>
+        <h2>👥 Players</h2>
+        <div class="pull-chips" style="margin:-4px 0 10px">{scope_links}</div>
         <p class="muted small">{len(scoped)} pulls. Deaths count only as early deaths by mistake: one of a pull's first 4 deaths, and not part of a mass death.</p>
         <div class="grid-2" style="margin-bottom:20px">
             <div><h3>💀 What's killing us</h3>{killers_table(analyzer.killers(analyses), guide_for=guide_for)}</div>

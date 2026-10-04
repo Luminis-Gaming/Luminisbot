@@ -408,7 +408,7 @@ class TestTopPlayerComparison(unittest.TestCase):
         top = [self.top(o) for o in (0, 20000, -15000, 30000, 5000)]
         # Our phase 2 starts 60 s later than theirs: Meta 10 s into it is still "in line".
         ours = {'number': 1, 'duration': 360000, 'phases': [{'id': 1, 'start': 0}, {'id': 2, 'start': 210000}],
-                'casts': [[2000, 1], [220000, 1], [100000, 6]], 'cast_ids': None}
+                'casts': [[2000, 1], [220000, 1], [100000, 6]], 'cast_ids': {1, 2, 3, 5, 6, 7}}
         rows = {r['name']: r for r in benchmarks.compare([ours], top, self.SPELLS)}
         meta = rows['Metamorphosis']
         self.assertEqual([w['segment'] for w in meta['windows']], [(0, 1), (1, 2)])
@@ -425,9 +425,22 @@ class TestTopPlayerComparison(unittest.TestCase):
         top = [self.top() for _ in range(5)]
         # Meta 60 s late at the pull, and the pull wiped before phase 2: one moment, missed.
         ours = {'number': 1, 'duration': 140000, 'phases': [{'id': 1, 'start': 0}],
-                'casts': [[61000, 1], [5000, 2]], 'cast_ids': None}
+                'casts': [[61000, 1], [5000, 2]], 'cast_ids': {1, 2, 3, 5, 6, 7}}
         meta = next(r for r in benchmarks.compare([ours], top, self.SPELLS) if r['name'] == 'Metamorphosis')
         self.assertEqual((meta['hits'], meta['considered']), (0, 1))
+
+    def test_old_analyses_dont_claim_never_used(self):
+        from raidanalysis import benchmarks
+        top = [self.top() for _ in range(5)]
+        # Analyzed before every cast was kept: only tracked cooldowns (Blur) + consumables recorded.
+        old = {'number': 1, 'duration': 300000, 'phases': [{'id': 1, 'start': 0}], 'casts': [[90000, 3]],
+               'cast_ids': None, 'tracked': True}
+        for t in top:
+            t['casts'].append([90000, 3])
+        rows = {r['name']: r for r in benchmarks.compare([old], top, self.SPELLS)}
+        self.assertFalse(rows['Metamorphosis']['known'])
+        self.assertIsNone(rows['Metamorphosis']['verdict'])  # not "missing"
+        self.assertTrue(rows['Blur']['known'])
 
 
 class TestSpellTooltips(unittest.TestCase):
@@ -524,3 +537,43 @@ class TestMythicTrapGuides(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRateLimitPause(unittest.TestCase):
+    """After a 429 the sync leaves WCL alone until the budget resets (needs psycopg2 to import sync)."""
+
+    def test_pauses_after_429(self):
+        import asyncio
+        from unittest import mock
+        try:
+            from raidanalysis import sync, wcl
+        except ImportError as e:
+            self.skipTest(f'sync needs {e.name}')
+        calls = []
+
+        async def rate_limit(session):
+            calls.append('budget')
+            return {'pointsSpentThisHour': 100, 'limitPerHour': 3600, 'pointsResetIn': 1200}
+
+        async def reports(session, guild_id, limit=10):
+            calls.append('reports')
+            raise wcl.WCLRateLimited('WCL rate limit reached - try again later')
+
+        async def nothing(*a, **k):
+            return 0
+
+        with mock.patch.object(wcl, 'get_rate_limit', rate_limit), \
+                mock.patch.object(wcl, 'list_guild_reports', reports), \
+                mock.patch('raidanalysis.guides.scan_missing', nothing), \
+                mock.patch('raidanalysis.spells.fill_missing', nothing), \
+                mock.patch.dict('sys.modules', {'wcl_api': mock.Mock(WCL_GUILD_ID=1)}):
+            sync.status['paused_until'] = None
+            asyncio.run(sync.sync_guild(limit=1))
+            self.assertTrue(sync._paused())
+            self.assertIn('pausing WCL requests until', sync.status['last_error'])
+            # ~20 min (WCL's reset timer), not the 15 min fallback
+            self.assertGreater(sync.status['paused_until'] - __import__('time').time(), 1100)
+            calls.clear()
+            self.assertEqual(asyncio.run(sync.sync_guild(limit=1)), 0)
+            self.assertEqual(calls, [])  # didn't touch WCL at all
+            sync.status['paused_until'] = None
