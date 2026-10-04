@@ -177,3 +177,47 @@ async def get_events(session, code, fight_id, data_type, filter_expression, max_
             if start:
                 logger.warning(f"[RAIDS] Event cap hit for {code}#{fight_id} ({filter_expression[:60]})")
             return events
+
+
+async def get_character_rankings(session, encounter_id, difficulty, class_name, spec_name, metric='dps'):
+    """
+    The best parses of one spec on one boss (WCL's global character rankings, page 1), best first:
+    [{'name', 'amount', 'duration', 'report': {'code', 'fightID'}, 'server', 'guild', ...}].
+    class_name / spec_name are WCL slugs, e.g. 'DeathKnight' / 'Frost', 'Hunter' / 'BeastMastery'.
+    """
+    data = await query(session, """
+        query($id: Int!, $cls: String!, $spec: String!, $diff: Int!, $metric: CharacterRankingMetricType!) {
+          worldData {
+            encounter(id: $id) {
+              characterRankings(className: $cls, specName: $spec, difficulty: $diff, metric: $metric, page: 1)
+            }
+          }
+        }
+    """, {'id': encounter_id, 'cls': class_name, 'spec': spec_name, 'diff': difficulty, 'metric': metric})
+    rankings = (((data.get('worldData') or {}).get('encounter') or {}).get('characterRankings')) or {}
+    return rankings.get('rankings') or []
+
+
+async def get_player_fight(session, code, fight_id, name):
+    """
+    One player's casts in someone else's logged kill, plus that fight's timing:
+    {'start', 'end', 'phases': [{'id', 'start'}] (ms into the fight), 'casts': [events]}.
+    """
+    data = await query(session, """
+        query($code: String!, $fights: [Int]!, $filter: String!) {
+          reportData {
+            report(code: $code) {
+              fights(fightIDs: $fights) { id startTime endTime phaseTransitions { id startTime } }
+              events(fightIDs: $fights, dataType: Casts, filterExpression: $filter, limit: 10000) { data }
+            }
+          }
+        }
+    """, {'code': code, 'fights': [fight_id], 'filter': f'source.name = "{name}"'})
+    report = (data.get('reportData') or {}).get('report') or {}
+    fight = next(iter(report.get('fights') or []), None)
+    if not fight:
+        raise WCLError(f"Fight {code}#{fight_id} not found")
+    start = fight['startTime']
+    return {'start': start, 'end': fight['endTime'],
+            'phases': [{'id': p['id'], 'start': p['startTime'] - start} for p in fight.get('phaseTransitions') or []],
+            'casts': ((report.get('events') or {}).get('data')) or []}

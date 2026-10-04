@@ -86,6 +86,22 @@ CREATE TABLE IF NOT EXISTS raid_spells (
     icon TEXT,                                   -- Wowhead icon name (wow.zamimg.com)
     meta TEXT,                                   -- 'Instant · 1 min cooldown'
     description TEXT,                            -- plain text, scaled numbers shown as X
-    status TEXT NOT NULL,                        -- 'ok', 'not_found' or 'error' (retried after a day)
+    status TEXT NOT NULL,                        -- 'ok', 'not_found' or 'error' (retried after an hour)
+    parser INTEGER NOT NULL DEFAULT 1,           -- spells.PARSER when looked up; older rows are looked up again
     fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Top parses per boss / difficulty / spec for the cooldown comparison
+-- (raidanalysis/benchmarks.py), refreshed weekly for the specs we play.
+CREATE TABLE IF NOT EXISTS raid_benchmarks (
+    encounter_id INTEGER NOT NULL,
+    difficulty INTEGER NOT NULL,
+    class TEXT NOT NULL,                         -- WCL slug, e.g. 'DemonHunter'
+    spec TEXT NOT NULL,                          -- WCL slug, e.g. 'Havoc'
+    metric TEXT,                                 -- 'dps' or 'hps'
+    players JSONB NOT NULL DEFAULT '[]',         -- [{rank, name, amount, code, fight_id, duration, phases, casts: [[t, id]]}]
+    status TEXT NOT NULL,                        -- 'ok', 'empty' or 'error' (retried after a day)
+    error TEXT,
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (encounter_id, difficulty, class, spec)
 );

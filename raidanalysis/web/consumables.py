@@ -7,7 +7,7 @@ Needs analyses from ANALYSIS_VERSION 4+ ('consumables', 'boss_casts');
 older nights only have counts until they're re-analyzed.
 """
 from .. import cooldowns
-from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name
+from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name, spell_data_json
 
 # What the timeline colors encode is the *kind* of consumable (validated with the
 # dataviz palette checker on the card surface, all pairs); the exact potion is in
@@ -17,6 +17,7 @@ KIND_LABELS = {'potion': 'Combat potion', 'mana': 'Mana potion', 'defensive': 'H
 BOSS_TICK = '#9aa1b9'
 DEATH = '#ff6b6b'
 POTION_BUFF_FALLBACK_MS = 30000
+DEFAULT_ON = ('raid',)  # cooldown groups shown without clicking: raid cooldowns are few and matter to everyone
 ICON_BASE = 'https://assets.rpglogs.com/img/warcraft/abilities/'
 
 
@@ -37,8 +38,8 @@ def _icon(icon):
 def toolbar(pulls, single):
     """
     Toggle chips for what the timeline shows (they double as its legend): each consumable kind,
-    deaths, each cooldown group - and an Abilities dropdown to pick single cooldowns. Cooldowns
-    start hidden to keep the default view calm. PAGE_JS does the toggling.
+    deaths, each cooldown group - and an Abilities dropdown to pick single cooldowns. Only raid
+    cooldowns (DEFAULT_ON) start visible, to keep the default view calm. PAGE_JS does the toggling.
     """
     chips = [f'<button type="button" class="tl-chip" data-f="{k}" aria-pressed="true">'
              f'<i style="--c:{KIND_COLORS[k]}"></i>{KIND_LABELS[k]}</button>' for k in ('potion', 'mana', 'defensive')]
@@ -56,9 +57,9 @@ def toolbar(pulls, single):
         if not abilities:
             continue
         total = sum(e['count'] for _, e in abilities)
-        chips.append(f'<button type="button" class="tl-chip" data-cat="{key}" aria-pressed="false">{emoji} {label} '
+        chips.append(f'<button type="button" class="tl-chip" data-cat="{key}" aria-pressed="{"true" if key in DEFAULT_ON else "false"}">{emoji} {label} '
                      f'<span class="muted">{total}</span></button>')
-        boxes = ''.join(f'<label><input type="checkbox" data-cat="{key}" value="{esc(name)}">{_icon(e["icon"])}'
+        boxes = ''.join(f'<label><input type="checkbox" data-cat="{key}" value="{esc(name)}"{" checked" if key in DEFAULT_ON else ""}>{_icon(e["icon"])}'
                         f'{esc(name)} <span class="muted">×{e["count"]}</span></label>' for name, e in abilities)
         groups.append(f'<div><h5>{emoji} {label}</h5>{boxes}</div>')
     if groups:
@@ -192,32 +193,13 @@ def timeline(pulls, roster, spell_lookup=None):
                 <div class="tl-head" hidden><span></span></div>
             </div></div>
         </div>
-        <script type="application/json" class="spell-data">{_spell_json(spells, spell_lookup)}</script>
+        <script type="application/json" class="spell-data">{spell_data_json(spells, spell_lookup)}</script>
     </div>"""
 
 
 def _death_text(death):
     from .. import analyzer
     return analyzer.death_note(death)
-
-
-def _spell_json(spells, spell_lookup):
-    """{id: {name, icon, meta, desc}} for the tooltips: Wowhead's text where we have it, the log's name otherwise."""
-    import json
-    known = spell_lookup(list(spells)) if spell_lookup and spells else {}
-    out = {}
-    for sid, (name, icon) in spells.items():
-        info = known.get(sid) or {}
-        out[sid] = {'name': info.get('name') or name,
-                    'icon': f'{ICON_BASE}{icon}' if icon else spell_icon_url(info.get('icon')),
-                    'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
-    # Inside <script>: keep "</script>" from ever closing it early.
-    return json.dumps(out, ensure_ascii=False).replace('</', '<\\/')
-
-
-def spell_icon_url(icon):
-    from ..spells import icon_url
-    return icon_url(icon)
 
 
 # ============================================================================

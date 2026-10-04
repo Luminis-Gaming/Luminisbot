@@ -6,7 +6,7 @@ The stored analysis is tag-independent: which abilities count as "avoidable"
 is applied at render time, so retagging a mechanic never needs a re-sync.
 """
 
-ANALYSIS_VERSION = 6
+ANALYSIS_VERSION = 7
 
 # Officer tags on boss abilities (stored in raid_ability_tags).
 TAG_AVOIDABLE = 'avoidable'                   # any hit is a mistake
@@ -163,6 +163,28 @@ def _roster(fight, actors, player_details):
 PREPOT_GRACE_MS = 2000       # a cast this close to a buff's start belongs to it
 HEAL_MERGE_MS = 1500         # heal events this close together are one healthstone / potion
 BOSS_CAST_SPAM_LIMIT = 40    # enemy abilities cast more often than this per pull are left off the timeline
+
+
+# Abilities the whole raid casts at most this often in a pull are fetched as events and kept per
+# player: cooldowns, trinkets, potions, defensives - what the top-player comparison looks at.
+# Rotational spells (cast hundreds of times) stay out.
+RARE_CAST_LIMIT = 30
+
+
+def rare_cast_ids(casts_table):
+    """Spell IDs from the pull's Casts table cast rarely enough to keep every cast of (see RARE_CAST_LIMIT)."""
+    return sorted(e['guid'] for e in _entries(casts_table)
+                  if e.get('guid') and 0 < (e.get('total') or 0) <= RARE_CAST_LIMIT)
+
+
+def _player_casts(fight_start, names_by_id, roster, cast_events):
+    """{player: [[t, spell id], ...]} for every cast event we fetched (rare abilities, potions, cooldowns)."""
+    out = {}
+    for event in sorted((e for e in cast_events if e.get('type') == 'cast'), key=lambda e: e['timestamp']):
+        name = names_by_id.get(event.get('sourceID'))
+        if name in roster and _event_ability(event):
+            out.setdefault(name, []).append([event['timestamp'] - fight_start, _event_ability(event)])
+    return out
 
 
 def _cooldown_uses(fight_start, names_by_id, roster, meta, cast_events):
@@ -454,6 +476,7 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         'defensives': defensives,
         'consumables': uses,
         'cooldowns': _cooldown_uses(fight_start, names_by_id, roster, cooldown_meta or {}, consumable_events),
+        'casts': _player_casts(fight_start, names_by_id, roster, consumable_events),
         'boss_casts': boss_casts,
         'boss_abilities': boss_abilities,
         'prepull': _prepull(names_by_id, roster, combatant_events),

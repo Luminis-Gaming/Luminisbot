@@ -12,10 +12,11 @@ Players are matched to the log through their linked Battle.net characters
 import asyncio
 import logging
 import re
+from urllib.parse import quote
 
 import discord
 
-from . import analyzer, db, guides
+from . import analyzer, benchmarks, db, guides
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +88,26 @@ def player_recap(code, character_names):
             'name': boss_pulls[0]['encounter_name'], 'difficulty': difficulty, 'pulls': len(boss_pulls),
             'killed': any(p['kill'] for p in boss_pulls),
             'best': min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None),
-            'row': row, 'guide_for': guides.guide_lookup(encounter_id)})
+            'row': row, 'guide_for': guides.guide_lookup(encounter_id),
+            **_cooldown_notes(code, (encounter_id, difficulty), boss_pulls, character)})
     bosses.sort(key=lambda b: -b['row']['pulls'])
     return {'report': report, 'character': character, 'bosses': bosses,
             'other_characters': sorted(set(played) - {character})}
+
+
+def _cooldown_notes(code, boss, boss_pulls, character):
+    """{'cd_notes', 'compare_url'}: how their major cooldowns line up with the top parses of their spec."""
+    try:
+        data = benchmarks.for_player(list(enumerate(boss_pulls, 1)), character)
+    except Exception:
+        logger.exception('[RAIDS] Cooldown comparison failed')
+        data = None
+    if not data or not data['top'] or not data['rows']:
+        return {'cd_notes': [], 'compare_url': None}
+    from .web.routes import public_base_url
+    base = public_base_url()
+    url = (f'{base}/raids/report/{code}/compare/{quote(character)}?boss={boss[0]}-{boss[1]}' if base else None)
+    return {'cd_notes': benchmarks.notes(data['rows'], data['label'], limit=2), 'compare_url': url}
 
 
 # ============================================================================
@@ -160,6 +177,11 @@ def recap_embeds(recap):
         if not bad and not good:
             embed.add_field(name='Feedback', value='Nothing stands out — solid night. 👍' if row['score'] >= 60
                             else 'No single thing stands out — see the scores above.', inline=False)
+        if boss.get('cd_notes'):
+            lines = [f'{"⚠️" if n["tone"] == "bad" else "✅"} {n["text"]}' for n in boss['cd_notes']]
+            if boss.get('compare_url'):
+                lines.append(f'[📈 See your cooldowns next to theirs]({boss["compare_url"]})')
+            embed.add_field(name='Cooldowns vs top players', value=_field_text(lines), inline=False)
         embeds.append(embed)
     if len(recap['bosses']) > MAX_BOSS_EMBEDS:
         embeds[-1].set_footer(text=f'+{len(recap["bosses"]) - MAX_BOSS_EMBEDS} more bosses not shown')

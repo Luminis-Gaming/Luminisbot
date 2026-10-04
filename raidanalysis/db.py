@@ -101,6 +101,21 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (encounter_id, guide_id)
         );
     """)
+    # Top parses per (boss, difficulty, spec) for the cooldown comparison (benchmarks.py)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_benchmarks (
+            encounter_id INTEGER NOT NULL,
+            difficulty INTEGER NOT NULL,
+            class TEXT NOT NULL,
+            spec TEXT NOT NULL,
+            metric TEXT,
+            players JSONB NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL,
+            error TEXT,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (encounter_id, difficulty, class, spec)
+        );
+    """)
     # Wowhead tooltip text for the timeline (spells.py)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_spells (
@@ -113,6 +128,7 @@ def ensure_guide_schema(cursor):
             fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
     """)
+    cursor.execute("ALTER TABLE raid_spells ADD COLUMN IF NOT EXISTS parser INTEGER NOT NULL DEFAULT 1")
 
 
 def _run(sql, params=(), fetch=None):
@@ -489,7 +505,7 @@ def character_owners():
 # ============================================================================
 
 def spells_missing(limit):
-    """Spell IDs our analyses mention without a cached tooltip (failed lookups retried after a day)."""
+    """Spell IDs our analyses mention without a cached tooltip (failed lookups retried after an hour)."""
     rows = _run("""
         WITH mentioned AS (
             SELECT DISTINCT (x->>'id')::bigint AS id FROM raid_pulls,
@@ -500,24 +516,33 @@ def spells_missing(limit):
                    jsonb_array_elements(COALESCE(analysis->'consumables', '[]'::jsonb)) x
             UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
                    jsonb_array_elements(COALESCE(analysis->'deaths', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (c->>1)::bigint FROM raid_benchmarks,
+                   jsonb_array_elements(players) p, jsonb_array_elements(p->'casts') c
         )
         SELECT m.id FROM mentioned m
         LEFT JOIN raid_spells s ON s.spell_id = m.id
         WHERE m.id IS NOT NULL AND m.id > 0
-          AND (s.spell_id IS NULL OR (s.status = 'error' AND s.fetched_at < NOW() - INTERVAL '1 day'))
+          AND (s.spell_id IS NULL OR s.parser < %s
+               OR (s.status = 'error' AND s.fetched_at < NOW() - INTERVAL '1 hour'))
         LIMIT %s
-    """, (limit,), fetch='all')
+    """, (_spell_parser(), limit), fetch='all')
     return [r['id'] for r in rows]
+
+
+def _spell_parser():
+    from .spells import PARSER
+    return PARSER
 
 
 def save_spell(spell_id, info, status):
     info = info or {}
     _run("""
-        INSERT INTO raid_spells (spell_id, name, icon, meta, description, status, fetched_at)
-        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+        INSERT INTO raid_spells (spell_id, name, icon, meta, description, status, parser, fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (spell_id) DO UPDATE SET name = EXCLUDED.name, icon = EXCLUDED.icon, meta = EXCLUDED.meta,
-            description = EXCLUDED.description, status = EXCLUDED.status, fetched_at = NOW()
-    """, (spell_id, info.get('name'), info.get('icon'), info.get('meta'), info.get('description'), status))
+            description = EXCLUDED.description, status = EXCLUDED.status, parser = EXCLUDED.parser, fetched_at = NOW()
+    """, (spell_id, info.get('name'), info.get('icon'), info.get('meta'), info.get('description'), status,
+          _spell_parser()))
 
 
 def get_spells(spell_ids):
@@ -529,3 +554,71 @@ def get_spells(spell_ids):
         WHERE status = 'ok' AND spell_id = ANY(%s)
     """, ([int(i) for i in spell_ids],), fetch='all')
     return {r['spell_id']: r for r in rows}
+
+
+# ============================================================================
+# TOP-PLAYER BENCHMARKS (benchmarks.py)
+# ============================================================================
+
+def benchmarks_needed(limit, refresh_days, difficulties, recent_days=30):
+    """
+    (boss, difficulty, class, spec) combos our raiders played in the last recent_days that have no
+    benchmark yet, a stale one, or a failed one from over a day ago - most recently played first.
+    """
+    return _run("""
+        SELECT c.* FROM (
+            SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec,
+                   MAX(x->>'role') AS role, MAX(r.start_time + p.start_ms) AS last_played
+            FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code,
+                 jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
+            WHERE r.start_time > EXTRACT(EPOCH FROM NOW() - make_interval(days => %s)) * 1000
+              AND p.difficulty = ANY(%s) AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
+            GROUP BY 1, 2, 3, 4
+        ) c
+        WHERE NOT EXISTS (
+            SELECT 1 FROM raid_benchmarks b
+            WHERE b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
+              AND b.class = c.class AND b.spec = c.spec
+              AND b.fetched_at > NOW() - CASE WHEN b.status = 'error' THEN INTERVAL '1 day'
+                                              ELSE make_interval(days => %s) END
+        )
+        ORDER BY c.last_played DESC
+        LIMIT %s
+    """, (recent_days, list(difficulties), refresh_days, limit), fetch='all')
+
+
+def save_benchmark(encounter_id, difficulty, class_name, spec, metric, players, status, error=None):
+    """A failed refresh keeps the previous top players (only the status changes)."""
+    _run("""
+        INSERT INTO raid_benchmarks (encounter_id, difficulty, class, spec, metric, players, status, error, fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (encounter_id, difficulty, class, spec) DO UPDATE SET metric = EXCLUDED.metric,
+            players = CASE WHEN EXCLUDED.status = 'error' THEN raid_benchmarks.players ELSE EXCLUDED.players END,
+            status = EXCLUDED.status, error = EXCLUDED.error, fetched_at = NOW()
+    """, (encounter_id, difficulty, class_name, spec, metric, Json(players), status, error))
+
+
+def get_benchmark(encounter_id, difficulty, class_name, spec):
+    return _run("""
+        SELECT * FROM raid_benchmarks WHERE encounter_id = %s AND difficulty = %s AND class = %s AND spec = %s
+    """, (encounter_id, difficulty, class_name, spec), fetch='one')
+
+
+def benchmark_spell_ids(encounter_id):
+    """Every spell the top players cast on this boss (any spec) - fetched for our players too."""
+    rows = _run("""
+        SELECT DISTINCT (c->>1)::bigint AS id FROM raid_benchmarks,
+               jsonb_array_elements(players) p, jsonb_array_elements(p->'casts') c
+        WHERE encounter_id = %s
+    """, (encounter_id,), fetch='all')
+    return [r['id'] for r in rows]
+
+
+def attempted_spell_ids(spell_ids):
+    """Which of these spells were looked up already (failures count again after an hour)."""
+    rows = _run("""
+        SELECT spell_id FROM raid_spells
+        WHERE spell_id = ANY(%s) AND parser >= %s
+          AND (status <> 'error' OR fetched_at > NOW() - INTERVAL '1 hour')
+    """, ([int(i) for i in spell_ids], _spell_parser()), fetch='all')
+    return {r['spell_id'] for r in rows}

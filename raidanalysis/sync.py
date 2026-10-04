@@ -46,8 +46,13 @@ async def _analyze_pull(session, code, fight, actors):
                                              f"ability.id in ({','.join(map(str, damage_ids))})")
     cooldown_meta = cooldowns.cooldown_meta(tables.get('casts'))
     consumable_events, buff_events, heal_events = [], [], []
-    cast_ids = potion_ids + defensive_ids + sorted(cooldown_meta)
-    if cast_ids:  # potions, healthstones and tracked cooldowns in one request
+    # ...plus everything the top players of any spec press on this boss (benchmarks.py), so a spec
+    # several of us play still gets every Ebon Might / Combustion even if the raid casts it often.
+    benchmark_ids = set(db.benchmark_spell_ids(fight['encounterID']))
+    used_ids = {e.get('guid') for e in analyzer._entries(tables.get('casts'))}
+    cast_ids = sorted(set(potion_ids) | set(defensive_ids) | set(cooldown_meta)
+                      | set(analyzer.rare_cast_ids(tables.get('casts'))) | (benchmark_ids & used_ids))
+    if cast_ids:  # potions, healthstones, cooldowns and other rarely cast abilities in one request
         consumable_events = await wcl.get_events(session, code, fight['id'], 'Casts',
                                                  f"ability.id in ({','.join(map(str, cast_ids))})")
     if potion_ids:  # buff windows: how long each potion lasted, and pre-pots
@@ -62,9 +67,11 @@ async def _analyze_pull(session, code, fight, actors):
     # Gear, flask, food and buffs at the pull (one small event per player)
     combatant_events = await wcl.get_events(session, code, fight['id'], 'CombatantInfo', "type = 'combatantinfo'")
 
-    return analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
+    analysis = analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
                                   set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events,
                                   combatant_events, cooldown_meta)
+    analysis['cast_ids'] = cast_ids  # which spells 'casts' is complete for (benchmarks.compare)
+    return analysis
 
 
 async def sync_report(session, code, source='guild', force=False):
@@ -176,22 +183,84 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
                         logger.warning(f"[RAIDS] Sync of {code} failed: {e}")
                         if 'rate limit' in str(e):
                             break
+                # Top parses for the specs we played lately (a few per run; see benchmarks.py)
+                try:
+                    from . import benchmarks
+                    status['current'] = 'Fetching top-player benchmarks…'
+                    await benchmarks.refresh(session, _budget_ok)
+                except Exception as e:
+                    logger.warning(f"[RAIDS] Benchmarks skipped: {e}")
                 await _budget_ok(session)
                 if spent_before is not None and status.get('wcl'):
                     status['last_points'] = max(0, status['wcl']['spent'] - spent_before)
-            # Mechanic clips for any boss we haven't looked up on Mythic Trap recently.
-            status['current'] = 'Looking up mechanic clips on Mythic Trap…'
-            from .guides import scan_missing
-            await scan_missing()
-            # Wowhead tooltips (name, cooldown, description) for spells the new pulls mention.
-            from .spells import fill_missing
-            await fill_missing()
         except Exception as e:
             logger.exception("[RAIDS] Sync failed")
             errors.append(str(e))
+        # Not WCL, so these run even when the sync stopped early (budget pause, WCL down):
+        # mechanic clips for bosses we haven't looked up on Mythic Trap recently, and Wowhead
+        # tooltip text (name, cooldown, description) for spells our pages show.
+        try:
+            status['current'] = 'Looking up mechanic clips on Mythic Trap…'
+            from .guides import scan_missing
+            await scan_missing()
+        except Exception:
+            logger.exception("[RAIDS] Mythic Trap scan failed")
+        try:
+            status['current'] = 'Looking up spell tooltips on Wowhead…'
+            from .spells import fill_missing
+            await fill_missing()
+        except Exception:
+            logger.exception("[RAIDS] Spell tooltip lookup failed")
         finally:
             status.update(running=False, current=None, last_finished=time.time(), last_new=total,
                           last_result=f"{total} new pull(s) from {reports} report(s) "
                                       f"in {time.time() - started:.0f}s",
                           last_error='; '.join(errors) or None)
         return total
+
+
+BENCHMARK_BATCH = 5
+
+
+async def fetch_all_benchmarks():
+    """
+    Admin "Fetch all top players" button: benchmarks for every spec / boss we played lately that has
+    none (or a stale one), instead of a few per sync - then the Wowhead text for their spells. Stops
+    at the WCL budget share like a sync; what's left is picked up by the next syncs (or another click).
+    Returns how many spec / boss combos it fetched, or None if a sync was already running.
+    """
+    from . import benchmarks
+    from .spells import fill_missing
+    if _lock.locked():
+        return None
+    async with _lock:
+        status.update(running=True, last_error=None, current='Fetching top players…')
+        started = time.time()
+        done, error = 0, None
+        total = len(db.benchmarks_needed(10000, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES))
+        try:
+            async with aiohttp.ClientSession() as session:
+                spent_before = status['wcl']['spent'] if await _budget_ok(session) and status.get('wcl') else None
+                while True:
+                    status['current'] = f'Fetching top players… {done}/{total} specs'
+                    fetched = await benchmarks.refresh(session, _budget_ok, limit=BENCHMARK_BATCH)
+                    done += fetched
+                    if fetched < BENCHMARK_BATCH:  # nothing left, or the WCL budget said stop
+                        break
+                if done < total and not await _budget_ok(session):
+                    error = _budget_message()
+                if spent_before is not None and status.get('wcl'):
+                    status['last_points'] = max(0, status['wcl']['spent'] - spent_before)
+            status['current'] = 'Looking up spell tooltips on Wowhead…'
+            while await fill_missing() >= 400:  # spells.PER_RUN at a time until none are left
+                pass
+        except Exception as e:
+            logger.exception("[RAIDS] Fetching all benchmarks failed")
+            error = str(e)
+        finally:
+            left = max(0, total - done)
+            status.update(running=False, current=None, last_finished=time.time(), last_new=0,
+                          last_result=f"Top players fetched for {done} spec/boss combo(s) in "
+                                      f"{time.time() - started:.0f}s" + (f" - {left} left for later syncs" if left else ''),
+                          last_error=error)
+        return done

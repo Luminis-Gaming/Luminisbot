@@ -22,7 +22,11 @@ services:
       BLIZZARD_CLIENT_SECRET: ${BLIZZARD_CLIENT_SECRET}
       BLIZZARD_REDIRECT_URI: ${BLIZZARD_REDIRECT_URI}
       OAUTH_STATE_SECRET: ${OAUTH_STATE_SECRET}
-      
+
+      # Public address of the web server (no trailing slash, no /raids) - used for the
+      # "Full analysis" / cooldown-timeline links the bot posts in Discord.
+      RAID_ANALYSIS_PUBLIC_URL: ${RAID_ANALYSIS_PUBLIC_URL:-https://luminisbot.flipflix.no}
+
       # Database Configuration
       DATABASE_URL: postgresql://luminisbot:${POSTGRES_PASSWORD}@postgres:5432/luminisbot
       DB_HOST: postgres

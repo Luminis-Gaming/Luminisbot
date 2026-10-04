@@ -13,9 +13,10 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from .. import analyzer, db, guides, progstats, sync, teams
-from . import consumables, insights, players
-from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, deaths_strip, difficulty_pill,
+from .. import analyzer, benchmarks, db, guides, progstats, spells, sync, teams
+from . import compare, consumables, insights, players
+from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
+                     difficulty_pill,
                      pull_histogram,
                      phase_funnel,
                      phase_heatmap, esc, fmt_amount, fmt_duration,
@@ -30,19 +31,23 @@ REPORT_CODE_RE = re.compile(r'(?:reports/)?([A-Za-z0-9]{16})\b')
 def register_routes(app):
     app.router.add_get('/admin/raids', handle_overview)
     app.router.add_post('/admin/raids/sync', handle_sync)
+    app.router.add_post('/admin/raids/benchmarks', handle_fetch_benchmarks)
     app.router.add_get('/admin/raids/sync/status', handle_sync_status)
     app.router.add_get('/admin/raids/report/{code}', handle_night)
     app.router.add_get('/admin/raids/report/{code}/{fight_id}', handle_pull)
     app.router.add_get('/admin/raids/report/{code}/player/{name}', handle_player)
+    app.router.add_get('/admin/raids/report/{code}/compare/{name}', handle_compare)
     app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', handle_boss)
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', handle_tag)
     app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', handle_player_trend)
 
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
     app.router.add_get('/raids', _public(handle_overview))
+    app.router.add_get('/raids/spell/{spell_id}', handle_spell)
     app.router.add_get('/raids/report/{code}', _public(handle_night))
     app.router.add_get('/raids/report/{code}/{fight_id}', _public(handle_pull))
     app.router.add_get('/raids/report/{code}/player/{name}', _public(handle_player))
+    app.router.add_get('/raids/report/{code}/compare/{name}', _public(handle_compare))
     app.router.add_get('/raids/boss/{encounter_id}/{difficulty}', _public(handle_boss))
     app.router.add_get('/raids/boss/{encounter_id}/{difficulty}/player/{name}', _public(handle_player_trend))
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', handle_rescan_guides)
@@ -69,7 +74,7 @@ def _session(request):
 _PUBLIC_STRIP = [
     re.compile(r'<td>\s*<form[^>]*class="tag-form".*?</form>\s*</td>', re.S),   # tag buttons (table cells)
     re.compile(r'<form[^>]*class="tag-form".*?</form>', re.S),
-    re.compile(r'<form[^>]*action="[^"]*/(sync|guides)".*?</form>', re.S),     # sync / re-analyze / rescan
+    re.compile(r'<form[^>]*action="[^"]*/(sync|guides|benchmarks)".*?</form>', re.S),  # sync / re-analyze / rescan
     re.compile(r'<th>Tag</th>'),
     re.compile(r'<span class="admin-only">.*?</span>', re.S),                   # officer-only hints
 ]
@@ -269,7 +274,7 @@ async def handle_overview(request):
     boss_rows = ''.join(f"""
         <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}'" style="cursor:pointer">
             <td><a href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}" style="color:#fff">
-                <strong>{esc(b['name'])}</strong></a></td>
+                {boss_portrait(b['encounter_id'], 'sm', killed=bool(b['kills']))}<strong>{esc(b['name'])}</strong></a></td>
             <td>{difficulty_pill(b['difficulty'])}</td>
             <td class="num">{b['pulls']}</td>
             <td class="num">{b['nights']}</td>
@@ -309,6 +314,7 @@ async def handle_overview(request):
             <input type="text" name="code" placeholder="…or a WCL report URL / code to import" style="min-width:320px">
             <button class="btn btn-primary btn-sm" {'disabled' if st['running'] else ''}>🔄 Sync now</button>
         </form>
+        {_benchmarks_line(st['running']) if session is not PUBLIC_SESSION else ''}
     </div>
     <div class="card">{filter_bar}</div>
     <div class="card">
@@ -363,6 +369,34 @@ async def handle_sync(request):
     if not back.startswith('/admin/raids'):
         back = '/admin/raids'
     raise web.HTTPFound(back)
+
+
+async def handle_fetch_benchmarks(request):
+    """POST /admin/raids/benchmarks - fetch the top players for every spec we played lately, in the background."""
+    _session(request)
+    if sync.status['running']:
+        raise web.HTTPFound('/admin/raids?error=' + quote('A sync is already running - try again when it is done.'))
+    sync.status.update(running=True, current='Fetching top players…')
+    asyncio.create_task(sync.fetch_all_benchmarks())
+    raise web.HTTPFound('/admin/raids?msg=' + quote('Fetching the top players for every spec in the background - '
+                                                     'progress shows at the top of the page.'))
+
+
+def _benchmarks_line(running):
+    """Overview (admin): how many spec / boss combos still lack top players, and the fetch-all button."""
+    needed = db.benchmarks_needed(10000, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES)
+    if not needed:
+        return ('<p class="muted small">⚔️ Top-player benchmarks are up to date for every spec played in the '
+                'last 30 days.</p>')
+    return f"""
+        <form method="post" action="/admin/raids/benchmarks" class="inline-form">
+            <span class="small muted">⚔️ {len(needed)} spec/boss combo{'s' if len(needed) != 1 else ''} played in
+                the last 30 days {'have' if len(needed) != 1 else 'has'} no (or an outdated) top-player benchmark
+                - the sync fetches {benchmarks.SPECS_PER_RUN} per run.</span>
+            <button class="btn btn-secondary btn-sm" {'disabled' if running else ''}
+                    title="About {1 + benchmarks.TOP_N} WCL requests per combo; pauses at the WCL budget limit">
+                Fetch all top players</button>
+        </form>"""
 
 
 async def handle_sync_status(request):
@@ -456,13 +490,14 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
         state = '✔ Killed' if kill else (f'best {best:.1f}%' if best is not None else '')
         active = ' active' if (encounter_id, difficulty) == selected else ''
         tabs.append(f'<a class="boss-tab{active}" href="/admin/raids/report/{esc(code)}?boss={encounter_id}-{difficulty}'
-                    f'{"&view=players" if players_q else ""}">'
-                    f'<strong>{esc(boss_pulls[0]["encounter_name"])}</strong> {difficulty_pill(difficulty)}'
-                    f'<small>{_plural(len(boss_pulls), "pull")} · {state}</small></a>')
+                    f'{"&view=players" if players_q else ""}">{boss_portrait(encounter_id, killed=kill)}'
+                    f'<span><strong>{esc(boss_pulls[0]["encounter_name"])}</strong> {difficulty_pill(difficulty)}'
+                    f'<small>{_plural(len(boss_pulls), "pull")} · {state}</small></span></a>')
 
     boss_pulls = groups[selected]
     overall_href = f'/admin/raids/report/{esc(code)}?boss={selected[0]}-{selected[1]}'
-    chips = [f'<a class="pull-chip overall{" active" if fight_id is None else ""}" '
+    chips = ['<span class="chips-label">Pulls</span>',
+             f'<a class="pull-chip overall{" active" if fight_id is None else ""}" '
              f'href="{overall_href}{"&view=players" if players_q else ""}">Overall ({len(boss_pulls)})</a>']
     for number, pull in enumerate(boss_pulls, 1):
         label = '✔ Kill' if pull['kill'] else f"{pull['fight_pct'] or 0:.0f}%"
@@ -474,8 +509,11 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
     # Mechanics / Players switch, keeping the selected boss and pull.
     here_base = (f'/admin/raids/report/{esc(code)}/{fight_id}?' if fight_id else f'{overall_href}&')
     views = ''.join(
-        f'<a class="view-tab{" active" if view == key else ""}" href="{here_base}view={key}">{label}</a>'
-        for key, label in (('mechanics', '📋 Mechanics'), ('players', '👥 Players')))
+        f'<a class="view-tab{" active" if view == key else ""}" href="{here_base}view={key}">'
+        f'<span class="vt-icon">{icon}</span><span><strong>{label}</strong><small>{hint}</small></span></a>'
+        for key, icon, label, hint in (
+            ('mechanics', '📋', 'Mechanics', 'What happened: wipes, deaths, mechanics, consumables'),
+            ('players', '👥', 'Players', 'Who did what: scores, feedback, cooldowns vs top players')))
 
     event = (f' · 📅 <a href="/admin/events">{esc(report["event_title"])}</a>'
              if report.get('event_title') else '')
@@ -565,7 +603,7 @@ def _consumables_card(insight_pulls, roster):
                      'the same every pull, but shift when a phase is pushed faster or slower. Open a single pull '
                      'for its exact timeline.')
     return (f'<div class="card"><h2>🧪 Consumables timeline</h2><p class="muted small">{hint}</p>'
-            f'{consumables.timeline(insight_pulls, roster, db.get_spells)}</div>')
+            f'{consumables.timeline(insight_pulls, roster, spells.lookup)}</div>')
 
 
 def _insight_pulls(numbered, enrage_ids=()):
@@ -662,7 +700,7 @@ async def handle_night(request):
         <p class="muted small">One row per pull, along its own length: red ticks are early deaths by mistake (one of
            the first 4 deaths, not part of a mass death), grey ones are the rest; the dashed yellow line is where half
            the raid was dead, thin lines are phase changes. Zoom in like a video editor's timeline to pick apart deaths that happen close together; click a row to open that pull.</p>
-        {deaths_strip(insights.death_strip_rows(code, numbered))}
+        {deaths_strip(insights.death_strip_rows(code, numbered), spells.lookup)}
     </div>
     <div class="card">
         <h2>🎯 Damage taken by mechanic — all pulls</h2>
@@ -810,8 +848,122 @@ async def handle_player(request):
     fights = {number: pull['fight_id'] for number, pull in numbered}
     body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
             + players.player_page(player, guide_for,
-                                  lambda number: f'/admin/raids/report/{code}/{fights[number]}'))
+                                  lambda number: f'/admin/raids/report/{code}/{fights[number]}')
+            + _compare_card(code, selected, name, list(enumerate(groups[selected], 1))))
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
+
+
+async def handle_spell(request):
+    """GET /raids/spell/{id} - tooltip data for one spell (cached; looked up on Wowhead the first time)."""
+    try:
+        spell_id = int(request.match_info['spell_id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    found = db.get_spells([spell_id])
+    if spell_id not in found and spell_id not in db.attempted_spell_ids([spell_id]):
+        await spells.fetch_ids([spell_id])
+        found = db.get_spells([spell_id])
+    info = found.get(spell_id)
+    if not info:
+        raise web.HTTPNotFound()
+    return web.json_response({'name': info['name'], 'icon': spells.icon_url(info['icon']),
+                              'meta': info['meta'] or '', 'desc': info['description'] or ''},
+                             headers={'Cache-Control': 'public, max-age=86400'})
+
+
+def compare_url(code, selected, name, fight_id=None):
+    return (f'/admin/raids/report/{quote(code)}/compare/{quote(name)}?boss={selected[0]}-{selected[1]}'
+            + (f'&pull={fight_id}' if fight_id else ''))
+
+
+def _benchmark_status(data):
+    """Why there's no comparison yet, in words."""
+    bench = data['benchmark'] if data else None
+    if not data:
+        return "We don't know this character's spec in these pulls, so there's nothing to compare."
+    if not bench:
+        return (f"The top {esc(data['label'])} on this boss haven't been fetched yet - the sync picks up a few "
+                f"specs at a time, so check back after the next syncs.")
+    if bench['status'] == 'empty':
+        return f"Warcraft Logs has no public top parses for {esc(data['label'])} on this boss yet."
+    if bench['status'] == 'error' and not bench['players']:
+        return f"Fetching the top {esc(data['label'])} failed ({esc(bench['error'] or '')}) - it's retried tomorrow."
+    return ''
+
+
+def _compare_card(code, selected, name, numbered):
+    """Player page: how their major cooldowns line up with the top parses of their spec, and a link."""
+    data = benchmarks.for_player(numbered, name)
+    why = _benchmark_status(data)
+    if why or not data['rows']:
+        return (f'<div class="card"><h2>⚔️ Cooldowns vs top players</h2>'
+                f'<p class="muted">{why or "Not enough long pulls to compare yet."}</p></div>')
+    items = ''.join(f'<li class="note {n["tone"]}">{"✅" if n["tone"] == "good" else "⚠️"} {esc(n["text"])}</li>'
+                    for n in benchmarks.notes(data['rows'], data['label'], limit=4))
+    return f"""
+    <div class="card">
+        <h2>⚔️ Cooldowns vs top players</h2>
+        <p class="muted small">Your major cooldowns, potions and defensives on this boss compared with the top
+           {len(data['top'])} {esc(data['label'])} on Warcraft Logs.</p>
+        <ul class="notes">{items or '<li class="muted">Nothing stands out.</li>'}</ul>
+        <p><a class="btn btn-primary btn-sm" href="{compare_url(code, selected, name)}">Open the timeline →</a></p>
+    </div>"""
+
+
+async def handle_compare(request):
+    """GET /admin/raids/report/{code}/compare/{name}?boss=&pull= - cooldowns vs the top parses of the spec."""
+    session = _session(request)
+    code, name = request.match_info['code'], request.match_info['name']
+    report = db.get_report(code)
+    pulls = db.get_pulls(code) if report else []
+    if not pulls:
+        raise web.HTTPFound('/admin/raids?error=' + quote('Report not found.'))
+    groups = _group_by_boss(pulls)
+    selected = _selected_boss(request, groups)
+    numbered = list(enumerate(groups[selected], 1))
+    boss_name = groups[selected][0]['encounter_name']
+    back = f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'
+    data = benchmarks.for_player(numbered, name)
+    head = (f'<div class="card"><p><a href="{back}">← {esc(name)} on {esc(boss_name)}</a></p>'
+            f'<h1>⚔️ {esc(name)} vs the top {esc(data["label"]) if data else "players"}</h1>'
+            f'<p class="muted">{esc(boss_name)} {difficulty_pill(selected[1])} · {esc(report["title"])}</p>')
+    why = _benchmark_status(data)
+    if why:
+        return _page(f'{name} vs top players', session, head + f'<p>{why}</p></div>')
+
+    eligible = [p for p in data['pulls'] if p['duration'] >= benchmarks.MIN_PULL_MS] or data['pulls']
+    wanted = request.query.get('pull')
+    pull = next((p for p in eligible if wanted and str(p['fight_id']) == wanted), None) or \
+        max(eligible, key=lambda p: (bool(p.get('kill')), p['duration']))
+    pull_links = ' · '.join(
+        f'<a href="{compare_url(code, selected, name, p["fight_id"])}" '
+        f'style="color:{"#fff" if p is pull else "#8b9cff"}">#{p["number"]} '
+        f'{"kill" if p.get("kill") else fmt_duration(p["duration"])}</a>' for p in eligible)
+    fetched = data['benchmark'].get('fetched_at')
+    body = head + f"""
+        <p class="small">Your major cooldowns, potions and defensives next to the top {len(data['top'])}
+           {esc(data['label'])} parses on Warcraft Logs{f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ""}.
+           "Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives.
+           Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.</p>
+        {compare.top_players(data)}
+    </div>
+    <div class="card">
+        <h2>📋 Summary</h2>
+        <p class="muted small">"Lined up" counts the moments where at least 3 of the top {len(data['top'])} press an
+           ability (phase by phase, as phases start at different times for everyone) that your pulls reached,
+           and how many of those you pressed it within ±{benchmarks.TOLERANCE_MS // 1000} s. Externals and raid
+           cooldowns are shown for reference only - they depend on your raid's plan.</p>
+        {compare.summary(data)}
+    </div>
+    <div class="card">
+        <h2>🕒 Timeline</h2>
+        <p class="muted small">Grouped by ability: your pull first, then the top players. Shaded bands are the
+           moments most of them agree on. <strong>Align phases</strong> lines everyone's phases up;
+           <strong>Real time</strong> shows each fight as it happened. Pick abilities with the chips; hover
+           anything for details. Pull: {pull_links}</p>
+        {compare.timeline(data, pull)}
+    </div>"""
+    return _page(f'{name} vs top players · {boss_name}', session, body)
 
 
 # ============================================================================
@@ -956,7 +1108,7 @@ async def handle_boss(request):
     body = f"""
     <div class="card">
         <p><a href="/admin/raids{_team_query(team)}">← Raid Analysis</a></p>
-        <h1>{esc(name)} {difficulty_pill(difficulty)}</h1>
+        <h1>{boss_portrait(encounter_id, 'lg', killed=any(p['kill'] for p in pulls))}{esc(name)} {difficulty_pill(difficulty)}</h1>
         <p class="small">{team_links}</p>
         {_flash(request)}
         <div class="stats">

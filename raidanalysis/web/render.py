@@ -98,6 +98,37 @@ th[data-sort]:hover { color: var(--text); }
 .chart .grid { stroke: rgba(255,255,255,0.06); }
 .chart .axis-label { fill: var(--faint); }
 .chart a:hover circle.mark { stroke: #fff; stroke-width: 2; }
+/* Compare-with-top-players page (web/compare.py) */
+.top-list { margin: 8px 0 0 18px; padding: 0; font-size: 13px; line-height: 1.7; }
+.notes { list-style: none; margin: 8px 0 14px; padding: 0; }
+.notes li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.notes li:last-child { border-bottom: 0; }
+.cmp-ab { display: inline-flex; align-items: center; gap: 6px; }
+.cmp-ab .ability-icon { width: 18px; height: 18px; }
+tr.muted-row td { opacity: 0.7; }
+.cmp-tl { --label-w: 190px; }
+.cmp-tl .tl-body { grid-template-columns: var(--label-w) minmax(0, 1fr); }
+.cmp-tl .tl-scroll { padding: 0 10px; }
+.cmp-tl .tl-lab { height: 20px; font-size: 12px; color: var(--muted); }
+.cmp-tl .tl-lab.you { color: var(--text); font-weight: 600; }
+.cmp-tl .tl-lab.grp { height: 26px; justify-content: space-between; padding-left: 4px; color: var(--text);
+    font-weight: 600; box-shadow: inset 0 1px rgba(255,255,255,0.15); }
+.cmp-tl .tl-lab.grp .pill { font-size: 10px; padding: 1px 7px; }
+.cmp-tl .tl-row { height: 20px; }
+.cmp-tl .tl-row.grp { height: 26px; box-shadow: inset 0 1px rgba(255,255,255,0.15); }
+.cmp-tl .tl-row.you { background: rgba(116,132,236,0.10); }
+.cmp-tl .m.cd { width: 16px; height: 16px; }
+.cmp-tl .win { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; background: rgba(255,212,59,0.16);
+    border: 1px solid rgba(255,212,59,0.35); }
+.cmp-tl .ph { position: absolute; top: 2px; bottom: 2px; border-left: 1px dashed rgba(255,255,255,0.35); }
+.cmp-tl.real .al, .cmp-tl:not(.real) .rl, .cmp-tl.real .win { display: none; }
+.tl-chip .chip-icon { width: 16px; height: 16px; border-radius: 3px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-right: auto; }
+.seg button { border: 0; border-radius: 0; padding: 4px 10px; background: transparent; color: var(--muted);
+    font: inherit; font-size: 12px; cursor: pointer; }
+.seg button[aria-pressed=true] { background: var(--surface-3); color: var(--text); }
+.seg ~ .muted { margin-right: 0 !important; }
+@media (max-width: 600px) { .cmp-tl { --label-w: 120px; } }
 /* Consumables timeline toggles (consumables.toolbar) */
 .tl-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
 .tl-chip, .tl-pick summary { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
@@ -139,7 +170,10 @@ th[data-sort]:hover { color: var(--text); }
 .tl-track .grid { stroke: rgba(255,255,255,0.06); }
 .tl-track .tl-hit { fill: transparent; }
 .tl-track a:hover .tl-hit { fill: rgba(255,255,255,0.04); }
-.tl-track .tl-hit-line { stroke: transparent; stroke-width: 10; }
+.tl-track .tl-hit-line { stroke: transparent; stroke-width: 12; }
+.tl-track .tl-mark { cursor: help; }
+.ability-cell[data-spell] { cursor: help; }
+.tl-track .tl-mark:hover line:first-child { stroke: #fff; }
 .tl-ruler { position: relative; height: 20px; font-size: 11px; color: var(--muted); }
 .tl-ruler span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
 .tl-ruler span.first { transform: none; }
@@ -218,11 +252,20 @@ table.bars td.bar-cell { width: 55%; }
 .sync-banner { padding: 14px 20px; border-color: rgba(109,124,255,0.5); background: var(--accent-soft); }
 .sync-banner[hidden] { display: none; }
 .boss-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
-.boss-tab { padding: 10px 14px; border-radius: 12px; background: var(--surface-2); color: var(--text);
-    border: 1px solid var(--border); transition: border-color .15s, background .15s; }
+.boss-tab { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border-radius: 12px;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    transition: border-color .15s, background .15s, box-shadow .15s; }
 .boss-tab:hover { border-color: var(--border-strong); text-decoration: none; }
-.boss-tab.active { border-color: var(--accent); background: var(--accent-soft); }
+.boss-tab.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px rgba(109,124,255,0.18); }
 .boss-tab small { display: block; color: var(--muted); margin-top: 2px; }
+.boss-portrait { width: 40px; height: 40px; border-radius: 10px; flex: none; object-fit: cover;
+    box-shadow: 0 0 0 2px var(--surface-3); background: var(--surface-3); }
+.boss-portrait.killed { box-shadow: 0 0 0 2px var(--good); }
+.boss-portrait.sm { width: 26px; height: 26px; border-radius: 7px; vertical-align: middle; margin-right: 8px; }
+.boss-portrait.lg { width: 52px; height: 52px; border-radius: 12px; vertical-align: middle; margin-right: 12px; }
+.boss-tab:not(.active) .boss-portrait { filter: saturate(0.7); }
+.chips-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--faint); margin-right: 4px; }
 .pull-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
 .pull-chip { padding: 4px 10px; border-radius: 8px; background: var(--surface-2); color: var(--text);
     font-size: 13px; font-variant-numeric: tabular-nums; border: 1px solid var(--border); cursor: pointer;
@@ -231,11 +274,17 @@ table.bars td.bar-cell { width: 55%; }
 .pull-chip.kill { color: var(--good); }
 .pull-chip.overall { font-weight: 600; }
 .pull-chip.active { border-color: var(--accent); background: var(--accent-soft); }
-.view-tabs { display: flex; gap: 4px; margin: 18px -24px -24px; padding: 0 20px; border-top: 1px solid var(--border); }
-.view-tab { padding: 12px 14px; color: var(--muted); font-weight: 600; font-size: 14px;
-    border-bottom: 2px solid transparent; }
-.view-tab:hover { color: var(--text); text-decoration: none; }
-.view-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.view-tabs { display: flex; gap: 6px; margin-top: 18px; padding: 5px; border-radius: 14px;
+    background: var(--bg); border: 1px solid var(--border); }
+.view-tab { flex: 1; display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-radius: 10px;
+    color: var(--muted); border: 1px solid transparent; transition: background .15s, color .15s; }
+.view-tab .vt-icon { font-size: 22px; line-height: 1; }
+.view-tab strong { display: block; font-size: 15px; color: inherit; }
+.view-tab small { display: block; font-size: 12px; color: var(--faint); margin-top: 1px; }
+.view-tab:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+.view-tab.active { color: #fff; background: linear-gradient(135deg, var(--accent), #5a4fd0);
+    border-color: rgba(255,255,255,0.12); box-shadow: 0 6px 18px rgba(109,124,255,0.28); }
+.view-tab.active small { color: rgba(255,255,255,0.8); }
 
 /* Mechanics list */
 .insight { border: 1px solid var(--border); border-left: 3px solid var(--border-strong); background: var(--surface-2);
@@ -335,7 +384,8 @@ details.breakdown-toggle[open] > summary::before { content: '▾ '; }
 
 @media (max-width: 600px) {
     body { padding: 10px; } .card { padding: 16px; }
-    .view-tabs { margin: 14px -16px -16px; padding: 0 8px; }
+    .view-tab { padding: 9px 10px; gap: 8px; }
+    .view-tab small { display: none; }
     .grid-2 { grid-template-columns: 1fr; }
 }
 """
@@ -417,6 +467,21 @@ document.querySelectorAll('.cons-tl').forEach(tl => {
   }));
   boxes.forEach(b => b.addEventListener('change', apply));
   apply();
+});
+// Compare timeline: ability chips show/hide an ability's group; Align phases / Real time swaps positions.
+document.querySelectorAll('.cmp-tl').forEach(tl => {
+  tl.querySelectorAll('.tl-chip[data-g]').forEach(chip => chip.addEventListener('click', () => {
+    const on = chip.getAttribute('aria-pressed') !== 'true';
+    chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    tl.querySelectorAll('.tl-labels [data-g="' + chip.dataset.g + '"], .tl-inner [data-g="' + chip.dataset.g + '"]')
+      .forEach(el => { el.hidden = !on; });
+  }));
+  tl.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
+    const real = btn.dataset.mode === 'real';
+    tl.classList.toggle('real', real);
+    tl.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'));
+    tl.querySelectorAll('.m[data-a]').forEach(m => { m.style.left = real ? m.dataset.r : m.dataset.a; });
+  }));
 });
 // Editor-style timelines: drag to pan, Ctrl/Cmd/Alt + scroll (or pinch) zooms around the pointer, the
 // slider and -/+/Fit zoom around the middle, a playhead shows the time under the mouse.
@@ -524,8 +589,24 @@ document.querySelectorAll('.tl').forEach(tl => {
     tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - w - 8)) + 'px';
     tip.style.top = (y + 18 + h > innerHeight ? Math.max(8, y - h - 12) : y + 18) + 'px';
   };
+  const fetched = new Map();  // spell id -> data, or a promise while it loads
+  const remote = id => {
+    if (!fetched.has(id)) {
+      fetched.set(id, fetch('/raids/spell/' + id).then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(data => { fetched.set(id, data); return data; }));
+    }
+    return fetched.get(id);
+  };
+  let current = null;
   const show = (el, x, y) => {
-    const spell = el.dataset.spell ? spellsFor(el)[el.dataset.spell] : null;
+    current = el;
+    const id = el.dataset.spell;
+    let spell = id ? spellsFor(el)[id] : null;
+    if (id && (!spell || !spell.desc)) {
+      const got = remote(id);
+      if (got && !(got instanceof Promise)) spell = Object.assign({}, spell || {}, got);
+      else if (got) got.then(() => { if (current === el && !tip.hidden) show(el, lastX, lastY); });
+    }
     tip.replaceChildren();
     if (spell) {
       const headRow = document.createElement('div'); headRow.className = 'sp-head';
@@ -536,14 +617,27 @@ document.querySelectorAll('.tl').forEach(tl => {
     }
     if (el.dataset.tip) line('sp-ctx', el.dataset.tip);
     if (spell && spell.desc) line('sp-desc', spell.desc);
+    else if (id && fetched.get(id) instanceof Promise) line('sp-meta', 'Loading description…');
     tip.hidden = !tip.childNodes.length;
     place(x, y);
   };
+  let lastX = 0, lastY = 0;
+  const target = e => e.target.closest && e.target.closest('.tl [data-tip], [data-spell]');
   document.addEventListener('pointerover', e => {
-    const el = e.target.closest && e.target.closest('.tl [data-tip]');
-    if (el && !el.closest('.dragging')) show(el, e.clientX, e.clientY); else tip.hidden = true;
+    const el = target(e);
+    lastX = e.clientX; lastY = e.clientY;
+    if (el && !el.closest('.dragging')) show(el, e.clientX, e.clientY); else { tip.hidden = true; current = null; }
   });
-  document.addEventListener('pointermove', e => { if (!tip.hidden) place(e.clientX, e.clientY); });
+  document.addEventListener('pointermove', e => {
+    lastX = e.clientX; lastY = e.clientY;
+    if (!tip.hidden) place(e.clientX, e.clientY);
+  });
+  // Touch has no hover: a tap on an ability shows its tooltip (tap elsewhere hides it).
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    const el = target(e);
+    if (el) show(el, e.clientX, e.clientY); else tip.hidden = true;
+  });
   document.addEventListener('scroll', () => { tip.hidden = true; }, true);
 })();
 // Mechanic clip pop-up: the Mythic Trap iframe only loads when someone opens it.
@@ -623,13 +717,23 @@ def player_name(name, cls='', role=None):
     return f'{icon}<span style="color:{color};font-weight:600">{esc(name)}</span>'
 
 
+def boss_portrait(encounter_id, size='', killed=False):
+    """The boss's portrait from Warcraft Logs (56 px); size '' (tabs), 'sm' (tables) or 'lg' (titles)."""
+    classes = ' '.join(c for c in ('boss-portrait', size, 'killed' if killed else '') if c)
+    return (f'<img class="{classes}" src="https://assets.rpglogs.com/img/warcraft/bosses/{int(encounter_id)}-icon.jpg" '
+            f'alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">')
+
+
 def ability(name, icon=None, ability_id=None, guide=None):
+    """Icon + name; hovering (or tapping) shows the spell's Wowhead tooltip (PAGE_JS), clicking opens Wowhead."""
     img = f'<img class="ability-icon" src="{ICON_BASE}{esc(icon)}" alt="" loading="lazy">' if icon else ''
     label = esc(name)
+    spell = ''
     if ability_id and ability_id > 1:
-        label = (f'<a href="https://www.wowhead.com/spell={int(ability_id)}" target="_blank" '
+        label = (f'<a href="https://www.wowhead.com/spell={int(ability_id)}" target="_blank" rel="noopener" '
                  f'style="color:inherit">{label}</a>')
-    return f'<span class="ability-cell">{img}{label}{guide_button(guide, name)}</span>'
+        spell = f' data-spell="{int(ability_id)}"'
+    return f'<span class="ability-cell"{spell}>{img}{label}{guide_button(guide, name)}</span>'
 
 
 def guide_button(guide, name=''):
@@ -881,7 +985,26 @@ def tag_buttons(encounter_id, difficulty, ability_id, ability_name, current, sou
 # Overall view / mechanics list building blocks
 # ============================================================================
 
-def deaths_strip(rows):
+def spell_data_json(spells, spell_lookup=None):
+    """
+    The tooltips' spell data: {id: {name, icon, meta, desc}} - Wowhead's text where we have it, the
+    log's name and icon otherwise. spells: {id: (name, rpglogs icon file)}; spell_lookup(ids) ->
+    {id: {'name', 'icon', 'meta', 'description'}} (spells.lookup).
+    """
+    import json
+    from ..spells import icon_url
+    known = spell_lookup(list(spells)) if spell_lookup and spells else {}
+    out = {}
+    for sid, (name, icon) in spells.items():
+        info = known.get(sid) or {}
+        out[sid] = {'name': info.get('name') or name,
+                    'icon': f'{ICON_BASE}{icon}' if icon else icon_url(info.get('icon')),
+                    'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
+    # Inside <script>: keep "</script>" from ever closing it early.
+    return json.dumps(out, ensure_ascii=False).replace('</', '<' + chr(92) + '/')
+
+
+def deaths_strip(rows, spell_lookup=None):
     """
     Every pull of a boss on one time axis, as an editor-style timeline: a bar per pull (its length),
     phase changes, death ticks (red = early death by mistake, grey = the rest) and where half the raid
@@ -900,7 +1023,7 @@ def deaths_strip(rows):
                    for t in range(0, longest + 1, 60000))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{100 * t / longest:.3f}%">'
                     f'{fmt_duration(t)}</span>' for t in range(0, longest + 1, 60000))
-    track = []
+    track, spells = [], {}
     for i, r in enumerate(rows):
         y = i * row_h
         parts = [f'<rect class="tl-hit" x="0" y="{y}" width="{longest}" height="{row_h}"/>',
@@ -910,15 +1033,20 @@ def deaths_strip(rows):
             parts.append(f'<line x1="{start}" x2="{start}" y1="{y + 3}" y2="{y + row_h - 3}" '
                          f'stroke="rgba(255,255,255,0.35)" stroke-width="1"/>')
         if r.get('wipe_at') is not None:
-            parts.append(f'<g><line x1="{r["wipe_at"]}" x2="{r["wipe_at"]}" y1="{y + 2}" y2="{y + row_h - 2}" '
+            parts.append(f'<g class="tl-mark" data-tip="Half the raid dead at {fmt_duration(r["wipe_at"])}">'
+                         f'<line x1="{r["wipe_at"]}" x2="{r["wipe_at"]}" y1="{y + 2}" y2="{y + row_h - 2}" '
                          f'stroke="#ffd43b" stroke-width="2" stroke-dasharray="3 2"/>'
-                         f'<title>Half the raid dead {fmt_duration(r["wipe_at"])}</title></g>')
+                         f'<line class="tl-hit-line" x1="{r["wipe_at"]}" x2="{r["wipe_at"]}" y1="{y}" y2="{y + row_h}"/></g>')
         for d in r['deaths']:
             color = '#ff6b6b' if d.get('early') else 'rgba(255,255,255,0.35)'
-            parts.append(f'<g><line x1="{d["t"]}" x2="{d["t"]}" y1="{y + 5}" y2="{y + row_h - 5}" stroke="{color}" '
-                         f'stroke-width="2"/><line class="tl-hit-line" x1="{d["t"]}" x2="{d["t"]}" y1="{y}" '
-                         f'y2="{y + row_h}"/><title>{fmt_duration(d["t"])} {esc(d["name"])} died to '
-                         f'{esc(d["ability"])}</title></g>')
+            if d.get('ability_id'):
+                spells.setdefault(d['ability_id'], (d['ability'], d.get('icon')))
+            from ..analyzer import death_note
+            tip = f'{d["name"]} died at {fmt_duration(d["t"])} · {death_note(d)}'
+            parts.append(f'<g class="tl-mark" data-tip="{esc(tip)}" data-spell="{d.get("ability_id") or ""}">'
+                         f'<line x1="{d["t"]}" x2="{d["t"]}" y1="{y + 4}" y2="{y + row_h - 4}" stroke="{color}" '
+                         f'stroke-width="3"/><line class="tl-hit-line" x1="{d["t"]}" x2="{d["t"]}" y1="{y}" '
+                         f'y2="{y + row_h}"/></g>')
         track.append(f'<a href="{esc(r["href"])}">{"".join(parts)}</a>')
     return f"""<div class="tl" data-duration="{longest}">
         <div class="tl-tools"><span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom · hover for details</span>
@@ -935,7 +1063,9 @@ def deaths_strip(rows):
                 <div class="tl-ruler">{ruler}</div>
                 <div class="tl-head" hidden><span></span></div>
             </div></div>
-        </div></div>"""
+        </div>
+        <script type="application/json" class="spell-data">{spell_data_json(spells, spell_lookup)}</script>
+        </div>"""
 
 
 def bar_table(rows, value_head='', note_head=''):

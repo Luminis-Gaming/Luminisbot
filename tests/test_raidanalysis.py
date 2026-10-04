@@ -381,6 +381,55 @@ class TestConsumableUses(unittest.TestCase):
                          [(60000, 'Dk', 'Anti-Magic Zone', None), (90000, 'Priest', 'Pain Suppression', 'Tank')])
 
 
+class TestTopPlayerComparison(unittest.TestCase):
+    SPELLS = {1: {'name': 'Metamorphosis', 'meta': 'Instant · 2 min cooldown'},
+              2: {'name': 'Essence Break', 'meta': 'Instant · 40 sec cooldown'},
+              3: {'name': 'Blur', 'meta': 'Instant · 1 min cooldown'},
+              4: {'name': 'Fel Rush', 'meta': '2 charges · 10 sec cooldown'},
+              5: {'name': "Light's Potential", 'meta': 'Item effect · Instant · 5 min cooldown',
+                  'description': 'Drink to increase your primary stat by 346 for 30 sec.'},
+              6: {'name': 'Potion of Recklessness', 'meta': 'Item effect · Instant · 5 min cooldown'},
+              7: {'name': 'Cursed Trinket', 'meta': 'Item effect · Instant · 2 min cooldown'}}
+
+    def top(self, offset=0):
+        # Phase 2 starts at 150 s (+ offset): Metamorphosis at the pull and 10 s into phase 2.
+        phase2 = 150000 + offset
+        return {'duration': 300000 + offset, 'phases': [{'id': 1, 'start': 0}, {'id': 2, 'start': phase2}],
+                'casts': [[1000, 1], [phase2 + 10000, 1], [5000, 2], [200000, 5], [60000, 7]]}
+
+    def test_cooldown_kinds(self):
+        from raidanalysis import benchmarks
+        kinds = {sid: benchmarks.category(sid, info) for sid, info in self.SPELLS.items()}
+        self.assertEqual(kinds, {1: 'throughput', 2: 'throughput', 3: 'personal', 4: None, 5: 'potion',
+                                 6: 'potion', 7: 'trinket'})
+
+    def test_lining_up_phase_by_phase(self):
+        from raidanalysis import benchmarks
+        top = [self.top(o) for o in (0, 20000, -15000, 30000, 5000)]
+        # Our phase 2 starts 60 s later than theirs: Meta 10 s into it is still "in line".
+        ours = {'number': 1, 'duration': 360000, 'phases': [{'id': 1, 'start': 0}, {'id': 2, 'start': 210000}],
+                'casts': [[2000, 1], [220000, 1], [100000, 6]], 'cast_ids': None}
+        rows = {r['name']: r for r in benchmarks.compare([ours], top, self.SPELLS)}
+        meta = rows['Metamorphosis']
+        self.assertEqual([w['segment'] for w in meta['windows']], [(0, 1), (1, 2)])
+        self.assertEqual((meta['hits'], meta['considered'], meta['verdict']), (2, 2, 'good'))
+        self.assertEqual(rows['Essence Break']['verdict'], 'missing')
+        # Any combat potion counts, and a trinket we don't have isn't a miss.
+        self.assertEqual(rows['Combat potion']['ours_casts'], 1)
+        self.assertIsNone(rows['Cursed Trinket']['verdict'])
+        notes = benchmarks.notes(list(rows.values()), 'Havoc Demon Hunters')
+        self.assertTrue(any('Essence Break' in n['text'] and n['tone'] == 'bad' for n in notes))
+
+    def test_off_timing_and_unreached_phases(self):
+        from raidanalysis import benchmarks
+        top = [self.top() for _ in range(5)]
+        # Meta 60 s late at the pull, and the pull wiped before phase 2: one moment, missed.
+        ours = {'number': 1, 'duration': 140000, 'phases': [{'id': 1, 'start': 0}],
+                'casts': [[61000, 1], [5000, 2]], 'cast_ids': None}
+        meta = next(r for r in benchmarks.compare([ours], top, self.SPELLS) if r['name'] == 'Metamorphosis')
+        self.assertEqual((meta['hits'], meta['considered']), (0, 1))
+
+
 class TestSpellTooltips(unittest.TestCase):
     def test_wowhead_tooltip_to_plain_text(self):
         from raidanalysis import spells
