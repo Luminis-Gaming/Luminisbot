@@ -74,6 +74,32 @@ async def fill_missing(limit=PER_RUN):
 
 _in_flight = set()
 
+# Spells our pages have shown (ability cells, timelines): the only ones /raids/spell may look up on
+# Wowhead, so the public endpoint can't be used to make us fetch (and store) arbitrary ids.
+OFFERED_MAX = 50000
+_offered = set()
+# And at most this many on-demand Wowhead lookups per minute, whoever asks.
+ON_DEMAND_PER_MINUTE = 60
+_on_demand = []
+
+
+def offer(spell_ids):
+    """Remember spells a page showed (bounded; cleared when full - pages re-offer as they render)."""
+    if len(_offered) > OFFERED_MAX:
+        _offered.clear()
+    _offered.update(int(i) for i in spell_ids if i)
+
+
+def may_fetch(spell_id):
+    """Whether the public tooltip endpoint may look this spell up on Wowhead right now."""
+    import time
+    now = time.time()
+    _on_demand[:] = [t for t in _on_demand if now - t < 60]
+    if int(spell_id) not in _offered or len(_on_demand) >= ON_DEMAND_PER_MINUTE:
+        return False
+    _on_demand.append(now)
+    return True
+
 
 def lookup(spell_ids):
     """

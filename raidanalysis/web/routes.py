@@ -16,6 +16,7 @@ from aiohttp import web
 from .. import analyzer, benchmarks, db, guides, progstats, spells, sync, teams
 from . import compare, consumables, insights, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
+                     section_head, stat_tiles, subsection,
                      hit_timeline,
                      difficulty_pill,
                      pull_histogram,
@@ -57,6 +58,23 @@ def register_routes(app):
 
 PUBLIC_SESSION = {'username': 'guest', 'role': 'public'}
 
+# Every raid page: a content security policy (scripts/styles are inline, so the value is mostly in
+# locking down where anything else may load from and who may frame us), no MIME sniffing, no framing
+# by other sites, and no full URLs leaking to Warcraft Logs / Wowhead in the Referer.
+SECURITY_HEADERS = {
+    'Content-Security-Policy': (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com; "
+        "frame-src https://www.mythictrap.com; connect-src 'self'; "
+        "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"),
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    # Raiders' names and scores: reachable by link, but not something search engines should list.
+    'X-Robots-Tag': 'noindex, nofollow',
+}
+
 
 def _session(request):
     if request.get('public'):
@@ -65,6 +83,8 @@ def _session(request):
     session = get_session(request)
     if not session:
         raise web.HTTPFound('/admin/login')
+    if session.get('must_change_password'):  # same rule as the rest of the admin site
+        raise web.HTTPFound('/admin/change-password')
     return session
 
 
@@ -88,14 +108,35 @@ def _publicize(html):
     return html.replace('/admin/raids', '/raids')
 
 
+# Public pages are the same for everyone (apart from the remembered team), heavy to build, and
+# reachable without login: keep each rendered page for a minute, so hammering one can't tie up the bot.
+PUBLIC_CACHE_SECONDS = 60
+PUBLIC_CACHE_MAX = 300
+_public_cache = {}
+
+
 def _public(handler):
-    """Serve an admin page handler read-only at /raids/..., without login."""
+    """Serve an admin page handler read-only at /raids/..., without login (cached briefly)."""
+    import time
+
     async def wrapper(request):
         request['public'] = True
+        key = (request.path_qs, request.cookies.get(TEAM_COOKIE))
+        cacheable = 'pick' not in request.query  # picking a team sets a cookie: never cached
+        hit = _public_cache.get(key) if cacheable else None
+        if hit and hit[0] > time.time():
+            response = web.Response(text=hit[1], content_type='text/html', headers=SECURITY_HEADERS)
+            response.enable_compression()
+            return response
         try:
-            return await handler(request)
+            response = await handler(request)
         except web.HTTPFound as redirect:
             raise web.HTTPFound(redirect.location.replace('/admin/raids', '/raids', 1)) from None
+        if cacheable and response.status == 200 and response.content_type == 'text/html':
+            if len(_public_cache) >= PUBLIC_CACHE_MAX:
+                _public_cache.clear()
+            _public_cache[key] = (time.time() + PUBLIC_CACHE_SECONDS, response.text)
+        return response
     return wrapper
 
 
@@ -138,17 +179,19 @@ def _page(title, session, body, waiting=False):
     {CLIP_MODAL}
     <script>{PAGE_JS}</script>
 </body>
-</html>""", content_type='text/html')
+</html>""", content_type='text/html', headers=SECURITY_HEADERS)
     response.enable_compression()  # pages are big but very repetitive - gzip shrinks them ~10x
     return response
 
 
 def _flash(request):
+    """?msg= / ?error= from our own redirects - escaped, and kept short so a crafted link can't
+    put a whole fake announcement on the page."""
     out = ''
     if request.query.get('msg'):
-        out += f'<p class="success">✅ {esc(request.query["msg"])}</p>'
+        out += f'<p class="success">✅ {esc(request.query["msg"][:200])}</p>'
     if request.query.get('error'):
-        out += f'<p class="error">❌ {esc(request.query["error"])}</p>'
+        out += f'<p class="error">❌ {esc(request.query["error"][:200])}</p>'
     return out
 
 
@@ -346,9 +389,9 @@ async def handle_overview(request):
     </div>
     <div class="card">{filter_bar}</div>
     <div class="card">
-        <h2>🐉 Bosses{f" — {esc(teams.label(team))}" if team else ""}</h2>
-        <p class="muted small">{"Only this team's raid nights." if team else "Both teams together."} Raid events
-           posted outside the team signup channels (e.g. #for-fun-raids) aren't counted.</p>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">🐉</span><div><h2>Bosses{f" — {esc(teams.label(team))}" if team else ""}</h2>
+            <p class="sec-sub">{"Only this team's raid nights." if team else "Both teams together."} Raid events
+               posted outside the team signup channels (e.g. #for-fun-raids) aren't counted.</p></div></div></div>
         <div class="table-wrapper"><table class="compact">
             <tr><th>Boss</th><th>Difficulty</th><th class="num">Pulls</th><th class="num">Nights</th>
                 <th>Progress</th><th>Last pulled</th></tr>
@@ -356,7 +399,7 @@ async def handle_overview(request):
         </table></div>
     </div>
     <div class="card">
-        <h2>📅 Raid nights</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📅</span><div><h2>Raid nights</h2></div></div></div>
         <div class="table-wrapper"><table class="compact">
             <tr><th>Date</th><th>Report</th><th>Zone</th><th class="num">Pulls</th><th class="num">Kills</th>
                 <th class="num">Engaged</th><th></th></tr>
@@ -495,11 +538,6 @@ def _pull_row(code, number, pull, phase_names, tags, reason=None):
 
 def _plural(n, word):
     return f"{n} {word}{'' if n == 1 else 's'}"
-
-
-def _killer_label(death):
-    """Killing blow text; 'likely …' when WCL had none and we inferred it from the death window."""
-    return f"{'likely ' if death.get('likely') else ''}{death['ability']}"
 
 
 def _selected_boss(request, groups):
@@ -700,7 +738,7 @@ def _consumables_card(insight_pulls, roster, boss=None):
     """The raid timeline: enemy casts on top; every player's potions, healthstones, cooldowns and deaths below."""
     analyses = [p['analysis'] for p in insight_pulls]
     if not consumables.has_details(analyses):
-        return ('<div class="card"><h2>🕒 Raid timeline</h2>' + insights.REANALYZE_HINT + '</div>')
+        return ('<div class="card">' + section_head('🕒', 'Raid timeline') + insights.REANALYZE_HINT + '</div>')
     single = len(insight_pulls) == 1
     reference = consumables.reference_pull(insight_pulls)
     majors = benchmarks.spec_majors(*boss, spells.lookup) if boss else {}
@@ -718,7 +756,7 @@ def _consumables_card(insight_pulls, roster, boss=None):
             hint += (f' Enemy casts on top are from pull #{reference["number"]} ({which}); boss timers are mostly '
                      'the same every pull, but shift when a phase is pushed faster or slower. Open a single pull '
                      'for its exact timeline.')
-    return (f'<div class="card"><h2>🕒 Raid timeline</h2><p class="muted small">{hint}</p>'
+    return (f'<div class="card">{section_head("🕒", "Raid timeline", hint)}'
             f'{consumables.timeline(insight_pulls, roster, spells.lookup, majors)}</div>')
 
 
@@ -783,19 +821,34 @@ async def handle_night(request):
     phases = analyzer.phase_progress(
         [{'phases': p.get('phases'), 'duration': p['end_ms'] - p['start_ms']} for p in boss_pulls],
         phase_names.get(str(encounter_id)))
-    phase_html = (f'<h3 style="margin-top:8px">How far we got</h3>{phase_funnel(phases, len(boss_pulls))}'
-                  if len(phases) > 1 else '')
+    phase_html = (f'<div class="card">' + section_head(
+        '🧭', 'How far we got', "How many of tonight's pulls reached each phase, and how long they lasted there.")
+        + f'{phase_funnel(phases, len(boss_pulls))}</div>' if len(phases) > 1 else '')
+    killed = any(p['kill'] for p in boss_pulls)
+    best = min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None)
+    durations = [p['end_ms'] - p['start_ms'] for p in boss_pulls]
+    tiles = stat_tiles([
+        (str(len(boss_pulls)), 'Pulls'),
+        ('<span class="good-text">✔ Killed</span>' if killed else (f'{best:.1f}%' if best is not None else '—'),
+         'Result' if killed else 'Best pull'),
+        (fmt_duration(sum(durations)), 'In combat'),
+        (fmt_duration(max(durations)) if durations else '—', 'Longest pull'),
+        (fmt_duration(sum(durations) / len(durations)) if durations else '—', 'Average pull'),
+    ])
 
+    progress_link = (f'<a href="/admin/raids/boss/{encounter_id}/{difficulty}{_team_query(_night_team(report))}" '
+                     f'class="btn btn-secondary btn-sm">Progression across nights →</a>')
     body = _night_header(request, report, code, pulls, selected) + f"""
     <div class="card">
-        <h2>{esc(name)} {difficulty_pill(difficulty)} — overall
-            <a href="/admin/raids/boss/{encounter_id}/{difficulty}{_team_query(_night_team(report))}" class="btn btn-secondary btn-sm"
-               style="float:right">Progression across nights →</a></h2>
-        <p class="muted">{_plural(len(boss_pulls), "pull")} ·
-           {fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in boss_pulls))} in combat</p>
+        {section_head('📈', f'Tonight on {esc(name)} {difficulty_pill(difficulty)}',
+                      'Every pull of the night at a glance: how far each one got (lower fight % = closer to a kill).',
+                      progress_link)}
+        {tiles}
         {progress_chart(points)}
-        {phase_html}
-        <h3 style="margin-top:8px">Every pull</h3>
+    </div>
+    {phase_html}
+    <div class="card">
+        {section_head('📋', 'Every pull', 'Sort by any column; open a pull for its own timeline, deaths and mechanics.')}
         <div class="table-wrapper"><table class="compact">
             <tr><th data-sort class="num">#</th><th>Time</th><th data-sort class="num">Duration</th>
                 <th data-sort title="WCL fight %: how much of the encounter was left, accounting for phases">Fight %</th>
@@ -808,26 +861,27 @@ async def handle_night(request):
         </table></div>
     </div>
     <div class="card">
-        <h2>📋 Mechanics</h2>
+        {section_head('🧩', 'What happened', 'The night summed up: why pulls ended, deaths, avoidable mechanics, '
+                      'interrupts &amp; dispels and consumables. Open any line for the details.')}
         {insights.build(insight_pulls, tags, guide_for, code)}
     </div>
     {_consumables_card(insight_pulls, merged['players'], (encounter_id, difficulty))}
     <div class="card">
-        <h2>💀 Deaths in every pull</h2>
-        <p class="muted small">One row per pull, along its own length: red ticks are early deaths by mistake (one of
-           the first 4 deaths, not part of a mass death), grey ones are the rest; the dashed yellow line is where half
-           the raid was dead, thin lines are phase changes. Zoom in like a video editor's timeline to pick apart deaths that happen close together; click a row to open that pull.</p>
+        {section_head('💀', 'Deaths in every pull', 'One row per pull, along its own length: red ticks are early '
+                      'deaths by mistake (one of the first 4 deaths, not part of a mass death), grey ones the rest; '
+                      'the dashed yellow line is where half the raid was dead, thin lines are phase changes. Zoom in '
+                      'to pick apart deaths close together; click a row to open that pull.')}
         {deaths_strip(insights.death_strip_rows(code, numbered), spells.lookup)}
     </div>
     <div class="card">
-        <h2>🎯 Damage taken by mechanic — all pulls</h2>
-        <p class="muted small">Pick which tags to show with the chips; click an ability for its damage per pull
-           and who took it.</p>
+        {section_head('🎯', 'Damage taken by mechanic', 'All pulls together. Pick which tags to show with the chips; '
+                      'click an ability for its damage per pull and who took it.')}
         {_mechanics_table(merged, tags, sources, guide_for, _roster_names(merged), encounter_id, difficulty, here,
                           per_pull=insight_pulls, pull_href=lambda p: f'/admin/raids/report/{code}/{p["fight_id"]}')}
     </div>
     <div class="card">
-        <h2>👥 Players</h2>
+        {section_head('👥', 'Players', "Tonight's numbers per player on this boss - the Players tab above has "
+                      "scores, feedback and the comparison with top players.")}
         {scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags))}
     </div>"""
     return _page(f"{name} · {report['title']}", session, body)
@@ -878,37 +932,39 @@ async def handle_pull(request):
     reason_html = f'<p>🧯 {_reason_html(reason)}</p>' if reason else ''
     body = _night_header(request, report, code, pulls, (encounter_id, difficulty), fight_id) + f"""
     <div class="card">
-        <h2>{esc(pull['encounter_name'])} {difficulty_pill(difficulty)} — pull {number} {result_pill(pull)}</h2>
-        <p class="muted">{ts(pull['report_start'] + pull['start_ms'])} · {fmt_duration(pull['end_ms'] - pull['start_ms'])} ·
-           {result}{' · ' + phase_label(pull, phase_names) if pull.get('last_phase') else ''} ·
-           <a href="https://www.warcraftlogs.com/reports/{esc(code)}#fight={fight_id}" target="_blank">Warcraft Logs ↗</a></p>
+        {section_head('⚔️', f'Pull {number} {result_pill(pull)}',
+                      f'{esc(pull["encounter_name"])} · {ts(pull["report_start"] + pull["start_ms"])} · '
+                      f'{fmt_duration(pull["end_ms"] - pull["start_ms"])} · {result}'
+                      + (f' · {phase_label(pull, phase_names)}' if pull.get('last_phase') else ''),
+                      f'<a class="btn btn-secondary btn-sm" href="https://www.warcraftlogs.com/reports/{esc(code)}'
+                      f'#fight={fight_id}" target="_blank" rel="noopener">Warcraft Logs ↗</a>')}
         {reason_html}
         {pull_timeline(pull, analysis, phase_names)}
-        <p class="muted small">Red ticks are early deaths by mistake (one of the first 4 deaths, not part of a mass
+        <p class="sub-caption">Red ticks are early deaths by mistake (one of the first 4 deaths, not part of a mass
            death of 3+ players within 3s); grey ones don't count against anyone. Hover for details.</p>
     </div>
     <div class="card">
-        <h2>📋 Mechanics</h2>
+        {section_head('🧩', 'What happened', 'This pull summed up: why it ended, deaths, avoidable mechanics, '
+                      'interrupts &amp; dispels and consumables. Open any line for the details.')}
         {insights.build(pull_insights, tags, guide_for, code)}
     </div>
     {_consumables_card(pull_insights, analysis.get('players') or [], (encounter_id, difficulty))}
     <div class="card">
-        <h2>💀 Deaths</h2>
+        {section_head('💀', 'Deaths', 'In order. Only early deaths by mistake count against anyone.')}
         <div class="table-wrapper"><table class="compact"><tr><th class="num">Time</th><th>Player</th>
             <th>Killing blow</th><th></th></tr>
         {death_rows or '<tr><td colspan="4" class="muted">Nobody died.</td></tr>'}</table></div>
     </div>
     <div class="card">
-        <h2>🎯 Damage taken by mechanic</h2>
-        <p class="muted small">Tags marked <em>auto</em> come from the boss's Mythic Trap guide; clicking a tag
-           overrides it for this boss on every night. Raid-wide abilities only show their top 5 targets.
-           Pick tags with the chips; click an ability to see who took it and when.</p>
+        {section_head('🎯', 'Damage taken by mechanic', "Tags marked <em>auto</em> come from the boss's Mythic Trap "
+                      'guide; clicking a tag overrides it for this boss on every night. Pick tags with the chips; '
+                      'click an ability to see who took it and when. Raid-wide abilities only show their top 5 targets.')}
         {_mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, difficulty, here,
                           timeline=(pull['end_ms'] - pull['start_ms'],
                                     [p['start'] for p in (pull.get('phases') or [])[1:]]))}
     </div>
     <div class="card">
-        <h2>👥 Players</h2>
+        {section_head('👥', 'Players', 'This pull per player.')}
         {scoreboard_table(analyzer.scoreboard([_with_duration(pull)], tags), show_avoidable=_has_avoidable(tags))}
     </div>"""
     return _page(f"{pull['encounter_name']} pull {number}", session, body)
@@ -986,7 +1042,8 @@ async def handle_spell(request):
     except ValueError:
         raise web.HTTPNotFound()
     found = db.get_spells([spell_id])
-    if spell_id not in found and spell_id not in db.attempted_spell_ids([spell_id]):
+    # Only spells our pages showed, and rate limited: this endpoint is public.
+    if spell_id not in found and spell_id not in db.attempted_spell_ids([spell_id]) and spells.may_fetch(spell_id):
         await spells.fetch_ids([spell_id])
         found = db.get_spells([spell_id])
     info = found.get(spell_id)
@@ -994,7 +1051,7 @@ async def handle_spell(request):
         raise web.HTTPNotFound()
     return web.json_response({'name': info['name'], 'icon': spells.icon_url(info['icon']),
                               'meta': info['meta'] or '', 'desc': info['description'] or ''},
-                             headers={'Cache-Control': 'public, max-age=86400'})
+                             headers={'Cache-Control': 'public, max-age=86400', **SECURITY_HEADERS})
 
 
 def compare_url(code, selected, name, fight_id=None):
@@ -1037,12 +1094,12 @@ def _compare_sections(code, numbered, data, pull, eligible, chip_href):
         f'title="Pull {p["number"]}: {esc(_result_text(rows_by_fight[p["fight_id"]]))}">'
         f'#{p["number"]} {chip_label(p)}</a>' for p in eligible)
     fetched = data['benchmark'].get('fetched_at')
-    intro = f"""
-        <p class="small">Major cooldowns, potions and defensives next to the top {len(data['top'])}
-           {esc(data['label'])} parses on Warcraft Logs{f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ""}.
-           "Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives.
-           Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.</p>
-        {_reanalyze_hint(data, code)}"""
+    intro = _reanalyze_hint(data, code)
+    fetched_text = f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ''
+    data['subtitle'] = (f'Major cooldowns, potions and defensives next to the top {len(data["top"])} '
+                        f'{esc(data["label"])} parses on Warcraft Logs{fetched_text}. '
+                        '"Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives. '
+                        "Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.")
     summary = f"""
         <p class="muted small">"Lined up" counts the moments where at least 3 of the top {len(data['top'])} press an
            ability (phase by phase, as phases start at different times for everyone) that your pulls reached,
@@ -1065,7 +1122,7 @@ def _compare_card(request, code, selected, name, numbered, page_href):
     data = benchmarks.for_player(numbered, name)
     why = _benchmark_status(data)
     if why or not data['rows']:
-        return (f'<div class="card" id="compare"><h2>⚔️ Cooldowns vs top players</h2>'
+        return (f'<div class="card" id="compare">{section_head("⚔️", "Cooldowns vs top players")}'
                 f'<p class="muted">{why or "Not enough long pulls to compare yet."}</p></div>')
     eligible, pull = _compare_pull(data, request.query.get('tl') or request.query.get('pull'))
     joiner = '&' if '?' in page_href else '?'
@@ -1073,14 +1130,12 @@ def _compare_card(request, code, selected, name, numbered, page_href):
         code, numbered, data, pull, eligible, lambda fight_id: f'{page_href}{joiner}tl={fight_id}#compare')
     return f"""
     <div class="card" id="compare">
-        <h2>⚔️ Cooldowns vs top players</h2>
+        {section_head('⚔️', 'Cooldowns vs top players', data['subtitle'])}
         {intro}
         <details class="top-players"><summary class="small">The top {len(data['top'])} {esc(data['label'])}</summary>
             {compare.top_players(data)}</details>
-        <h3 style="margin-top:16px">📋 Summary</h3>
-        {summary}
-        <h3 style="margin-top:22px">🕒 Timeline</h3>
-        {timeline}
+        {subsection('Summary', summary)}
+        {subsection('Timeline', timeline)}
     </div>"""
 
 
@@ -1128,11 +1183,12 @@ async def handle_compare(request):
     intro, summary, timeline = _compare_sections(
         code, numbered, data, pull, eligible, lambda fight_id: compare_url(code, selected, name, fight_id))
     body = head + f"""
+        <p class="small">{data['subtitle']}</p>
         {intro}
         {compare.top_players(data)}
     </div>
-    <div class="card"><h2>📋 Summary</h2>{summary}</div>
-    <div class="card"><h2>🕒 Timeline</h2>{timeline}</div>"""
+    <div class="card"><div class="sec-head"><div class="sec-title"><span class="sec-icon">📋</span><div><h2>Summary</h2></div></div></div>{summary}</div>
+    <div class="card"><div class="sec-head"><div class="sec-title"><span class="sec-icon">🕒</span><div><h2>Timeline</h2></div></div></div>{timeline}</div>"""
     return _page(f'{name} vs top players · {boss_name}', session, body)
 
 
@@ -1223,10 +1279,11 @@ async def handle_boss(request):
         phase_ids |= {ph['id'] for ph in progress}
         heat_nights.append((esc(nd['label']), {ph['id']: ph['reached'] for ph in progress}, len(nd['pulls'])))
     phase_order = [(pid, (phase_meta.get(str(pid)) or {}).get('name') or f'Phase {pid}') for pid in sorted(phase_ids)]
-    heat_html = (f'<h3 style="margin-top:20px">How far we got, night by night</h3>'
-                 f'<p class="muted small">Pulls that reached each phase; darker = more of the night\'s pulls got there.</p>'
-                 f'{phase_heatmap(list(reversed(heat_nights)), phase_order)}' if len(phase_order) > 1 else '')
-    trends_html = _player_trends(night_data, encounter_id, difficulty, team)
+    heat_html = ('<div class="card">' + section_head(
+        '🧭', 'How far we got, night by night',
+        "Pulls that reached each phase; darker = more of the night's pulls got there.")
+        + f'{phase_heatmap(list(reversed(heat_nights)), phase_order)}</div>' if len(phase_order) > 1 else '')
+    trends_html = _player_trends(night_data, encounter_id, difficulty, team, public=session is PUBLIC_SESSION)
     comparison_html = await _progstats_card(encounter_id, pulls) if difficulty == progstats.MYTHIC else ''
 
     # Mechanics seen on this boss, with tagging
@@ -1274,6 +1331,13 @@ async def handle_boss(request):
         f'{label}</a>'
         for n, label in ((1, 'Last night'), (3, 'Last 3 nights'), (0, 'All nights')) if n <= len(nights))
 
+    nights_table = (f'<div class="table-wrapper"><table class="compact"><tr><th>Date</th><th>Report</th>'
+                    f'<th class="num">Pulls</th><th class="num">Time</th><th>Result</th><th>Main wipe cause</th></tr>'
+                    f'{"".join(reversed(night_rows))}</table></div>')
+    hurt_html = (f'<div class="grid-2"><div><h4 style="margin-top:0">💀 What&#x27;s killing us</h4>'
+                 f'{killers_table(analyzer.killers(analyses), guide_for=guide_for)}</div>'
+                 f'<div><h4 style="margin-top:0">🧪 Avoidable damage by mechanic</h4>'
+                 f'{_avoidable_summary(analyses, tags, guide_for)}</div></div>')
     kills = sum(1 for p in pulls if p['kill'])
     best_all = min((p['fight_pct'] or 0 for p in pulls if not p['kill']), default=None)
     body = f"""
@@ -1282,39 +1346,31 @@ async def handle_boss(request):
         <h1>{boss_portrait(encounter_id, 'lg', killed=any(p['kill'] for p in pulls))}{esc(name)} {difficulty_pill(difficulty)}</h1>
         <div class="pull-chips">{team_links}</div>
         {_flash(request)}
-        <div class="stats">
-            <div class="stat"><div class="stat-value">{len(pulls)}</div><div class="stat-label">Pulls</div></div>
-            <div class="stat"><div class="stat-value">{len(nights)}</div><div class="stat-label">Nights</div></div>
-            <div class="stat"><div class="stat-value">{kills or (f'{best_all:.1f}%' if best_all is not None else '—')}</div>
-                <div class="stat-label">{'Kills' if kills else 'Best pull'}</div></div>
-            <div class="stat"><div class="stat-value">{fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in pulls))}</div>
-                <div class="stat-label">Time on boss</div></div>
-        </div>
-        <h2 style="margin-top:24px">📈 Progression</h2>
-        {progress_chart(points, separators=separators if len(nights) > 1 else ())}
-        <div class="table-wrapper"><table class="compact">
-            <tr><th>Date</th><th>Report</th><th class="num">Pulls</th><th class="num">Time</th><th>Result</th>
-                <th>Main wipe cause</th></tr>
-            {''.join(reversed(night_rows))}
-        </table></div>
-        {heat_html}
+        <div style="margin-top:18px">{stat_tiles([
+            (str(len(pulls)), 'Pulls'), (str(len(nights)), 'Nights'),
+            (str(kills) if kills else (f'{best_all:.1f}%' if best_all is not None else '—'), 'Kills' if kills else 'Best pull'),
+            (fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in pulls)), 'Time on boss')])}</div>
     </div>
+    <div class="card">
+        {section_head('📈', 'Progression', 'Every pull across the nights (lower fight % = closer to a kill), then '
+                      'night by night.')}
+        {progress_chart(points, separators=separators if len(nights) > 1 else ())}
+        {subsection('Night by night', nights_table)}
+    </div>
+    {heat_html}
     {comparison_html}
     {trends_html}
     <div class="card">
-        <h2>👥 Players</h2>
-        <div class="pull-chips" style="margin:-4px 0 10px">{scope_links}</div>
-        <p class="muted small">{len(scoped)} pulls. Deaths count only as early deaths by mistake: one of a pull's first 4 deaths, and not part of a mass death.</p>
-        <div class="grid-2" style="margin-bottom:20px">
-            <div><h3>💀 What's killing us</h3>{killers_table(analyzer.killers(analyses), guide_for=guide_for)}</div>
-            <div><h3>🧪 Avoidable damage by mechanic</h3>{_avoidable_summary(analyses, tags, guide_for)}</div>
-        </div>
-        {scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags))}
+        {section_head('👥', 'Players', f'{len(scoped)} pulls. Deaths count only as early deaths by mistake: one of '
+                      "a pull's first 4 deaths, and not part of a mass death.")}
+        <div class="pull-chips" style="margin:0 0 4px">{scope_links}</div>
+        {subsection('What hurt the most', hurt_html)}
+        {subsection('Scores', scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags)))}
     </div>
     {_guides_card(encounter_id, difficulty, base)}
     <div class="card" id="mechanics">
-        <h2>🎯 Mechanics</h2>
-        <p class="muted small">Every enemy ability that hit the raid on this boss. Tags marked <em>auto</em> come
+        {section_head('🎯', 'Mechanics', "Every enemy ability that hit the raid on this boss, and how it's tagged.")}
+        <p class="muted small"> Tags marked <em>auto</em> come
            from the boss's Mythic Trap guide ("Dodge…" → avoidable, frontals and tail swipes → non-tanks, soaks and
            tankbusters → expected); anything that lands on ~90% of the raid every pull is never auto-blamed.
            Clicking a tag overrides it for this boss; <strong>↺ auto</strong> undoes that.
@@ -1361,7 +1417,7 @@ def _guides_card(encounter_id, difficulty, here):
              if items else '')
     return f"""
     <div class="card" id="guides">
-        <h2>📺 Mechanic guides</h2>
+        {section_head('📺', 'Mechanic guides', 'Clips and tips from Mythic Trap for this boss.')}
         <p class="muted small">{status}</p>
         {rescan}
         {table}
@@ -1380,7 +1436,7 @@ async def _progstats_card(encounter_id, pulls):
     """Our Mythic pull count next to every guild that killed the boss (progstats.io)."""
     stats = await progstats.mythic_pull_stats(encounter_id)
     if not stats:
-        return ('<div class="card"><h2>📊 Pull count vs other guilds</h2><p class="muted">No Mythic kill data on '
+        return ('<div class="card"><div class="sec-head"><div class="sec-title"><span class="sec-icon">📊</span><div><h2>Pull count vs other guilds</h2></div></div></div><p class="muted">No Mythic kill data on '
                 '<a href="https://progstats.io" target="_blank" rel="noopener">progstats.io</a> for this boss yet.</p></div>')
     kill_at = next((i for i, p in enumerate(pulls, 1) if p['kill']), None)
     ours = kill_at or len(pulls)
@@ -1392,7 +1448,7 @@ async def _progstats_card(encounter_id, pulls):
                    f"that killed it needed more than that.")
     return f"""
     <div class="card">
-        <h2>📊 Pull count vs other guilds</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📊</span><div><h2>Pull count vs other guilds</h2></div></div></div>
         <p>{verdict}</p>
         <p class="muted small">{stats['kills']} guilds have killed it on Mythic · median <strong>{stats['median']:.0f}</strong>
            pulls · middle half {stats['p25']:.0f}–{stats['p75']:.0f}. Your count only includes the nights synced here.</p>
@@ -1406,9 +1462,9 @@ def _trend_url(encounter_id, difficulty, name, team=None):
     return f'/admin/raids/boss/{encounter_id}/{difficulty}/player/{quote(name)}{_team_query(team)}'
 
 
-def _player_trends(night_data, encounter_id, difficulty, team=None):
+def _player_trends(night_data, encounter_id, difficulty, team=None, public=False):
     return players.trends_card(night_data, lambda key: _trend_url(encounter_id, difficulty, key, team),
-                               db.character_owners())
+                               db.character_owners(), show_discord=not public)
 
 
 def _boss_night_data(encounter_id, difficulty, tags, guide_for, team=None):
@@ -1446,17 +1502,21 @@ async def handle_player_trend(request):
     night_data = _boss_night_data(encounter_id, difficulty, tags, guide_for, team)
     owners = db.character_owners()
     history = players.player_history(night_data, owners)
-    # The link carries a person key; a plain character name (e.g. from a night's player page) works too.
-    entry = history.get(name) or history.get(players.person_key(name, owners))
+    public = session is PUBLIC_SESSION
+    if public:  # by character only: a Discord-id key must not be a way to look someone up
+        entry = next((e for e in history.values() if name in e['characters']), None)
+    else:  # the link carries a person key; a plain character name (e.g. from a player page) works too
+        entry = history.get(name) or history.get(players.person_key(name, owners))
     back = f'/admin/raids/boss/{encounter_id}/{difficulty}{_team_query(team)}'
     if not entry:
         raise web.HTTPFound(back + '?error=' + quote(f'No pulls for {name} on this boss.'))
     boss_name = night_data[-1]['pulls'][0]['encounter_name']
-    title = entry.get('display') or entry['characters'][-1]
+    title = (None if public else entry.get('display')) or entry['characters'][-1]
     body = (f'<div class="card"><p><a href="{back}">← {esc(boss_name)} {difficulty_pill(difficulty)}</a></p>'
             f'<h1>{esc(title)} on {esc(boss_name)}</h1></div>'
             + players.trend_page(entry, guide_for,
-                                 lambda code, player: players.player_url(code, player, (encounter_id, difficulty))))
+                                 lambda code, player: players.player_url(code, player, (encounter_id, difficulty)),
+                                 show_discord=not public))
     return _remember_team(request, _page(f'{title} · {boss_name} trend', session, body))
 
 

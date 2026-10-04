@@ -7,11 +7,9 @@ The timeline has two time modes: "Align phases" (default) shifts everyone's cast
 timeline phase by phase - phases are health-based, so they start at different times for everyone -
 and shades the moments most top players agree on; "Real time" shows each fight as it happened.
 """
-import json
-
 from .. import benchmarks
 from ..spells import icon_url
-from .render import ICON_BASE, esc, fmt_amount, fmt_duration
+from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
 
 VERDICTS = {'good': ('pill-kill', 'In line'), 'ok': ('pill', 'Close'), 'off': ('pill-wipe', 'Off'),
             'missing': ('pill-wipe', 'Never used')}
@@ -155,7 +153,8 @@ def timeline(data, pull, boss=None, spell_lookup=None):
     grid = ''.join(f'<i style="left:{at(t)}"></i>' for t in range(0, longest + 1, 60000))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{at(t)}">{fmt_duration(t)}</span>'
                     for t in range(0, longest + 1, 60000))
-    icon_css = ''.join(f'.{_spec_icon_class(sid)}{{background-image:url({esc(url)})}}' for sid, url in icons.items() if url)
+    icon_css = ''.join(f'.{_spec_icon_class(int(sid))}{{background-image:url({safe_icon(url)})}}'
+                       for sid, url in icons.items() if safe_icon(url))
     spell_json = {sid: {'name': info.get('name') or '', 'icon': icon_url(info.get('icon')), 'meta': info.get('meta') or '',
                         'desc': info.get('description') or ''} for sid, info in spells.items()}
     known = spell_lookup(list(boss_spells)) if spell_lookup and boss_spells else {}
@@ -184,7 +183,7 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                 <div class="tl-head" hidden><span></span></div>
             </div></div>
         </div>
-        <script type="application/json" class="spell-data">{json.dumps(spell_json, ensure_ascii=False).replace('</', '<' + chr(92) + '/')}</script>
+        <script type="application/json" class="spell-data">{json_for_script(spell_json)}</script>
     </div>"""
 
 

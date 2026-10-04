@@ -650,3 +650,25 @@ class TestFullBudget(unittest.TestCase):
             asyncio.run(sync.sync_guild(limit=1, full_budget=True))
             self.assertEqual(reached, ['reports'])
             self.assertEqual(sync._share, sync.WCL_BUDGET_SHARE)  # back to normal after the run
+
+
+class TestSpecSwap(unittest.TestCase):
+    """Someone who swaps spec mid-night counts as the spec they played most - not their first pull's."""
+
+    def test_majority_spec_and_same_spec_pulls(self):
+        from raidanalysis import analyzer, benchmarks
+
+        def pull(spec, fight_id):
+            players = [{'name': 'Naautilus', 'class': 'DemonHunter', 'spec': spec, 'role': 'dps'}]
+            return {'fight_id': fight_id, 'kill': False, 'start_ms': 0, 'end_ms': 300000, 'phases': [],
+                    'analysis': {'players': players, 'casts': {'Naautilus': [[1000, fight_id]]}, 'cast_ids': [fight_id]}}
+        pulls = [pull('Havoc', 1), pull('Devourer', 2), pull('Devourer', 3)]
+        report = analyzer.player_report([{'number': i, 'kill': False, 'analysis': dict(p['analysis'], _duration=300000)}
+                                         for i, p in enumerate(pulls, 1)], {})
+        me = next(r for r in report if r['name'] == 'Naautilus')
+        self.assertEqual(me['spec'], 'Devourer')
+        self.assertEqual(me['spec_pulls'], {'Havoc': 1, 'Devourer': 2})
+        self.assertEqual(analyzer.main_spec([{'spec': 'Havoc'}, {'spec': 'Devourer'}]), 'Devourer')  # tie: latest
+        numbered = list(enumerate(pulls, 1))
+        self.assertEqual(benchmarks._main_spec_player(numbered, 'Naautilus')['spec'], 'Devourer')
+        self.assertEqual([p['fight_id'] for p in benchmarks.our_pulls(numbered, 'Naautilus', spec='Devourer')], [2, 3])

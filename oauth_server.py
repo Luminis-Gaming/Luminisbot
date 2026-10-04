@@ -187,7 +187,7 @@ async def handle_callback(request):
     if error:
         logger.error(f"OAuth error: {error}")
         return web.Response(
-            text=f"Authorization failed: {error}. You can close this window.",
+            text=f"Authorization failed: {html_escape(error)}. You can close this window.",
             content_type='text/html',
             status=400
         )
@@ -1417,7 +1417,7 @@ code { background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; font-s
 async def handle_admin_login_page(request):
     """GET /admin/login - show login page"""
     error = request.query.get('error', '')
-    error_html = f'<p class="error">{error}</p>' if error else ''
+    error_html = f'<p class="error">{html_escape(error)}</p>' if error else ''
     
     html = f"""
     <!DOCTYPE html>
@@ -1488,7 +1488,9 @@ async def handle_admin_login(request):
         # Redirect based on whether password change is required
         redirect_url = '/admin/change-password' if user['must_change_password'] else '/admin/characters'
         response = web.HTTPFound(redirect_url)
-        response.set_cookie('admin_session', session_token, max_age=86400, httponly=True, samesite='Lax')
+        # Secure: only ever sent over HTTPS (the site is behind HTTPS; plain-http logins won't stick).
+        response.set_cookie('admin_session', session_token, max_age=86400, httponly=True, samesite='Lax',
+                            secure=True)
         raise response
         
     except web.HTTPFound:
@@ -1523,8 +1525,8 @@ async def handle_change_password_page(request):
             <div class="logo">🔑</div>
             <h1>Change Password</h1>
             {warning_html}
-            {'<p class="error">' + error + '</p>' if error else ''}
-            {'<p class="success">' + success + '</p>' if success else ''}
+            {'<p class="error">' + html_escape(error) + '</p>' if error else ''}
+            {'<p class="success">' + html_escape(success) + '</p>' if success else ''}
             <form method="POST" action="/admin/change-password">
                 <input type="password" name="current_password" placeholder="Current Password" required>
                 <input type="password" name="new_password" placeholder="New Password (min 8 chars)" required minlength="8">
@@ -4089,7 +4091,7 @@ async def handle_users_page(request):
                 {render_nav(session, 'users')}
                 
                 {'<div class="success" style="background:rgba(81,207,102,0.2);padding:15px;border-radius:8px;margin-bottom:20px">' + message + '</div>' if message else ''}
-                {'<div class="error" style="background:rgba(255,107,107,0.2);padding:15px;border-radius:8px;margin-bottom:20px">' + error + '</div>' if error else ''}
+                {'<div class="error" style="background:rgba(255,107,107,0.2);padding:15px;border-radius:8px;margin-bottom:20px">' + html_escape(error) + '</div>' if error else ''}
                 
                 <div class="card">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
@@ -4135,7 +4137,7 @@ async def handle_new_user_page(request):
             
             <div class="card" style="max-width:500px">
                 <h2>➕ Add New User</h2>
-                {'<p class="error">' + error + '</p>' if error else ''}
+                {'<p class="error">' + html_escape(error) + '</p>' if error else ''}
                 <form method="POST" action="/admin/users/new">
                     <div class="form-group">
                         <label>Username</label>
@@ -4258,7 +4260,7 @@ async def handle_edit_user_page(request):
                 
                 <div class="card" style="max-width:500px">
                     <h2>✏️ Edit User: {user['username']}</h2>
-                    {'<p class="error">' + error + '</p>' if error else ''}
+                    {'<p class="error">' + html_escape(error) + '</p>' if error else ''}
                     <form method="POST" action="/admin/users/edit/{user_id}">
                         <div class="form-group">
                             <label>Username</label>
@@ -5588,8 +5590,11 @@ def create_app(bot=None):
     global discord_bot
     discord_bot = bot
     
-    # Create app with security and CORS middleware (security first!)
-    app = web.Application(middlewares=[security_middleware, cors_middleware])
+    # Create app with security and CORS middleware (security first!). The path normaliser only acts
+    # on URLs that match no route: '/raids/' -> '/raids' (308, keeps the method and query string).
+    app = web.Application(middlewares=[security_middleware,
+                                       web.normalize_path_middleware(append_slash=False, remove_slash=True),
+                                       cors_middleware])
     
     # OAuth routes
     app.router.add_get('/authorize', handle_authorize)

@@ -376,12 +376,16 @@ def notes(rows, spec_label, limit=3):
             + [{'tone': 'good', 'text': t} for t in good[:max(1, limit - len(bad))]])
 
 
-def our_pulls(pulls, name):
-    """Our raid pulls -> compare() input for one character (pulls they weren't in are skipped)."""
+def our_pulls(pulls, name, spec=None):
+    """
+    Our raid pulls -> compare() input for one character: pulls they weren't in are skipped, and so
+    are pulls on another spec than `spec` (a Havoc pull doesn't count against the Devourer top).
+    """
     out = []
     for number, pull in pulls:
         analysis = pull.get('analysis') or {}
-        if not any(p['name'] == name for p in analysis.get('players') or []):
+        me = next((p for p in analysis.get('players') or [] if p['name'] == name), None)
+        if not me or (spec and me.get('spec') and me['spec'] != spec):
             continue
         casts = (analysis.get('casts') or {}).get(name)
         if casts is None:  # analyzed before every rare cast was kept: tracked cooldowns + consumables only
@@ -407,16 +411,24 @@ async def ensure_spells(spell_ids):
     return await spells.fetch_ids(missing) if missing else 0
 
 
+def _main_spec_player(numbered, name):
+    """The character's player entry for the spec they played on most of these pulls (None if unknown)."""
+    from .analyzer import main_spec
+    entries = [p for _, pull in numbered for p in (pull.get('analysis') or {}).get('players') or []
+               if p['name'] == name and p.get('spec')]
+    spec = main_spec(entries)
+    return next((p for p in reversed(entries) if p['spec'] == spec), None)
+
+
 async def ensure_spells_for(numbered, name):
     """Before comparing one character: make sure their spec's top-player spells have Wowhead text."""
     from . import db
-    player = next((p for _, pull in numbered for p in (pull.get('analysis') or {}).get('players') or []
-                   if p['name'] == name and p.get('spec')), None)
+    player = _main_spec_player(numbered, name)
     if not player or not numbered:
         return 0
     first = numbered[0][1]
     bench = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
-    ours = {sid for p in our_pulls(numbered, name) for _, sid in p['casts']}
+    ours = {sid for p in our_pulls(numbered, name, spec=player['spec']) for _, sid in p['casts']}
     return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']} | ours)
 
 
@@ -474,14 +486,13 @@ def for_player(numbered, name):
     nothing to compare (no spec known). numbered: [(pull number, pull with analysis)].
     """
     from . import db
-    player = next((p for _, pull in numbered for p in (pull.get('analysis') or {}).get('players') or []
-                   if p['name'] == name and p.get('spec')), None)
+    player = _main_spec_player(numbered, name)
     if not player or not numbered:
         return None
     first = numbered[0][1]
     benchmark = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
     top = (benchmark or {}).get('players') or []
-    pulls = our_pulls(numbered, name)
+    pulls = our_pulls(numbered, name, spec=player['spec'])
     ids = {sid for p in top for _, sid in p['casts']} | {sid for p in pulls for _, sid in p['casts']}
     spells = db.get_spells(ids) if ids else {}
     return {'player': player, 'benchmark': benchmark, 'top': top, 'pulls': pulls,

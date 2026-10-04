@@ -8,7 +8,7 @@ older nights only have counts until they're re-analyzed.
 """
 from .. import benchmarks, cooldowns
 from ..spells import icon_url
-from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name, spell_data_json
+from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name, safe_icon, spell_data_json
 
 # What the timeline colors encode is the *kind* of consumable (validated with the
 # dataviz palette checker on the card surface, all pairs); the exact potion is in
@@ -33,12 +33,16 @@ def has_details(analyses):
 
 
 def _icon_src(icon):
-    """Logs give icon file names (rpglogs); spells found via Wowhead come as full URLs."""
+    """Logs give icon file names (rpglogs); spells found via Wowhead come as full URLs. None if unsafe."""
+    icon = safe_icon(icon)
+    if not icon:
+        return None
     return icon if icon.startswith('http') else f'{ICON_BASE}{icon}'
 
 
 def _icon(icon):
-    return f'<img class="ability-icon" src="{esc(_icon_src(icon))}" alt="" loading="lazy">' if icon else ''
+    src = _icon_src(icon) if icon else None
+    return f'<img class="ability-icon" src="{esc(src)}" alt="" loading="lazy">' if src else ''
 
 
 # Cooldown groups on the timeline: each spec's own damage / healing cooldowns (found the way the
@@ -214,8 +218,8 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
     grid = ''.join(f'<i style="left:{at(t)}"></i>' for t in range(0, longest + 1, 60000))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{at(t)}">{fmt_duration(t)}</span>'
                     for t in range(0, longest + 1, 60000))
-    icon_css = ''.join(f'.sp{sid}{{background-image:url({esc(_icon_src(icon))})}}'
-                       for sid, (_, icon) in spells.items() if icon)
+    icon_css = ''.join(f'.sp{int(sid)}{{background-image:url({_icon_src(icon)})}}'
+                       for sid, (_, icon) in spells.items() if icon and _icon_src(icon))
     return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}"
         style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']}">
         <style>{icon_css}</style>

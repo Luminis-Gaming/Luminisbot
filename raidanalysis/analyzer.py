@@ -518,6 +518,29 @@ def avoidable_by_player(analysis, tags):
     return out
 
 
+def count_spec(row, player):
+    """
+    A row's spec = the one played on the most of its pulls (ties: the latest), not the first pull's -
+    people swap spec mid-night (a Havoc pull 1, then Devourer for the rest). Other specs are kept in
+    row['spec_pulls'].
+    """
+    spec = player.get('spec') or ''
+    if not spec:
+        return
+    counts = row.setdefault('spec_pulls', {})
+    counts[spec] = counts.get(spec, 0) + 1
+    order = list(counts)
+    row['spec'] = max(counts, key=lambda s: (counts[s], order.index(s) if s != spec else len(order)))
+
+
+def main_spec(pulls_players):
+    """The spec played on the most pulls, from [player dict per pull] (ties: the latest); '' if unknown."""
+    row = {}
+    for player in pulls_players:
+        count_spec(row, player)
+    return row.get('spec', '')
+
+
 def scoreboard(analyses, tags):
     """
     Per-player totals across several pulls - the "who needs a word" table.
@@ -539,6 +562,7 @@ def scoreboard(analyses, tags):
             r = row(player)
             r['pulls'] += 1
             r['pull_ms'] += duration
+            count_spec(r, player)
 
         deaths = annotate_deaths(analysis)['deaths']
         death_time = {}
@@ -740,6 +764,7 @@ def player_report(pulls, tags):
 
         for name, player in roster.items():
             r = rows.setdefault(name, _new_player_row(player))
+            count_spec(r, player)
             r['pulls'] += 1
             r['pull_ms'] += duration
             death, fell = died.get(name), any_death.get(name)

@@ -114,7 +114,7 @@ def players_view(players, guide_for, player_href):
                 {score_ring(p['score'])}
                 <div>
                     <h3>{player_name(p['name'], p['class'])}</h3>
-                    <p class="muted small">{ROLE_ICONS.get(p['role'], '')} {spec}{esc(_class_label(p['class']))} ·
+                    <p class="muted small">{ROLE_ICONS.get(p['role'], '')} {spec}{esc(_class_label(p['class']))}{_other_specs(p)} ·
                        {p['pulls']} pull{'s' if p['pulls'] != 1 else ''}</p>
                 </div>
             </header>
@@ -128,7 +128,7 @@ def players_view(players, guide_for, player_href):
         </article>""")
     return f"""
     <div class="card">
-        <h2>👥 Players</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">👥</span><div><h2>Players</h2></div></div></div>
         <p class="muted small">Score = weighted average of 0–100 components: Survival (×2), Deaths, one per avoidable
            mechanic, Potions and Healthstones (×½). Mechanics and deaths are compared with the raid — 100 means never hit,
            about 50 means raid average. Interrupts and dispels are shown as contributions and don't lower anyone's score.
@@ -136,6 +136,15 @@ def players_view(players, guide_for, player_href):
         <div class="pull-chips">{filters}</div>
     </div>
     <div class="player-grid">{''.join(cards)}</div>"""
+
+
+def _other_specs(p):
+    """' (also Havoc on 1 pull)' when they swapped spec during the night."""
+    others = [(s, n) for s, n in (p.get('spec_pulls') or {}).items() if s != p.get('spec')]
+    if not others:
+        return ''
+    text = ', '.join(f'{s} on {n} pull{"s" if n != 1 else ""}' for s, n in others)
+    return f' <span class="muted">(also {esc(text)})</span>'
 
 
 def player_page(p, guide_for, pull_href):
@@ -177,21 +186,21 @@ def player_page(p, guide_for, pull_href):
         </div>
     </div>
     <div class="card">
-        <h2>🧮 Score breakdown</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">🧮</span><div><h2>Score breakdown</h2></div></div></div>
         <p class="muted small">Every number behind the score. 100 = best; relative components compare with the rest of
            the raid on the same pulls (about 50 = raid average).</p>
         {breakdown(p, guide_for)}
     </div>
     <div class="grid-2">
-        <div class="card"><h2>📝 Feedback</h2>
+        <div class="card"><div class="sec-head"><div class="sec-title"><span class="sec-icon">📝</span><div><h2>Feedback</h2></div></div></div>
             <ul class="notes">{''.join(_note(n, guide_for) for n in p['feedback']) or
                                '<li class="note info"><span>👍</span><span>Nothing stands out.</span></li>'}</ul></div>
-        <div class="card"><h2>🎯 Avoidable hits</h2>
+        <div class="card"><div class="sec-head"><div class="sec-title"><span class="sec-icon">🎯</span><div><h2>Avoidable hits</h2></div></div></div>
             {f'<ul class="notes">{mechanics}</ul>' if mechanics else '<p class="muted">Never hit by an avoidable mechanic.</p>'}
             {f'<h4>Per pull</h4>{chart}' if chart and p['avoidable_hits'] else ''}</div>
     </div>
     <div class="card">
-        <h2>📋 Pull by pull</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📋</span><div><h2>Pull by pull</h2></div></div></div>
         <div class="table-wrapper"><table class="compact">
             <tr><th class="num">Pull</th><th></th><th>Outcome</th><th class="num">Avoidable hits</th>
                 <th class="num">Potion</th><th class="num">Healthstones</th></tr>
@@ -238,14 +247,17 @@ def player_history(night_data, owners=None):
     return history
 
 
-def _person_label(entry):
-    """Latest character (class-colored), plus the Discord name and other characters for alt-hoppers."""
+def _person_label(entry, show_discord=True):
+    """
+    Latest character (class-colored), plus the Discord name and other characters for alt-hoppers.
+    The public pages leave the Discord name out (show_discord=False): no tying accounts to characters.
+    """
     last = entry['nights'][-1][2]
     chars = entry['characters']
     name = player_name(chars[-1], last['class'], last['role'])
     if len(chars) == 1:
         return name
-    lead = f'{esc(entry["display"])} · ' if entry.get('display') else ''
+    lead = f'{esc(entry["display"])} · ' if entry.get('display') and show_discord else ''
     return f'{lead}{name} <span class="muted small">(also {" / ".join(esc(c) for c in chars[:-1])})</span>'
 
 
@@ -257,9 +269,13 @@ def _delta(first, last):
     return f'<span class="{"trend-up" if change > 0 else "trend-down"}">{arrow} {abs(change):.0f}</span>'
 
 
-def trends_card(night_data, trend_href, owners=None):
+def trends_card(night_data, trend_href, owners=None, show_discord=True):
+    """
+    Score trend per person across nights. trend_href(key) links each row; without show_discord
+    (public pages) rows link by their latest character instead of the Discord-based person key.
+    """
     if len(night_data) < 2:
-        return ('<div class="card"><h2>📈 Player trends</h2><p class="muted">Trends show up once this boss has been '
+        return ('<div class="card"><div class="sec-head"><div class="sec-title"><span class="sec-icon">📈</span><div><h2>Player trends</h2></div></div></div><p class="muted">Trends show up once this boss has been '
                 'pulled on two or more nights.</p></div>')
     rows = []
     for key, entry in player_history(night_data, owners).items():
@@ -269,8 +285,8 @@ def trends_card(night_data, trend_href, owners=None):
         scores = [row['score'] for _, _, row in nights]
         hits = [row['avoidable_hits'] / row['pulls'] for _, _, row in nights]
         rows.append((scores[-1] - scores[0], f"""
-            <tr onclick="location='{esc(trend_href(key))}'" style="cursor:pointer">
-                <td data-v="{esc(entry.get('display') or entry['characters'][-1])}">{_person_label(entry)}</td>
+            <tr onclick="location='{esc(trend_href(key if show_discord else entry['characters'][-1]))}'" style="cursor:pointer">
+                <td data-v="{esc((entry.get('display') if show_discord else None) or entry['characters'][-1])}">{_person_label(entry, show_discord)}</td>
                 <td class="num">{len(nights)}</td>
                 <td>{sparkline(scores)}</td>
                 <td class="num" data-v="{scores[-1]}">{scores[0]} → <b>{scores[-1]}</b></td>
@@ -282,7 +298,7 @@ def trends_card(night_data, trend_href, owners=None):
     body = ''.join(r for _, r in sorted(rows, key=lambda r: -r[0]))
     return f"""
     <div class="card">
-        <h2>📈 Player trends</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📈</span><div><h2>Player trends</h2></div></div></div>
         <p class="muted small">Each player's score on this boss, night by night (most improved first). Alts are
            combined per person through their linked characters and signups. Click a player for the full picture.</p>
         <div class="table-wrapper"><table class="compact">
@@ -353,7 +369,7 @@ def _mechanics_heat(nights, guide_for):
             f'{"".join(body)}</table></div>')
 
 
-def trend_page(entry, guide_for, night_href):
+def trend_page(entry, guide_for, night_href, show_discord=True):
     """One person on one boss across nights (all their characters). entry: from player_history."""
     nights = entry['nights']
     last = nights[-1][2]
@@ -376,7 +392,7 @@ def trend_page(entry, guide_for, night_href):
         <div class="player-hero">
             {score_ring(last['score'], 'lg')}
             <div>
-                <h2>{_person_label(entry)}</h2>
+                <h2>{_person_label(entry, show_discord)}</h2>
                 <p class="muted">{ROLE_ICONS.get(last['role'], '')} {esc(last['spec'])} {esc(_class_label(last['class']))} ·
                    {len(nights)} night{'s' if len(nights) != 1 else ''} on this boss · latest score {last['score']}
                    ({_delta(nights[0][2]['score'], last['score'])} since the first night)</p>
@@ -386,7 +402,7 @@ def trend_page(entry, guide_for, night_href):
          if len(nights) > 1 else ''}
     </div>
     <div class="card">
-        <h2>🗓️ Night by night</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">🗓️</span><div><h2>Night by night</h2></div></div></div>
         <div class="table-wrapper"><table class="compact">
             <tr><th>Night</th>{'<th>Character</th>' if alts else ''}<th class="num">Pulls</th><th class="num">Score</th>{sub_heads}
                 <th class="num">Deaths</th><th class="num">Avoidable hits / pull</th><th>Biggest issue</th></tr>

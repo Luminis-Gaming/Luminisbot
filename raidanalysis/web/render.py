@@ -98,6 +98,32 @@ th[data-sort]:hover { color: var(--text); }
 .chart .grid { stroke: rgba(255,255,255,0.06); }
 .chart .axis-label { fill: var(--faint); }
 .chart a:hover circle.mark { stroke: #fff; stroke-width: 2; }
+/* Sections: every card opens with a header (sec-head, or a plain h2 styled alike); parts inside a
+   card are sub-sections with their own divider + label - nothing runs into the next thing. */
+.card { margin-bottom: 20px; }
+.card > h2:first-child { padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.sec-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+    padding-bottom: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.sec-title { display: flex; gap: 14px; align-items: flex-start; min-width: 0; }
+.sec-title h2 { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sec-icon { flex: none; width: 38px; height: 38px; border-radius: 11px; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 19px; background: var(--surface-3); border: 1px solid var(--border); }
+.sec-sub { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; max-width: 900px; }
+.sec-action { flex: none; display: flex; gap: 8px; align-items: center; }
+.sub { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--border); }
+.sub:first-child, .sec-head + .sub { margin-top: 0; padding-top: 0; border-top: 0; }
+.sub-title { margin: 0 0 12px; font-size: 12px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--faint); }
+.sub-caption { margin: 8px 0 0; color: var(--faint); font-size: 12px; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.stat-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; }
+.stat-tile b { display: block; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+.stat-tile span { display: block; margin-top: 2px; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--faint); }
+@media (max-width: 600px) {
+    .sec-head { flex-direction: column; }
+    .sec-icon { width: 32px; height: 32px; font-size: 16px; }
+}
 /* Mechanics table: filter chips + expandable rows */
 .mech-wrap .tl-chips { margin-bottom: 10px; }
 tr.mech-row { cursor: pointer; }
@@ -698,6 +724,7 @@ document.querySelectorAll('.tl').forEach(tl => {
 document.addEventListener('click', e => {
   const btn = e.target.closest('.clip-btn');
   const modal = document.getElementById('clip-modal');
+  if (btn && !btn.dataset.embed.startsWith('https://www.mythictrap.com/')) return;  // only ever Mythic Trap
   if (btn) {
     e.preventDefault(); e.stopPropagation();
     modal.querySelector('h3').textContent = btn.dataset.title;
@@ -777,6 +804,56 @@ def player_name(name, cls='', role=None):
     return f'{icon}<span style="color:{color};font-weight:600">{esc(name)}</span>'
 
 
+_ICON_FILE = __import__('re').compile(r'^[A-Za-z0-9_.-]{1,120}$')
+_ICON_HOSTS = ('https://assets.rpglogs.com/', 'https://wow.zamimg.com/')
+
+
+def safe_icon(icon):
+    """
+    An icon file name or URL we're willing to put in src="" / CSS url(): a plain file name, or a URL on
+    the two icon hosts made of the same safe characters. Anything else (quotes, parentheses, ...) is
+    dropped - icon names come from logs and Wowhead, and CSS url() isn't covered by HTML escaping.
+    """
+    if not icon:
+        return None
+    if icon.startswith(_ICON_HOSTS):
+        host = next(h for h in _ICON_HOSTS if icon.startswith(h))
+        rest = icon[len(host):]
+        return icon if rest and all(_ICON_FILE.match(part) for part in rest.split('/')) else None
+    return icon if _ICON_FILE.match(icon) else None
+
+
+def json_for_script(data):
+    """JSON safe inside <script type="application/json">: no '<' at all (no </script>, no <!--)."""
+    import json
+    return json.dumps(data, ensure_ascii=False).replace('<', BACKSLASH + 'u003c')
+
+
+BACKSLASH = chr(92)
+
+
+def section_head(icon, title, sub='', action=''):
+    """
+    A card's header: icon tile, title, optional one-paragraph explanation and an action on the right,
+    with a divider under it. title / sub / action are HTML (escape what comes from data).
+    """
+    sub_html = f'<p class="sec-sub">{sub}</p>' if sub else ''
+    action_html = f'<div class="sec-action">{action}</div>' if action else ''
+    return (f'<div class="sec-head"><div class="sec-title"><span class="sec-icon">{icon}</span>'
+            f'<div><h2>{title}</h2>{sub_html}</div></div>{action_html}</div>')
+
+
+def subsection(title, body, extra_class=''):
+    """A part of a card: divider + small label, so stacked parts don't run into each other."""
+    return f'<section class="sub {extra_class}"><h3 class="sub-title">{title}</h3>{body}</section>'
+
+
+def stat_tiles(tiles):
+    """A row of key numbers: [(value_html, label)]."""
+    items = ''.join(f'<div class="stat-tile"><b>{value}</b><span>{label}</span></div>' for value, label in tiles)
+    return f'<div class="stat-tiles">{items}</div>'
+
+
 def boss_portrait(encounter_id, size='', killed=False):
     """The boss's portrait from Warcraft Logs (56 px); size '' (tabs), 'sm' (tables) or 'lg' (titles)."""
     classes = ' '.join(c for c in ('boss-portrait', size, 'killed' if killed else '') if c)
@@ -786,6 +863,7 @@ def boss_portrait(encounter_id, size='', killed=False):
 
 def ability(name, icon=None, ability_id=None, guide=None):
     """Icon + name; hovering (or tapping) shows the spell's Wowhead tooltip (PAGE_JS), clicking opens Wowhead."""
+    icon = safe_icon(icon)
     img = f'<img class="ability-icon" src="{ICON_BASE}{esc(icon)}" alt="" loading="lazy">' if icon else ''
     label = esc(name)
     spell = ''
@@ -793,6 +871,8 @@ def ability(name, icon=None, ability_id=None, guide=None):
         label = (f'<a href="https://www.wowhead.com/spell={int(ability_id)}" target="_blank" rel="noopener" '
                  f'style="color:inherit">{label}</a>')
         spell = f' data-spell="{int(ability_id)}"'
+        from ..spells import offer
+        offer([ability_id])  # its tooltip may be looked up on demand (/raids/spell)
     return f'<span class="ability-cell"{spell}>{img}{label}{guide_button(guide, name)}</span>'
 
 
@@ -1055,18 +1135,18 @@ def spell_data_json(spells, spell_lookup=None):
     log's name and icon otherwise. spells: {id: (name, rpglogs icon file)}; spell_lookup(ids) ->
     {id: {'name', 'icon', 'meta', 'description'}} (spells.lookup).
     """
-    import json
-    from ..spells import icon_url
+    from ..spells import icon_url, offer
     known = spell_lookup(list(spells)) if spell_lookup and spells else {}
+    offer(spells)
     out = {}
     for sid, (name, icon) in spells.items():
         info = known.get(sid) or {}
+        icon = safe_icon(icon)
         out[sid] = {'name': info.get('name') or name,
                     'icon': (icon if icon.startswith('http') else f'{ICON_BASE}{icon}') if icon
-                            else icon_url(info.get('icon')),
+                            else safe_icon(icon_url(info.get('icon'))),
                     'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
-    # Inside <script>: keep "</script>" from ever closing it early.
-    return json.dumps(out, ensure_ascii=False).replace('</', '<' + chr(92) + '/')
+    return json_for_script(out)
 
 
 def deaths_strip(rows, spell_lookup=None):
