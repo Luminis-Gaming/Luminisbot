@@ -16,6 +16,7 @@ from aiohttp import web
 from .. import analyzer, benchmarks, db, guides, progstats, spells, sync, teams
 from . import compare, consumables, insights, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
+                     hit_timeline,
                      difficulty_pill,
                      pull_histogram,
                      phase_funnel,
@@ -193,9 +194,34 @@ def _boss_status(boss):
 
 def _team_query(team, **more):
     """'?team=sun&nights=3' - the query string that keeps a team (and other params) on links."""
-    params = {'team': team, **more}
+    params = {'team': team or teams.ALL, **more}
     query = '&'.join(f'{k}={quote(str(v))}' for k, v in params.items() if v)
     return f'?{query}' if query else ''
+
+
+TEAM_COOKIE = 'raid_team'
+
+
+def _team(request):
+    """The team to show: ?team= if given, else the one this browser picked last (cookie), else teams.DEFAULT."""
+    return teams.parse(request.query.get('team') or request.cookies.get(TEAM_COOKIE))
+
+
+def _remember_team(request, response):
+    """
+    Picking a team in the team dropdown / chips (?team=…&pick=1) sticks for this browser, so Team Moon
+    raiders don't have to switch every time. Other links that merely carry a team don't change it.
+    """
+    value = request.query.get('team')
+    if request.query.get('pick') and value and (value == teams.ALL or value in dict(teams.options())):
+        response.set_cookie(TEAM_COOKIE, value, max_age=365 * 24 * 3600, path='/', samesite='Lax')
+    return response
+
+
+def _night_team(report):
+    """The team whose night this is (None = all teams: unattached logs, for-fun raids)."""
+    team = teams.of_channel(report.get('event_channel_id'))
+    return team if team in dict(teams.options()) else None
 
 
 def _team_pill(channel_id):
@@ -221,7 +247,7 @@ def _overview_filters(request, tiers):
         zone_id = int(tier_arg)
     else:
         zone_id = known[0]['zone_id'] if known else None
-    team = teams.parse(request.query.get('team'))
+    team = _team(request)
     diff_arg = request.query.get('difficulty')
     difficulty = int(diff_arg) if diff_arg and diff_arg.isdigit() and int(diff_arg) in DIFFICULTY_NAMES else None
 
@@ -233,13 +259,14 @@ def _overview_filters(request, tiers):
     diff_options = f'<option value=""{" selected" if difficulty is None else ""}>All difficulties</option>' + ''.join(
         f'<option value="{d}"{" selected" if d == difficulty else ""}>{name}</option>'
         for d, name in sorted(DIFFICULTY_NAMES.items(), reverse=True))
-    team_options = f'<option value=""{" selected" if team is None else ""}>All teams</option>' + ''.join(
+    team_options = f'<option value="{teams.ALL}"{" selected" if team is None else ""}>All teams</option>' + ''.join(
         f'<option value="{key}"{" selected" if key == team else ""}>{esc(teams.label(key))}</option>'
         for key, _ in teams.options())
     bar = (f'<form method="get" class="filter-bar">'
            f'<label>Raid tier <select name="tier" onchange="this.form.submit()">{tier_options}</select></label>'
            f'<label>Difficulty <select name="difficulty" onchange="this.form.submit()">{diff_options}</select></label>'
            f'<label>Team <select name="team" onchange="this.form.submit()">{team_options}</select></label>'
+           f'<input type="hidden" name="pick" value="1">'
            f'<noscript><button class="btn btn-secondary btn-sm">Filter</button></noscript></form>')
     return zone_id, difficulty, team, bar
 
@@ -335,7 +362,7 @@ async def handle_overview(request):
             {''.join(night_rows) or '<tr><td colspan="7" class="muted">Nothing yet.</td></tr>'}
         </table></div>
     </div>"""
-    return _page("Raid Analysis", session, body)
+    return _remember_team(request, _page("Raid Analysis", session, body))
 
 
 # ============================================================================
@@ -542,39 +569,111 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
     </div>"""
 
 
-def _mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, difficulty, here):
-    """Damage taken per enemy ability (one pull, or several merged), with tag buttons."""
+# Filter groups for the mechanics table, in chip order: (key, label, shown by default).
+MECH_GROUPS = (('avoidable', '🔴 Avoidable', True), ('nontank', '🟠 Non-tanks', True),
+               ('untagged', '⚪ Untagged', True), ('expected', '🟢 Expected', False), ('ignored', '⚫ Ignored', False))
+
+
+def _mech_group(tag):
+    return {analyzer.TAG_AVOIDABLE: 'avoidable', analyzer.TAG_AVOIDABLE_NON_TANK: 'nontank',
+            guides.EXPECTED: 'expected', analyzer.TAG_IGNORE: 'ignored'}.get(tag, 'untagged')
+
+
+def _mech_detail(a, counts, pname, per_pull, pull_href, timeline, avoidable=False):
+    """The expanded part of a mechanics row: per pull (night view), who took it, when (one pull)."""
+    parts = []
+    if per_pull:
+        rows = []
+        for p in per_pull:
+            own = next((x for x in p['analysis'].get('abilities') or [] if x['id'] == a['id']), None)
+            if not own:
+                continue
+            own_counts = analyzer.mistake_counts(own)
+            victims = sorted((own.get('players') or {}).items(),
+                             key=lambda kv: -(own_counts.get(kv[0], 0) * 1e12 + (kv[1].get('damage') or 0)))
+            worst = ', '.join(pname(n) + (f' ×{own_counts[n]}' if own_counts.get(n) else '') for n, _ in victims[:4])
+            result = '✔ Kill' if p.get('kill') else f"{p.get('fight_pct') or 0:.0f}%"
+            rows.append(f'<tr><td><a href="{esc(pull_href(p))}">#{p["number"]}</a> '
+                        f'<span class="muted small">{esc(result)}</span></td>'
+                        f'<td class="num">{fmt_amount(own.get("total") or 0)}</td>'
+                        f'<td class="num">{len(own.get("players") or {}) if own.get("complete") else "5+"}</td>'
+                        f'<td class="num">{sum(own_counts.values()) if own.get("complete") else "—"}</td>'
+                        f'<td class="small">{worst}</td></tr>')
+        if rows:
+            parts.append('<div><h4>Per pull</h4><div class="table-wrapper"><table class="compact"><tr><th>Pull</th>'
+                         '<th class="num">Damage</th><th class="num">Players</th>'
+                         f'<th class="num">{"Mistakes" if avoidable else "Hits"}</th>'
+                         f'<th>Worst hit</th></tr>{"".join(rows)}</table></div></div>')
+    players = sorted((a.get('players') or {}).items(),
+                     key=lambda kv: -(counts.get(kv[0], 0) * 1e12 + (kv[1].get('damage') or 0)))
+    if players:
+        shown = players[:15]
+        rows = ''.join(f'<tr><td>{pname(n)}</td><td class="num">{fmt_amount(st.get("damage") or 0)}</td>'
+                       f'<td class="num">{st.get("hits") or 0}</td><td class="num">{st.get("ticks") or 0}</td>'
+                       + (f'<td class="num">{counts.get(n) or ""}</td>' if avoidable else '') + '</tr>'
+                       for n, st in shown)
+        more = f'<p class="muted small">+{len(players) - 15} more</p>' if len(players) > 15 else ''
+        note = '' if a.get('complete') else ('<p class="muted small">Raid-wide ability: Warcraft Logs only lists '
+                                             'its top 5 targets.</p>')
+        parts.append(f'<div><h4>Who took it</h4><div class="table-wrapper"><table class="compact"><tr><th>Player</th>'
+                     f'<th class="num">Damage</th><th class="num">Hits</th><th class="num">Ticks</th>'
+                     + ('<th class="num" title="Hits that count as a mistake for its tag">Mistakes</th>' if avoidable else '')
+                     + f'</tr>{rows}</table>'
+                     f'</div>{more}{note}</div>')
+    if timeline:
+        duration, phases = timeline
+        times = [(n, st.get('times') or []) for n, st in players if st.get('times')]
+        if times:
+            parts.append(f'<div class="mech-wide"><h4>When</h4>{hit_timeline(times[:15], duration, phases)}</div>')
+    return f'<div class="mech-detail-grid">{"".join(parts)}</div>' if parts else '<p class="muted">No details.</p>'
+
+
+def _mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, difficulty, here,
+                     per_pull=None, pull_href=None, timeline=None):
+    """
+    Damage taken per enemy ability (one pull, or several merged) with tag buttons, filter chips per tag
+    (Expected / Ignored start hidden: rarely what a review is about) and a click-to-expand detail per
+    ability: per pull (per_pull + pull_href, night view), who took it, and when (timeline = (duration,
+    phases), pull view).
+    """
     raid_size = max(1, len(analysis.get('players') or []))
-    shown, ignored = [], []
+    rows, group_counts = [], {}
     for a in analysis.get('abilities') or []:
         tag = tags.get(a['id'])
+        group = _mech_group(tag)
+        group_counts[group] = group_counts.get(group, 0) + 1
         counts = analyzer.mistake_counts(a)
         players = sorted((a.get('players') or {}).items(),
                          key=lambda kv: -(counts.get(kv[0], 0) * 1e12 + (kv[1].get('damage') or 0)))
-        who = ', '.join(f'{pname(n)}' + (f' ×{counts[n]}' if counts.get(n) else '') for n, _ in players[:8])
-        if len(players) > 8:
-            who += f' <span class="muted">+{len(players) - 8} more</span>'
+        who = ', '.join(f'{pname(n)}' + (f' ×{counts[n]}' if counts.get(n) else '') for n, _ in players[:5])
+        if len(players) > 5:
+            who += f' <span class="muted">+{len(players) - 5}</span>'
         hits = sum(counts.values()) if a.get('complete') else None
-        row = f"""
-            <tr>
-                <td>{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
+        hidden = '' if dict((k, on) for k, _, on in MECH_GROUPS)[group] else ' hidden'
+        rows.append(f"""
+            <tr class="mech-row" data-mg="{group}"{hidden} tabindex="0" title="Click for details">
+                <td><span class="mech-caret">▸</span>{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
                     {tag_pill(tag, sources.get(a['id'])) if tag != analyzer.TAG_IGNORE else ''}</td>
                 <td class="small muted">{esc(a.get('source') or '')}</td>
                 <td class="num" data-v="{a['total']}">{fmt_amount(a['total'])}</td>
                 <td class="num" data-v="{len(players)}">{len(players) if a.get('complete') else '5+'}/{raid_size}</td>
-                <td class="num">{hits if hits is not None else '<span class="muted" title="Raid-wide ability — only the top 5 targets are known">—</span>'}</td>
+                <td class="num" data-v="{hits or 0}">{hits if hits is not None else '<span class="muted" title="Raid-wide ability — only the top 5 targets are known">—</span>'}</td>
                 <td class="small">{who}</td>
                 <td>{tag_buttons(encounter_id, difficulty, a['id'], a['name'], tag, sources.get(a['id']), here)}</td>
-            </tr>"""
-        (ignored if tag == analyzer.TAG_IGNORE else shown).append(row)
+            </tr>
+            <tr class="mech-detail" data-mg="{group}" hidden><td colspan="7">
+                {_mech_detail(a, counts, pname, per_pull, pull_href, timeline, group in ('avoidable', 'nontank'))}</td></tr>""")
+    chips = ''.join(
+        f'<button type="button" class="tl-chip" data-mg="{key}" aria-pressed="{"true" if on else "false"}">'
+        f'{label} <span class="muted">{group_counts[key]}</span></button>'
+        for key, label, on in MECH_GROUPS if group_counts.get(key))
     head = ('<tr><th data-sort>Ability</th><th>Source</th><th data-sort class="num">Damage</th>'
-            '<th data-sort class="num">Players hit</th><th data-sort class="num">Hits</th><th>Who</th>'
-            '<th>Tag</th></tr>')
-    ignored_html = (f'<details style="margin-top:10px"><summary class="muted">{len(ignored)} ignored '
-                    f'abilit{"y" if len(ignored) == 1 else "ies"}</summary><div class="table-wrapper">'
-                    f'<table class="compact">{head}{"".join(ignored)}</table></div></details>') if ignored else ''
-    return (f'<div class="table-wrapper"><table class="compact">{head}{"".join(shown)}</table></div>'
-            f'{ignored_html}')
+            '<th data-sort class="num">Players hit</th><th data-sort class="num" title="Direct hits, counted the way '
+            'mistakes are (several ticks of one cast count once) - mistakes when the ability is tagged avoidable">'
+            'Hits</th><th>Who</th><th>Tag</th></tr>')
+    return (f'<div class="mech-wrap"><div class="tl-chips">{chips}</div>'
+            f'<div class="table-wrapper"><table class="compact mech-table">{head}{"".join(rows)}</table></div>'
+            f'<p class="muted small mech-empty" hidden>Nothing in the selected groups.</p></div>')
 
 
 def _roster_names(analysis):
@@ -612,7 +711,8 @@ def _consumables_card(insight_pulls, roster):
 
 def _insight_pulls(numbered, enrage_ids=()):
     return [{'number': number, 'kill': pull['kill'], 'analysis': _with_duration(pull),
-             'fight_id': pull['fight_id'], 'reason': _pull_reason(pull, enrage_ids),
+             'fight_id': pull['fight_id'], 'fight_pct': pull.get('fight_pct'),
+             'reason': _pull_reason(pull, enrage_ids),
              'phases': [p['start'] for p in (pull.get('phases') or [])[1:]]} for number, pull in numbered]
 
 
@@ -676,7 +776,7 @@ async def handle_night(request):
     body = _night_header(request, report, code, pulls, selected) + f"""
     <div class="card">
         <h2>{esc(name)} {difficulty_pill(difficulty)} — overall
-            <a href="/admin/raids/boss/{encounter_id}/{difficulty}" class="btn btn-secondary btn-sm"
+            <a href="/admin/raids/boss/{encounter_id}/{difficulty}{_team_query(_night_team(report))}" class="btn btn-secondary btn-sm"
                style="float:right">Progression across nights →</a></h2>
         <p class="muted">{_plural(len(boss_pulls), "pull")} ·
            {fmt_duration(sum(p['end_ms'] - p['start_ms'] for p in boss_pulls))} in combat</p>
@@ -708,7 +808,10 @@ async def handle_night(request):
     </div>
     <div class="card">
         <h2>🎯 Damage taken by mechanic — all pulls</h2>
-        {_mechanics_table(merged, tags, sources, guide_for, _roster_names(merged), encounter_id, difficulty, here)}
+        <p class="muted small">Pick which tags to show with the chips; click an ability for its damage per pull
+           and who took it.</p>
+        {_mechanics_table(merged, tags, sources, guide_for, _roster_names(merged), encounter_id, difficulty, here,
+                          per_pull=insight_pulls, pull_href=lambda p: f'/admin/raids/report/{code}/{p["fight_id"]}')}
     </div>
     <div class="card">
         <h2>👥 Players</h2>
@@ -785,8 +888,11 @@ async def handle_pull(request):
     <div class="card">
         <h2>🎯 Damage taken by mechanic</h2>
         <p class="muted small">Tags marked <em>auto</em> come from the boss's Mythic Trap guide; clicking a tag
-           overrides it for this boss on every night. Raid-wide abilities only show their top 5 targets.</p>
-        {_mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, difficulty, here)}
+           overrides it for this boss on every night. Raid-wide abilities only show their top 5 targets.
+           Pick tags with the chips; click an ability to see who took it and when.</p>
+        {_mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, difficulty, here,
+                          timeline=(pull['end_ms'] - pull['start_ms'],
+                                    [p['start'] for p in (pull.get('phases') or [])[1:]]))}
     </div>
     <div class="card">
         <h2>👥 Players</h2>
@@ -854,7 +960,9 @@ async def handle_player(request):
     body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
             + players.player_page(player, guide_for,
                                   lambda number: f'/admin/raids/report/{code}/{fights[number]}')
-            + _compare_card(code, selected, name, list(enumerate(groups[selected], 1))))
+            + _compare_card(request, code, selected, name, list(enumerate(groups[selected], 1)),
+                            f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'
+                            + (f'&pull={fight_id}' if fight_id else '')))
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
 
 
@@ -896,22 +1004,70 @@ def _benchmark_status(data):
     return ''
 
 
-def _compare_card(code, selected, name, numbered):
-    """Player page: how their major cooldowns line up with the top parses of their spec, and a link."""
+def _compare_pull(data, wanted=None):
+    """Which pull the timeline shows: the one asked for, else the kill, else the longest (1 min+ preferred)."""
+    eligible = [p for p in data['pulls'] if p['duration'] >= benchmarks.MIN_PULL_MS] or data['pulls']
+    pull = next((p for p in eligible if wanted and str(p['fight_id']) == str(wanted)), None) or \
+        max(eligible, key=lambda p: (bool(p.get('kill')), p['duration']))
+    return eligible, pull
+
+
+def _compare_sections(code, numbered, data, pull, eligible, chip_href):
+    """(intro, summary, timeline) HTML for the comparison - the compare page and the player page share it."""
+    rows_by_fight = {p['fight_id']: p for _, p in numbered}
+
+    def chip_label(p):
+        return '✔ Kill' if p.get('kill') else f"{rows_by_fight[p['fight_id']]['fight_pct'] or 0:.0f}%"
+    pull_chips = ''.join(
+        f'<a class="pull-chip{" kill" if p.get("kill") else ""}{" active" if p is pull else ""}" '
+        f'href="{chip_href(p["fight_id"])}" '
+        f'title="Pull {p["number"]}: {esc(_result_text(rows_by_fight[p["fight_id"]]))}">'
+        f'#{p["number"]} {chip_label(p)}</a>' for p in eligible)
+    fetched = data['benchmark'].get('fetched_at')
+    intro = f"""
+        <p class="small">Major cooldowns, potions and defensives next to the top {len(data['top'])}
+           {esc(data['label'])} parses on Warcraft Logs{f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ""}.
+           "Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives.
+           Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.</p>
+        {_reanalyze_hint(data, code)}"""
+    summary = f"""
+        <p class="muted small">"Lined up" counts the moments where at least 3 of the top {len(data['top'])} press an
+           ability (phase by phase, as phases start at different times for everyone) that your pulls reached,
+           and how many of those you pressed it within ±{benchmarks.TOLERANCE_MS // 1000} s. Externals and raid
+           cooldowns are shown for reference only - they depend on your raid's plan.</p>
+        {compare.summary(data)}"""
+    timeline = f"""
+        <p class="muted small">Grouped by ability: your pull first, then the top players. Shaded bands are the
+           moments most of them agree on; the boss's abilities on top are from your pull.
+           <strong>Align phases</strong> lines everyone's phases up;
+           <strong>Real time</strong> shows each fight as it happened. Pick abilities with the chips; hover
+           anything for details.</p>
+        <div class="pull-chips" style="margin-bottom:12px"><span class="chips-label">Pull</span>{pull_chips}</div>
+        {compare.timeline(data, pull, _boss_timeline_of(numbered, pull['fight_id']), spells.lookup)}"""
+    return intro, summary, timeline
+
+
+def _compare_card(request, code, selected, name, numbered, page_href):
+    """Player page: the whole comparison right there - verdicts, then the timeline (no extra click)."""
     data = benchmarks.for_player(numbered, name)
     why = _benchmark_status(data)
     if why or not data['rows']:
-        return (f'<div class="card"><h2>⚔️ Cooldowns vs top players</h2>'
+        return (f'<div class="card" id="compare"><h2>⚔️ Cooldowns vs top players</h2>'
                 f'<p class="muted">{why or "Not enough long pulls to compare yet."}</p></div>')
-    items = ''.join(f'<li class="note {n["tone"]}">{"✅" if n["tone"] == "good" else "⚠️"} {esc(n["text"])}</li>'
-                    for n in benchmarks.notes(data['rows'], data['label'], limit=4))
+    eligible, pull = _compare_pull(data, request.query.get('tl') or request.query.get('pull'))
+    joiner = '&' if '?' in page_href else '?'
+    intro, summary, timeline = _compare_sections(
+        code, numbered, data, pull, eligible, lambda fight_id: f'{page_href}{joiner}tl={fight_id}#compare')
     return f"""
-    <div class="card">
+    <div class="card" id="compare">
         <h2>⚔️ Cooldowns vs top players</h2>
-        <p class="muted small">Your major cooldowns, potions and defensives on this boss compared with the top
-           {len(data['top'])} {esc(data['label'])} on Warcraft Logs.</p>
-        <ul class="notes">{items or '<li class="muted">Nothing stands out.</li>'}</ul>
-        <p><a class="btn btn-primary btn-sm" href="{compare_url(code, selected, name)}">Open the timeline →</a></p>
+        {intro}
+        <details class="top-players"><summary class="small">The top {len(data['top'])} {esc(data['label'])}</summary>
+            {compare.top_players(data)}</details>
+        <h3 style="margin-top:16px">📋 Summary</h3>
+        {summary}
+        <h3 style="margin-top:22px">🕒 Timeline</h3>
+        {timeline}
     </div>"""
 
 
@@ -932,7 +1088,10 @@ def _boss_timeline_of(numbered, fight_id):
 
 
 async def handle_compare(request):
-    """GET /admin/raids/report/{code}/compare/{name}?boss=&pull= - cooldowns vs the top parses of the spec."""
+    """
+    GET /admin/raids/report/{code}/compare/{name}?boss=&pull= - cooldowns vs the top parses of the spec,
+    on its own page (what the Discord recap links to; on the site it's part of the player page).
+    """
     session = _session(request)
     code, name = request.match_info['code'], request.match_info['name']
     report = db.get_report(code)
@@ -946,54 +1105,21 @@ async def handle_compare(request):
     back = f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'
     await benchmarks.ensure_spells_for(numbered, name)
     data = benchmarks.for_player(numbered, name)
-    head = (f'<div class="card"><p><a href="{back}">← {esc(name)} on {esc(boss_name)}</a></p>'
+    head = (f'<div class="card"><p><a href="{back}">← {esc(name)} on {esc(boss_name)} (full player view)</a></p>'
             f'<h1>⚔️ {esc(name)} vs the top {esc(data["label"]) if data else "players"}</h1>'
             f'<p class="muted">{esc(boss_name)} {difficulty_pill(selected[1])} · {esc(report["title"])}</p>')
     why = _benchmark_status(data)
     if why:
         return _page(f'{name} vs top players', session, head + f'<p>{why}</p></div>')
-
-    eligible = [p for p in data['pulls'] if p['duration'] >= benchmarks.MIN_PULL_MS] or data['pulls']
-    wanted = request.query.get('pull')
-    pull = next((p for p in eligible if wanted and str(p['fight_id']) == wanted), None) or \
-        max(eligible, key=lambda p: (bool(p.get('kill')), p['duration']))
-    # Same chips as the night header: which of tonight's pulls the timeline shows.
-    rows_by_fight = {p['fight_id']: p for _, p in numbered}
-
-    def chip_label(p):
-        return '✔ Kill' if p.get('kill') else f"{rows_by_fight[p['fight_id']]['fight_pct'] or 0:.0f}%"
-    pull_chips = ''.join(
-        f'<a class="pull-chip{" kill" if p.get("kill") else ""}{" active" if p is pull else ""}" '
-        f'href="{compare_url(code, selected, name, p["fight_id"])}" '
-        f'title="Pull {p["number"]}: {esc(_result_text(rows_by_fight[p["fight_id"]]))}">'
-        f'#{p["number"]} {chip_label(p)}</a>' for p in eligible)
-    fetched = data['benchmark'].get('fetched_at')
+    eligible, pull = _compare_pull(data, request.query.get('pull'))
+    intro, summary, timeline = _compare_sections(
+        code, numbered, data, pull, eligible, lambda fight_id: compare_url(code, selected, name, fight_id))
     body = head + f"""
-        <p class="small">Your major cooldowns, potions and defensives next to the top {len(data['top'])}
-           {esc(data['label'])} parses on Warcraft Logs{f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ""}.
-           "Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives.
-           Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.</p>
+        {intro}
         {compare.top_players(data)}
-        {_reanalyze_hint(data, code)}
     </div>
-    <div class="card">
-        <h2>📋 Summary</h2>
-        <p class="muted small">"Lined up" counts the moments where at least 3 of the top {len(data['top'])} press an
-           ability (phase by phase, as phases start at different times for everyone) that your pulls reached,
-           and how many of those you pressed it within ±{benchmarks.TOLERANCE_MS // 1000} s. Externals and raid
-           cooldowns are shown for reference only - they depend on your raid's plan.</p>
-        {compare.summary(data)}
-    </div>
-    <div class="card">
-        <h2>🕒 Timeline</h2>
-        <p class="muted small">Grouped by ability: your pull first, then the top players. Shaded bands are the
-           moments most of them agree on; the boss's abilities on top are from your pull.
-           <strong>Align phases</strong> lines everyone's phases up;
-           <strong>Real time</strong> shows each fight as it happened. Pick abilities with the chips; hover
-           anything for details.</p>
-        <div class="pull-chips" style="margin-bottom:12px"><span class="chips-label">Pulls</span>{pull_chips}</div>
-        {compare.timeline(data, pull, _boss_timeline_of(numbered, pull['fight_id']), spells.lookup)}
-    </div>"""
+    <div class="card"><h2>📋 Summary</h2>{summary}</div>
+    <div class="card"><h2>🕒 Timeline</h2>{timeline}</div>"""
     return _page(f'{name} vs top players · {boss_name}', session, body)
 
 
@@ -1008,12 +1134,13 @@ async def handle_boss(request):
         difficulty = int(request.match_info['difficulty'])
     except ValueError:
         raise web.HTTPNotFound()
-    team = teams.parse(request.query.get('team'))
+    team = _team(request)
     base = f'/admin/raids/boss/{encounter_id}/{difficulty}'
     pulls = db.get_boss_pulls(encounter_id, difficulty, with_analysis=True, team=team)
     if not pulls:
         if team:
-            raise web.HTTPFound(base + '?error=' + quote(f'No {teams.label(team)} pulls on that boss yet.'))
+            # to all teams explicitly: the bare URL means the default team again
+            raise web.HTTPFound(base + _team_query(None) + '&error=' + quote(f'No {teams.label(team)} pulls on that boss yet.'))
         raise web.HTTPFound('/admin/raids?error=' + quote('No pulls for that boss yet.'))
     tags, sources = _effective_tags(encounter_id)
     guide_for = _guide_lookup(encounter_id)
@@ -1126,7 +1253,7 @@ async def handle_boss(request):
             </tr>""")
 
     team_links = '<span class="chips-label">Team</span>' + ''.join(
-        f'<a class="pull-chip{" active" if key == team else ""}" href="{base}{_team_query(key, nights=last_n or None)}">'
+        f'<a class="pull-chip{" active" if key == team else ""}" href="{base}{_team_query(key, nights=last_n or None, pick=1)}">'
         f'{esc(teams.label(key) if key else "All teams")}</a>'
         for key in [None] + [k for k, _ in teams.options()])
     scope_links = '<span class="chips-label">Nights</span>' + ''.join(
@@ -1191,7 +1318,7 @@ async def handle_boss(request):
             {''.join(mech_rows)}
         </table></div>
     </div>"""
-    return _page(name, session, body)
+    return _remember_team(request, _page(name, session, body))
 
 
 def _guides_card(encounter_id, difficulty, here):
@@ -1302,7 +1429,7 @@ async def handle_player_trend(request):
     name = request.match_info['name']
     tags, _ = _effective_tags(encounter_id)
     guide_for = _guide_lookup(encounter_id)
-    team = teams.parse(request.query.get('team'))
+    team = _team(request)
     night_data = _boss_night_data(encounter_id, difficulty, tags, guide_for, team)
     owners = db.character_owners()
     history = players.player_history(night_data, owners)
@@ -1317,7 +1444,7 @@ async def handle_player_trend(request):
             f'<h1>{esc(title)} on {esc(boss_name)}</h1></div>'
             + players.trend_page(entry, guide_for,
                                  lambda code, player: players.player_url(code, player, (encounter_id, difficulty))))
-    return _page(f'{title} · {boss_name} trend', session, body)
+    return _remember_team(request, _page(f'{title} · {boss_name} trend', session, body))
 
 
 def _short_date(epoch_ms):

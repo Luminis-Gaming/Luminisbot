@@ -98,8 +98,20 @@ th[data-sort]:hover { color: var(--text); }
 .chart .grid { stroke: rgba(255,255,255,0.06); }
 .chart .axis-label { fill: var(--faint); }
 .chart a:hover circle.mark { stroke: #fff; stroke-width: 2; }
+/* Mechanics table: filter chips + expandable rows */
+.mech-wrap .tl-chips { margin-bottom: 10px; }
+tr.mech-row { cursor: pointer; }
+tr.mech-row:hover td { background: var(--surface-2); }
+tr.mech-row.open td { background: var(--accent-soft); }
+.mech-caret { display: inline-block; width: 14px; color: var(--faint); transition: transform .15s; }
+tr.mech-row.open .mech-caret { transform: rotate(90deg); color: var(--text); }
+tr.mech-detail > td { background: var(--surface-2); padding: 12px 16px 16px; }
+.mech-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px 24px; }
+.mech-detail-grid h4 { margin: 0 0 6px; }
+.mech-detail-grid .mech-wide { grid-column: 1 / -1; }
 /* Compare-with-top-players page (web/compare.py) */
 .top-list { margin: 8px 0 0 18px; padding: 0; font-size: 13px; line-height: 1.7; }
+details.top-players > summary { cursor: pointer; color: var(--accent); margin: 4px 0; }
 .notes { list-style: none; margin: 8px 0 14px; padding: 0; }
 .notes li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
 .notes li:last-child { border-bottom: 0; }
@@ -408,12 +420,14 @@ document.querySelectorAll('[data-ts]').forEach(el => {
 });
 document.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => {
   const table = th.closest('table'), idx = [...th.parentNode.children].indexOf(th);
-  const rows = [...table.querySelectorAll('tr')].filter(r => r.querySelector('td'));
+  const rows = [...table.querySelectorAll('tr')].filter(r => r.querySelector('td') && !r.classList.contains('mech-detail'));
+  const details = new Map(rows.map(r => [r, r.nextElementSibling && r.nextElementSibling.classList.contains('mech-detail')
+                                              ? r.nextElementSibling : null]));
   const asc = th.dataset.dir !== 'asc'; th.dataset.dir = asc ? 'asc' : 'desc';
   const val = r => { const c = r.children[idx]; const v = c.dataset.v ?? c.textContent.trim();
                      return isNaN(+v) || v === '' ? v.toLowerCase() : +v; };
   rows.sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * (asc ? 1 : -1));
-  rows.forEach(r => r.parentNode.appendChild(r));
+  rows.forEach(r => { r.parentNode.appendChild(r); if (details.get(r)) r.parentNode.appendChild(details.get(r)); });
 }));
 // Sync progress: poll while a sync runs, refresh once it brought in something new
 // (or this page is waiting for a report that's being imported).
@@ -449,6 +463,34 @@ document.querySelectorAll('.expand-all').forEach(btn => btn.addEventListener('cl
   items.forEach(d => { d.open = open; });
   btn.textContent = open ? 'Collapse all' : 'Expand all';
 }));
+// Mechanics table: tag chips filter the rows; clicking a row (not its tag buttons / links) expands it.
+document.querySelectorAll('.mech-wrap').forEach(wrap => {
+  const apply = () => {
+    const on = new Set([...wrap.querySelectorAll('.tl-chip[data-mg][aria-pressed=true]')].map(c => c.dataset.mg));
+    let shown = 0;
+    wrap.querySelectorAll('tr.mech-row').forEach(row => {
+      row.hidden = !on.has(row.dataset.mg);
+      shown += row.hidden ? 0 : 1;
+      const detail = row.nextElementSibling;
+      if (detail && detail.classList.contains('mech-detail')) detail.hidden = row.hidden || !row.classList.contains('open');
+    });
+    wrap.querySelector('.mech-empty').hidden = shown > 0;
+  };
+  wrap.querySelectorAll('.tl-chip[data-mg]').forEach(chip => chip.addEventListener('click', () => {
+    chip.setAttribute('aria-pressed', chip.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+    apply();
+  }));
+  const toggle = row => {
+    row.classList.toggle('open');
+    const detail = row.nextElementSibling;
+    if (detail && detail.classList.contains('mech-detail')) detail.hidden = !row.classList.contains('open');
+  };
+  wrap.querySelectorAll('tr.mech-row').forEach(row => {
+    row.addEventListener('click', e => { if (!e.target.closest('a, button, form, input')) toggle(row); });
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === row) toggle(row); });
+  });
+  apply();
+});
 // Consumables timeline: the chips and the Abilities checkboxes choose what's drawn.
 document.querySelectorAll('.cons-tl').forEach(tl => {
   const boxes = [...tl.querySelectorAll('.tl-pick input')];

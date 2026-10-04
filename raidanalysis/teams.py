@@ -9,6 +9,8 @@ attached to (team_roles.TEAMS - #team-sun-signups / #team-moon-signups).
 """
 
 OTHER = 'other'
+ALL = 'all'
+DEFAULT = 'sun'  # the overview and boss pages start on this team; ?team=all shows everyone
 ICONS = {'sun': '☀️', 'moon': '🌙'}
 
 
@@ -39,8 +41,10 @@ def of_channel(channel_id):
 
 
 def parse(value):
-    """A ?team= query value -> a team key, or None for all teams."""
-    return value if value in dict(options()) else None
+    """A ?team= query value -> a team key, or None for all teams ('all'). No value = DEFAULT."""
+    if value == ALL:
+        return None
+    return value if value in dict(options()) else (DEFAULT if DEFAULT in dict(options()) else None)
 
 
 def sql_filter(team, column='ev.event_channel_id'):
