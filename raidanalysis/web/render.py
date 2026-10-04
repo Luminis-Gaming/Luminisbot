@@ -205,6 +205,11 @@ table.heatmap td.heat small { color: var(--muted); font-weight: 400; }
 .trend-down { color: var(--bad); font-weight: 600; }
 .spark { width: 120px; height: 28px; vertical-align: middle; }
 
+/* Overview filters */
+.filter-bar { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.filter-bar label { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.filter-bar select { width: auto; margin: 0; padding: 8px 12px; font-size: 14px; }
+
 /* Score breakdown */
 .breakdown { display: grid; gap: 10px; margin-top: 10px; }
 .comp-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
@@ -791,3 +796,43 @@ def sparkline(values, low=0, high=100):
             f'<polyline points="{points}" fill="none" stroke="{SERIES_PULL}" stroke-width="2" '
             f'stroke-linejoin="round" stroke-linecap="round"/>'
             f'<circle cx="{pad + (len(values) - 1) * step:.1f}" cy="{y(values[-1]):.1f}" r="3" fill="{SERIES_PULL}"/></svg>')
+
+
+def pull_histogram(bins, our_pulls=None, killed=False):
+    """
+    How many pulls the guilds that killed a boss needed (single series), with a labelled
+    marker for where we are. bins: [(start, end, count)].
+    """
+    if not bins:
+        return ''
+    width, height, left, right, top, bottom = 900, 200, 36, 16, 26, 28
+    lo, hi = bins[0][0], max(bins[-1][1], (our_pulls or 0) * 1.05)
+    peak = max(c for _, _, c in bins) or 1
+    inner_w, inner_h = width - left - right, height - top - bottom
+
+    def x(v):
+        return left + inner_w * (v - lo) / ((hi - lo) or 1)
+
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" '
+             f'aria-label="Pulls needed by guilds that killed this boss">',
+             f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top + inner_h}" y2="{top + inner_h}"/>']
+    for start, end, count in bins:
+        h = inner_h * count / peak
+        parts.append(f'<rect x="{x(start) + 1:.1f}" y="{top + inner_h - h:.1f}" width="{max(1, x(end) - x(start) - 2):.1f}" '
+                     f'height="{max(h, 0.5):.1f}" rx="3" fill="{SERIES_PULL}"><title>{start:.0f}–{end:.0f} pulls: '
+                     f'{count} guild{"s" if count != 1 else ""}</title></rect>')
+    step = max(1, int((hi - lo) / 8 / 10) * 10) or 10
+    tick = int(lo // step * step)
+    while tick <= hi:
+        if tick >= lo:
+            parts.append(f'<text x="{x(tick):.1f}" y="{height - 8}" text-anchor="middle">{tick}</text>')
+        tick += step
+    if our_pulls:
+        ox = x(our_pulls)
+        label = f'You: {our_pulls} pull{"s" if our_pulls != 1 else ""}{" (kill)" if killed else " so far"}'
+        anchor = 'end' if ox > width * 0.75 else 'start'
+        parts.append(f'<line x1="{ox:.1f}" x2="{ox:.1f}" y1="{top - 6}" y2="{top + inner_h}" stroke="{SERIES_BEST}" '
+                     f'stroke-width="2.5"/><text x="{ox + (-6 if anchor == "end" else 6):.1f}" y="{top - 10}" '
+                     f'text-anchor="{anchor}" fill="var(--text)" font-weight="600">{esc(label)}</text>')
+    parts.append('</svg>')
+    return ''.join(parts)

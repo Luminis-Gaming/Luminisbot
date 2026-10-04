@@ -4,7 +4,7 @@ pull (or all pulls of a boss), each expandable into per-player bars and charts.
 Wipefest's insight list is the model.
 """
 from .. import analyzer
-from . import consumables
+from . import consumables, readycheck
 from .render import (ability as ability_html, bar_table, esc, fmt_amount, guide_button, hit_timeline,
                      per_pull_columns, player_name)
 
@@ -170,6 +170,11 @@ def build(pulls, tags, guide_for, code):
     without = [n for n in roster if n not in potions]
     missing = (f'<p class="small muted">No potion: {", ".join(pname(n) for n in sorted(without))}</p>'
                if without else '')
+    ready = readycheck.summary(pulls, merged['players'])
+    if ready:
+        groups['Consumables'].append(_row('📋', ready[0], ready[1], ready[2]))
+    elif analyses:
+        groups['Consumables'].append(_row('📋', 'Ready check (flask, food, enchants)', REANALYZE_HINT))
     detailed = consumables.has_details(analyses)
     ordered_roster = merged['players']
     if single:

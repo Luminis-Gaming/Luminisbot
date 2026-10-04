@@ -992,7 +992,8 @@ async def security_middleware(request, handler):
         return web.Response(text="Forbidden", status=403)
     
     # Only allow specific routes
-    allowed_prefixes = ('/authorize', '/callback', '/health', '/unlink', '/api/v1/', '/admin', '/characters')
+    allowed_prefixes = ('/authorize', '/callback', '/health', '/unlink', '/api/v1/', '/admin', '/characters',
+                        '/raids')  # read-only raid analysis for raiders (raidanalysis.web)
     if not any(path.startswith(prefix) for prefix in allowed_prefixes):
         logger.warning(f"[SECURITY] Invalid path from {request.remote}: {request.path}")
         return web.Response(text="Not Found", status=404)

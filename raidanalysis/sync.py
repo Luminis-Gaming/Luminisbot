@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
 status = {'running': False, 'current': None, 'last_finished': None, 'last_result': None,
-          'last_error': None, 'last_new': 0}
+          'last_error': None, 'last_new': 0, 'wcl': None, 'last_points': None}
 
 
 def _phase_names(report):
@@ -57,9 +57,12 @@ async def _analyze_pull(session, code, fight, actors):
     # Enemy casts for the timeline (bosses + adds; ~100 per pull)
     enemy_cast_events = await wcl.get_events(session, code, fight['id'], 'Casts', "type = 'cast'",
                                              hostility='Enemies')
+    # Gear, flask, food and buffs at the pull (one small event per player)
+    combatant_events = await wcl.get_events(session, code, fight['id'], 'CombatantInfo', "type = 'combatantinfo'")
 
     return analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
-                                  set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events)
+                                  set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events,
+                                  combatant_events)
 
 
 async def sync_report(session, code, source='guild', force=False):
@@ -89,15 +92,23 @@ async def sync_report(session, code, source='guild', force=False):
     return analyzed
 
 
-# Older raid-event logs are worked through a few per sync so a large backlog
-# doesn't burn the hourly WCL API budget in one go.
+# Raid-event logs are picked up automatically only for recent events (older nights can be
+# imported by URL), a few per sync so a backlog doesn't burn the hourly WCL API budget.
 EVENT_BACKLOG_PER_RUN = 5
+EVENT_BACKLOG_DAYS = 21
+
+
+def _budget_message():
+    w = status.get('wcl') or {}
+    resets = f", resets in {int((w.get('reset_in') or 0) / 60)} min" if w.get('reset_in') else ''
+    return (f"Paused to stay within the WCL API budget ({w.get('spent', '?')}/{w.get('limit', '?')} points "
+            f"used this hour{resets}) — continues on a later sync")
 
 
 def _event_codes_to_sync(already_queued):
     """Raid-event logs (newest first) that still need fetching, capped per run."""
     out = []
-    for code in db.event_report_codes():
+    for code in db.event_report_codes(since_days=EVENT_BACKLOG_DAYS):
         if code in already_queued or db.report_is_final(code):
             continue
         out.append(code)
@@ -106,10 +117,28 @@ def _event_codes_to_sync(already_queued):
     return out
 
 
-async def sync_guild(limit=10, force_codes=()):
+# WCL's limit is points per hour (heavier queries cost more), shared with the bot's other WCL
+# features (DPS / Heal / Deaths buttons). The sync stops once this share of the hour's budget
+# is used and carries on next run.
+WCL_BUDGET_SHARE = 0.7
+
+
+async def _budget_ok(session):
+    """Refresh status['wcl'] from WCL's own counter; False once we're past our share of the hour."""
+    try:
+        limits = await wcl.get_rate_limit(session)
+    except wcl.WCLError:
+        return True  # can't tell - let the request itself report a rate limit
+    spent, cap = limits.get('pointsSpentThisHour') or 0, limits.get('limitPerHour') or 3600
+    status['wcl'] = {'spent': spent, 'limit': cap, 'reset_in': limits.get('pointsResetIn'),
+                     'checked': time.time()}
+    return spent < WCL_BUDGET_SHARE * cap
+
+
+async def sync_guild(limit=10, force_codes=(), extra_codes=()):
     """
-    Sync the guild's latest `limit` reports, the logs attached to raid events,
-    and any explicitly requested codes (re-analyzed from scratch).
+    Sync the guild's latest `limit` reports, the logs attached to raid events, extra_codes
+    (e.g. a log someone asked about in Discord) and force_codes (re-analyzed from scratch).
     """
     if _lock.locked():
         return None
@@ -120,13 +149,22 @@ async def sync_guild(limit=10, force_codes=()):
         try:
             from wcl_api import WCL_GUILD_ID
             async with aiohttp.ClientSession() as session:
+                if not await _budget_ok(session):
+                    raise wcl.WCLError(_budget_message())
+                spent_before = status['wcl']['spent'] if status.get('wcl') else None
                 listed = await wcl.list_guild_reports(session, WCL_GUILD_ID, limit=limit)
                 codes = [(c, 'manual', True) for c in force_codes]
+                codes += [(c, 'guild', False) for c in extra_codes if c not in force_codes]
                 codes += [(r['code'], 'guild', False) for r in listed
-                          if r['code'] not in force_codes and not db.report_is_final(r['code'])]
+                          if r['code'] not in force_codes and r['code'] not in extra_codes
+                          and not db.report_is_final(r['code'])]
                 queued = {code for code, _, _ in codes}
                 codes += [(c, 'event', False) for c in _event_codes_to_sync(queued)]
-                for code, source, force in codes:
+                for i, (code, source, force) in enumerate(codes):
+                    if i and not await _budget_ok(session):
+                        errors.append(_budget_message())
+                        logger.warning(f"[RAIDS] {_budget_message()}")
+                        break
                     try:
                         count = await sync_report(session, code, source=source, force=force)
                         total += count
@@ -136,6 +174,9 @@ async def sync_guild(limit=10, force_codes=()):
                         logger.warning(f"[RAIDS] Sync of {code} failed: {e}")
                         if 'rate limit' in str(e):
                             break
+                await _budget_ok(session)
+                if spent_before is not None and status.get('wcl'):
+                    status['last_points'] = max(0, status['wcl']['spent'] - spent_before)
             # Mechanic clips for any boss we haven't looked up on Mythic Trap recently.
             status['current'] = 'Looking up mechanic clips on Mythic Trap…'
             from .guides import scan_missing

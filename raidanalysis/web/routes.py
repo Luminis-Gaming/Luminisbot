@@ -13,9 +13,11 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from .. import analyzer, db, guides, sync
+from .. import analyzer, db, guides, progstats, sync
 from . import consumables, insights, players
-from .render import (CLIP_MODAL, PAGE_CSS, PAGE_JS, ability, deaths_strip, difficulty_pill, phase_funnel,
+from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, deaths_strip, difficulty_pill,
+                     pull_histogram,
+                     phase_funnel,
                      phase_heatmap, esc, fmt_amount, fmt_duration,
                      guide_button, killers_table, phase_label, player_name, progress_chart, pull_timeline,
                      result_pill, scoreboard_table, sync_banner, tag_buttons, tag_pill, ts)
@@ -35,11 +37,24 @@ def register_routes(app):
     app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', handle_boss)
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', handle_tag)
     app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', handle_player_trend)
+
+    # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
+    app.router.add_get('/raids', _public(handle_overview))
+    app.router.add_get('/raids/report/{code}', _public(handle_night))
+    app.router.add_get('/raids/report/{code}/{fight_id}', _public(handle_pull))
+    app.router.add_get('/raids/report/{code}/player/{name}', _public(handle_player))
+    app.router.add_get('/raids/boss/{encounter_id}/{difficulty}', _public(handle_boss))
+    app.router.add_get('/raids/boss/{encounter_id}/{difficulty}/player/{name}', _public(handle_player_trend))
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', handle_rescan_guides)
     logger.info("[RAIDS] Admin web routes registered")
 
 
+PUBLIC_SESSION = {'username': 'guest', 'role': 'public'}
+
+
 def _session(request):
+    if request.get('public'):
+        return PUBLIC_SESSION
     from oauth_server import get_session
     session = get_session(request)
     if not session:
@@ -47,13 +62,61 @@ def _session(request):
     return session
 
 
+# ============================================================================
+# Public read-only mirror (/raids/...) - same pages, admin controls removed
+# ============================================================================
+
+_PUBLIC_STRIP = [
+    re.compile(r'<td>\s*<form[^>]*class="tag-form".*?</form>\s*</td>', re.S),   # tag buttons (table cells)
+    re.compile(r'<form[^>]*class="tag-form".*?</form>', re.S),
+    re.compile(r'<form[^>]*action="[^"]*/(sync|guides)".*?</form>', re.S),     # sync / re-analyze / rescan
+    re.compile(r'<th>Tag</th>'),
+]
+
+
+def _publicize(html):
+    for pattern in _PUBLIC_STRIP:
+        html = pattern.sub('', html)
+    html = re.sub(r'<a href="/admin/events">(.*?)</a>', r'\1', html)  # admin-only page: keep the text
+    return html.replace('/admin/raids', '/raids')
+
+
+def _public(handler):
+    """Serve an admin page handler read-only at /raids/..., without login."""
+    async def wrapper(request):
+        request['public'] = True
+        try:
+            return await handler(request)
+        except web.HTTPFound as redirect:
+            raise web.HTTPFound(redirect.location.replace('/admin/raids', '/raids', 1)) from None
+    return wrapper
+
+
+def public_base_url():
+    """Where the public pages live, for links from Discord (RAID_ANALYSIS_PUBLIC_URL, else the OAuth host)."""
+    import os
+    from urllib.parse import urlsplit
+    explicit = os.getenv('RAID_ANALYSIS_PUBLIC_URL')
+    if explicit:
+        return explicit.rstrip('/')
+    callback = urlsplit(os.getenv('BLIZZARD_REDIRECT_URI') or '')
+    return f'{callback.scheme}://{callback.netloc}' if callback.netloc else None
+
+
 def _page(title, session, body, waiting=False):
     from oauth_server import ADMIN_CSS, render_nav
-    body = sync_banner(sync.status, waiting) + body
-    return web.Response(text=f"""<!DOCTYPE html>
+    if session is PUBLIC_SESSION:
+        body = _publicize(body)
+        nav = ('<nav class="nav"><a href="/raids" class="active">⚔️ Raid Analysis</a><div class="spacer"></div>'
+               '<span class="user-info">Read-only view</span></nav>')
+        render_nav = lambda _session, active=None: nav  # noqa: E731 - public pages get their own nav
+    else:
+        body = sync_banner(sync.status, waiting) + body
+    prefix = 'Luminis Raids' if session is PUBLIC_SESSION else 'LuminisBot Admin'
+    response = web.Response(text=f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>LuminisBot Admin - {esc(title)}</title>
+    <title>{prefix} - {esc(title)}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -69,6 +132,8 @@ def _page(title, session, body, waiting=False):
     <script>{PAGE_JS}</script>
 </body>
 </html>""", content_type='text/html')
+    response.enable_compression()  # pages are big but very repetitive - gzip shrinks them ~10x
+    return response
 
 
 def _flash(request):
@@ -120,10 +185,39 @@ def _boss_status(boss):
 # GET /admin/raids - raid nights + boss progression + sync controls
 # ============================================================================
 
+def _overview_filters(request, tiers):
+    """(zone_id or None, difficulty or None, filter-bar HTML). Defaults to the newest tier, all difficulties."""
+    known = [t for t in tiers if t['zone_id'] is not None]
+    tier_arg = request.query.get('tier')
+    if tier_arg == 'all':
+        zone_id = None
+    elif tier_arg and tier_arg.isdigit() and any(t['zone_id'] == int(tier_arg) for t in known):
+        zone_id = int(tier_arg)
+    else:
+        zone_id = known[0]['zone_id'] if known else None
+    diff_arg = request.query.get('difficulty')
+    difficulty = int(diff_arg) if diff_arg and diff_arg.isdigit() and int(diff_arg) in DIFFICULTY_NAMES else None
+
+    tier_options = ''.join(
+        f'<option value="{t["zone_id"]}"{" selected" if t["zone_id"] == zone_id else ""}>'
+        f'{esc(t["zone_name"] or "Unknown zone")} ({t["nights"]} night{"s" if t["nights"] != 1 else ""})</option>'
+        for t in known)
+    tier_options += f'<option value="all"{" selected" if zone_id is None else ""}>All tiers</option>'
+    diff_options = f'<option value=""{" selected" if difficulty is None else ""}>All difficulties</option>' + ''.join(
+        f'<option value="{d}"{" selected" if d == difficulty else ""}>{name}</option>'
+        for d, name in sorted(DIFFICULTY_NAMES.items(), reverse=True))
+    bar = (f'<form method="get" class="filter-bar">'
+           f'<label>Raid tier <select name="tier" onchange="this.form.submit()">{tier_options}</select></label>'
+           f'<label>Difficulty <select name="difficulty" onchange="this.form.submit()">{diff_options}</select></label>'
+           f'<noscript><button class="btn btn-secondary btn-sm">Filter</button></noscript></form>')
+    return zone_id, difficulty, bar
+
+
 async def handle_overview(request):
     session = _session(request)
-    reports = db.list_reports(limit=40)
-    bosses = db.list_bosses()
+    zone_id, difficulty, filter_bar = _overview_filters(request, db.list_tiers())
+    reports = db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty)
+    bosses = db.list_bosses(zone_id=zone_id, difficulty=difficulty)
 
     st = sync.status
     if st['running']:
@@ -135,6 +229,15 @@ async def handle_overview(request):
             sync_state += f'<p class="error small">⚠️ {esc(st["last_error"])}</p>'
     else:
         sync_state = '<p class="muted small">Syncs automatically every 10 minutes.</p>'
+    budget = st.get('wcl')
+    if budget:
+        share = budget['spent'] / (budget['limit'] or 1)
+        resets = f" · resets in {int((budget.get('reset_in') or 0) / 60)} min" if budget.get('reset_in') else ''
+        last = f" · last sync used {st['last_points']}" if st.get('last_points') is not None else ''
+        sync_state += (f'<p class="small {"bad-text" if share >= 0.7 else "muted"}" title="WCL allows a number of '
+                       f'points per hour (bigger queries cost more), shared with the bot\'s other WCL buttons. '
+                       f'The sync pauses at 70% to leave room for them.">WCL API: {budget["spent"]}/{budget["limit"]} '
+                       f'points this hour{resets}{last}</p>')
 
     boss_rows = ''.join(f"""
         <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}'" style="cursor:pointer">
@@ -168,10 +271,10 @@ async def handle_overview(request):
     body = f"""
     <div class="card">
         <h1>⚔️ Raid Analysis</h1>
-        {_flash(request)}
+        {_flash(request) if session is not PUBLIC_SESSION else ''}
         <p class="muted">Every raid pull from the guild's Warcraft Logs and from the logs attached to raid
            events, analyzed for deaths, mechanics, interrupts, dispels and consumables.</p>
-        {sync_state}
+        {sync_state if session is not PUBLIC_SESSION else ''}
         <form method="post" action="/admin/raids/sync" class="inline-form">
             <label class="small muted">Latest reports</label>
             <input type="number" name="limit" value="10" min="1" max="50" style="width:80px">
@@ -179,6 +282,7 @@ async def handle_overview(request):
             <button class="btn btn-primary btn-sm" {'disabled' if st['running'] else ''}>🔄 Sync now</button>
         </form>
     </div>
+    <div class="card">{filter_bar}</div>
     <div class="card">
         <h2>🐉 Bosses</h2>
         <div class="table-wrapper"><table class="compact">
@@ -756,6 +860,7 @@ async def handle_boss(request):
                  f'<p class="muted small">Pulls that reached each phase; darker = more of the night\'s pulls got there.</p>'
                  f'{phase_heatmap(list(reversed(heat_nights)), phase_order)}' if len(phase_order) > 1 else '')
     trends_html = _player_trends(night_data, encounter_id, difficulty)
+    comparison_html = await _progstats_card(encounter_id, pulls) if difficulty == progstats.MYTHIC else ''
 
     # Mechanics seen on this boss, with tagging
     mechanics = {}
@@ -822,6 +927,7 @@ async def handle_boss(request):
         </table></div>
         {heat_html}
     </div>
+    {comparison_html}
     {trends_html}
     <div class="card">
         <h2>👥 Players — {scope_links}</h2>
@@ -894,6 +1000,32 @@ async def handle_rescan_guides(request):
     back = f"/admin/raids/boss/{encounter_id}/{request.match_info['difficulty']}"
     await guides.scan_missing(encounter_ids=[encounter_id])
     raise web.HTTPFound(back + '?msg=' + quote('Mythic Trap guide refreshed.') + '#guides')
+
+
+async def _progstats_card(encounter_id, pulls):
+    """Our Mythic pull count next to every guild that killed the boss (progstats.io)."""
+    stats = await progstats.mythic_pull_stats(encounter_id)
+    if not stats:
+        return ('<div class="card"><h2>📊 Pull count vs other guilds</h2><p class="muted">No Mythic kill data on '
+                '<a href="https://progstats.io" target="_blank" rel="noopener">progstats.io</a> for this boss yet.</p></div>')
+    kill_at = next((i for i, p in enumerate(pulls, 1) if p['kill']), None)
+    ours = kill_at or len(pulls)
+    share = progstats.share_needing_more(stats['bins'], ours)
+    if kill_at:
+        verdict = f'You killed it in <strong>{ours} pulls</strong> — fewer than <strong>{share:.0%}</strong> of guilds needed.'
+    else:
+        verdict = (f"You're at <strong>{ours} pulls</strong> without a kill — <strong>{share:.0%}</strong> of the guilds "
+                   f"that killed it needed more than that.")
+    return f"""
+    <div class="card">
+        <h2>📊 Pull count vs other guilds</h2>
+        <p>{verdict}</p>
+        <p class="muted small">{stats['kills']} guilds have killed it on Mythic · median <strong>{stats['median']:.0f}</strong>
+           pulls · middle half {stats['p25']:.0f}–{stats['p75']:.0f}. Your count only includes the nights synced here.</p>
+        {pull_histogram(stats['bins'], ours, bool(kill_at))}
+        <p class="muted small">Data: <a href="https://progstats.io" target="_blank" rel="noopener">progstats.io</a>
+           (Mythic only, refreshed daily).</p>
+    </div>"""
 
 
 def _trend_url(encounter_id, difficulty, name):

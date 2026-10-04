@@ -189,13 +189,19 @@ def report_is_final(code):
 _REPORT_CODE_RE = re.compile(r'reports/([A-Za-z0-9]{16})')
 
 
-def event_report_codes():
-    """WCL report codes attached to raid events (raid_system's auto-linker), newest event first."""
-    rows = _run("""
+def event_report_codes(since_days=None):
+    """
+    WCL report codes attached to raid events (raid_system's auto-linker), newest event first.
+    since_days limits it to recent events, so the automatic backlog never wanders into old tiers.
+    """
+    where, params = '', ()
+    if since_days:
+        where, params = 'AND event_date >= CURRENT_DATE - %s', (since_days,)
+    rows = _run(f"""
         SELECT log_url FROM raid_events
-        WHERE log_url IS NOT NULL
+        WHERE log_url IS NOT NULL {where}
         ORDER BY event_date DESC, event_time DESC
-    """, fetch='all')
+    """, params, fetch='all')
     codes = []
     for row in rows:
         match = _REPORT_CODE_RE.search(row['log_url'] or '')
@@ -218,7 +224,30 @@ _EVENT_JOIN = """
 """
 
 
-def list_reports(limit=50):
+def _filters(zone_id=None, difficulty=None, report='r', pull='p'):
+    clauses, params = [], []
+    if zone_id is not None:
+        clauses.append(f'{report}.zone_id = %s')
+        params.append(zone_id)
+    if difficulty is not None:
+        clauses.append(f'{pull}.difficulty = %s')
+        params.append(difficulty)
+    return (' AND ' + ' AND '.join(clauses)) if clauses else '', params
+
+
+def list_tiers():
+    """Raid tiers (WCL zones) we have pulls for, newest first: [{'zone_id', 'zone_name', 'nights', 'last'}]."""
+    return _run("""
+        SELECT r.zone_id, MAX(r.zone_name) AS zone_name, COUNT(DISTINCT r.code) AS nights,
+               MAX(r.start_time) AS last
+        FROM raid_reports r JOIN raid_pulls p ON p.report_code = r.code
+        GROUP BY r.zone_id
+        ORDER BY MAX(r.start_time) DESC
+    """, fetch='all')
+
+
+def list_reports(limit=50, zone_id=None, difficulty=None):
+    where, params = _filters(zone_id, difficulty)
     return _run(f"""
         SELECT r.code, r.title, r.owner, r.zone_name, r.start_time, r.end_time, r.synced_at, r.source,
                MAX(ev.event_id) AS event_id, MAX(ev.event_title) AS event_title,
@@ -228,13 +257,13 @@ def list_reports(limit=50):
                MIN(p.start_ms) AS first_pull_ms, MAX(p.end_ms) AS last_pull_ms,
                ARRAY_AGG(DISTINCT p.difficulty) FILTER (WHERE p.difficulty IS NOT NULL) AS difficulties
         FROM raid_reports r
-        LEFT JOIN raid_pulls p ON p.report_code = r.code
+        JOIN raid_pulls p ON p.report_code = r.code
         {_EVENT_JOIN}
+        WHERE TRUE {where}
         GROUP BY r.code
-        HAVING COUNT(p.fight_id) > 0
         ORDER BY r.start_time DESC
         LIMIT %s
-    """, (limit,), fetch='all')
+    """, (*params, limit), fetch='all')
 
 
 def get_report(code):
@@ -281,10 +310,14 @@ def get_boss_pulls(encounter_id, difficulty, with_analysis=False):
     """, (encounter_id, difficulty), fetch='all')
 
 
-def list_bosses():
-    """One row per boss+difficulty we have pulls for, with progression summary."""
-    return _run("""
-        SELECT p.encounter_id, MAX(p.encounter_name) AS name, p.difficulty,
+def list_bosses(zone_id=None, difficulty=None):
+    """
+    One row per boss+difficulty we have pulls for, with progression summary. Hardest difficulty
+    first, then roughly raid order (when we first pulled each boss).
+    """
+    where, params = _filters(zone_id, difficulty)
+    return _run(f"""
+        SELECT p.encounter_id, MAX(p.encounter_name) AS name, p.difficulty, MAX(r.zone_name) AS zone_name,
                COUNT(*) AS pulls,
                COUNT(*) FILTER (WHERE p.kill) AS kills,
                MIN(p.fight_pct) FILTER (WHERE NOT p.kill) AS best_pct,
@@ -292,9 +325,10 @@ def list_bosses():
                MIN(r.start_time) AS first_seen, MAX(r.start_time) AS last_seen,
                COUNT(DISTINCT r.code) AS nights
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        WHERE TRUE {where}
         GROUP BY p.encounter_id, p.difficulty
-        ORDER BY MAX(r.start_time) DESC, p.difficulty DESC
-    """, fetch='all')
+        ORDER BY p.difficulty DESC, MIN(r.start_time + p.start_ms)
+    """, params, fetch='all')
 
 
 def get_tags(encounter_id):

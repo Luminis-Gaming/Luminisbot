@@ -6,7 +6,7 @@ The stored analysis is tag-independent: which abilities count as "avoidable"
 is applied at render time, so retagging a mechanic never needs a re-sync.
 """
 
-ANALYSIS_VERSION = 4
+ANALYSIS_VERSION = 5
 
 # Officer tags on boss abilities (stored in raid_ability_tags).
 TAG_AVOIDABLE = 'avoidable'                   # any hit is a mistake
@@ -207,6 +207,66 @@ def _consumable_uses(fight_start, duration, names_by_id, roster, casts_table, co
     return sorted(uses, key=lambda u: (u['t'], u['name']))
 
 
+# Pre-pull ("ready check") data from each player's combatantinfo event at the pull.
+# The old ranged slot (17), shirt (3) and tabard (18) hold placeholder / cosmetic items - left out.
+GEAR_SLOTS = {0: 'Head', 1: 'Neck', 2: 'Shoulders', 4: 'Chest', 5: 'Waist', 6: 'Legs', 7: 'Feet', 8: 'Wrists',
+              9: 'Hands', 10: 'Ring', 11: 'Ring', 12: 'Trinket', 13: 'Trinket', 14: 'Back', 15: 'Main hand',
+              16: 'Off hand'}
+MIN_REAL_ITEM_LEVEL = 100   # anything below is a placeholder (item level 1 relics etc.)
+TIER_SLOTS = (0, 2, 4, 6, 9)
+RAID_BUFFS = ('Arcane Intellect', 'Power Word: Fortitude', 'Battle Shout', 'Mark of the Wild', 'Skyfury',
+              'Blessing of the Bronze')
+
+
+def _aura_kind(name):
+    name = (name or '').lower()
+    if 'flask' in name or 'phial' in name:
+        return 'flask'
+    if 'well fed' in name or name.endswith(' fed'):
+        return 'food'
+    if 'augment' in name:
+        return 'augment'
+    return None
+
+
+def _prepull(names_by_id, roster, combatant_events):
+    """{player: {'flask', 'food', 'augment', 'buffs', 'ilvl', 'enchants': {slot: bool}, 'gems', 'tier'}}."""
+    out = {}
+    for event in combatant_events:
+        name = names_by_id.get(event.get('sourceID'))
+        if name not in roster or event.get('type') != 'combatantinfo':
+            continue
+        found = {'flask': None, 'food': None, 'augment': None}
+        buffs = []
+        for aura in event.get('auras') or []:
+            aura_name = aura.get('name') or ''
+            kind = _aura_kind(aura_name)
+            if kind and not found[kind]:
+                found[kind] = aura_name
+            if aura_name in RAID_BUFFS:
+                buffs.append(aura_name)
+        gear = event.get('gear') or []
+        items = [(slot, item) for slot, item in enumerate(gear)
+                 if item.get('id') and slot in GEAR_SLOTS and (item.get('itemLevel') or 0) >= MIN_REAL_ITEM_LEVEL]
+        levels = [item.get('itemLevel') or 0 for _, item in items]
+        out[name] = {**found, 'buffs': sorted(set(buffs)),
+                     'ilvl': round(sum(levels) / len(levels), 1) if levels else None,
+                     'enchants': {str(slot): bool(item.get('permanentEnchant')) for slot, item in items},
+                     'gems': sum(len(item.get('gems') or []) for _, item in items),
+                     'tier': sum(1 for slot, item in items if slot in TIER_SLOTS and item.get('setID'))}
+    return out
+
+
+def expected_enchant_slots(prepulls, share=0.6):
+    """Slots most of the raid enchants (so expansion changes need no code changes)."""
+    have, enchanted = {}, {}
+    for player in prepulls:
+        for slot, done in (player.get('enchants') or {}).items():
+            have[slot] = have.get(slot, 0) + 1
+            enchanted[slot] = enchanted.get(slot, 0) + (1 if done else 0)
+    return {slot for slot, n in have.items() if n and enchanted[slot] / n >= share}
+
+
 def _boss_timeline(fight_start, enemy_casts_table, enemy_cast_events):
     """Enemy ability casts for the timeline: ([[t, ability_id], ...], [{'id', 'name', 'icon', 'source'}])."""
     meta = {}
@@ -223,7 +283,7 @@ def _boss_timeline(fight_start, enemy_casts_table, enemy_cast_events):
 
 
 def analyze_fight(fight, actors, tables, damage_events, consumable_events, potion_ids, defensive_ids,
-                  buff_events=(), heal_events=(), enemy_cast_events=()):
+                  buff_events=(), heal_events=(), enemy_cast_events=(), combatant_events=()):
     """
     Build the stored analysis for one pull.
 
@@ -345,6 +405,7 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         'consumables': uses,
         'boss_casts': boss_casts,
         'boss_abilities': boss_abilities,
+        'prepull': _prepull(names_by_id, roster, combatant_events),
     }
 
 
@@ -562,7 +623,9 @@ def _new_player_row(player):
         'role': player.get('role') or 'dps', 'pulls': 0, 'pull_ms': 0, 'alive_ms': 0,
         'deaths': 0, 'first_deaths': [], 'killed_by': {}, 'deaths_without_defensive': 0,
         'avoidable': {}, 'avoidable_hits': 0, 'interrupts': 0, 'dispels': 0,
-        'potion_pulls': 0, 'defensives': 0, 'per_pull': []}
+        'potion_pulls': 0, 'defensives': 0, 'per_pull': [],
+        'ready_pulls': 0, 'flask_pulls': 0, 'food_pulls': 0, 'augment_pulls': 0, 'last_prepull': None,
+        'missing_enchants': []}
 
 
 def player_report(pulls, tags):
@@ -615,6 +678,13 @@ def player_report(pulls, tags):
                 entry['hits'] += n
             r['avoidable_hits'] += hits
             r['potion_pulls'] += 1 if potted else 0
+            prepull = (analysis.get('prepull') or {}).get(name)
+            if prepull:
+                r['ready_pulls'] += 1
+                r['flask_pulls'] += 1 if prepull.get('flask') else 0
+                r['food_pulls'] += 1 if prepull.get('food') else 0
+                r['augment_pulls'] += 1 if prepull.get('augment') else 0
+                r['last_prepull'] = prepull
             r['defensives'] += used_defensive
             r['per_pull'].append({'number': pull['number'], 'kill': pull.get('kill'), 'duration': duration,
                                   'died_at': death['t'] if death else None,
@@ -643,6 +713,12 @@ def player_report(pulls, tags):
             raid_by_ability[ability_id] = raid_by_ability.get(ability_id, 0) + a['hits']
     interrupt_rank = sorted((p for p in players if p['interrupts']), key=lambda p: -p['interrupts'])
     dispel_rank = sorted((p for p in players if p['dispels']), key=lambda p: -p['dispels'])
+
+    expected = expected_enchant_slots([p['last_prepull'] for p in players if p['last_prepull']])
+    for p in players:
+        enchants = (p['last_prepull'] or {}).get('enchants') or {}
+        p['missing_enchants'] = [GEAR_SLOTS[int(slot)] for slot, done in sorted(enchants.items(), key=lambda kv: int(kv[0]))
+                                 if slot in expected and not done]
 
     for p in players:
         p['components'] = _components(p, players, mechanics_seen, raid_by_ability)
@@ -767,6 +843,19 @@ def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by
         add('bad', f"Used a combat potion in only {p['potion_pulls']} of {n} pulls", 5)
     elif n >= 3 and p['potion_pulls'] == n:
         add('good', 'Potted every pull', 2)
+
+    # Ready check (flask / food at the pull, enchants)
+    ready = p.get('ready_pulls') or 0
+    if ready >= 2:
+        for key, label in (('flask_pulls', 'flask'), ('food_pulls', 'food buff')):
+            if p[key] / ready < 0.75:
+                add('bad', f"No {label} in {ready - p[key]} of {ready} pulls", 6)
+    elif ready == 1:
+        missing = [label for key, label in (('flask_pulls', 'flask'), ('food_pulls', 'food buff')) if not p[key]]
+        if missing:
+            add('bad', f"Pulled without {' or '.join(missing)}", 6)
+    if p.get('missing_enchants'):
+        add('bad', f"Missing enchants: {', '.join(p['missing_enchants'])}", 5)
 
     # Contributions
     if interrupt_rank and interrupt_rank[0] is p and p['interrupts'] >= 3:

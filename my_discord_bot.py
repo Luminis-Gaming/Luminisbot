@@ -163,7 +163,7 @@ async def check_for_new_logs():
                     # Add buttons (+ private per-player recap from the raid analysis)
                     view = LogButtonsView()
                     from raidanalysis.discord_recap import add_button as add_my_analysis_button
-                    add_my_analysis_button(view)
+                    add_my_analysis_button(view, code=log['code'])
 
                     try:
                         await send_message_with_auto_delete(channel, embed=embed, view=view)

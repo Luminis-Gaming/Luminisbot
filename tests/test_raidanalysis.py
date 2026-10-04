@@ -270,6 +270,48 @@ class TestCharacterOwners(unittest.TestCase):
         self.assertEqual(owners['boopsproops']['display'], 'Boops')
 
 
+class TestReadyCheck(unittest.TestCase):
+    def test_prepull_parsing_and_enchant_expectations(self):
+        players = actors('A', 'B', 'C')
+        gear = lambda chest_enchant: [{'id': 1, 'itemLevel': 320, 'setID': 9, 'permanentEnchant': 1},  # head
+                                      {'id': 2, 'itemLevel': 320}, {'id': 3, 'itemLevel': 320},
+                                      {}, {'id': 5, 'itemLevel': 330, 'setID': 9,
+                                           'permanentEnchant': 7 if chest_enchant else 0, 'gems': [{'id': 1}]}]
+        auras = [{'name': 'Flask of the Shattered Sun'}, {'name': 'Hearty Well Fed'}, {'name': 'Arcane Intellect'}]
+        events = [{'type': 'combatantinfo', 'sourceID': 1, 'auras': auras, 'gear': gear(True)},
+                  {'type': 'combatantinfo', 'sourceID': 2, 'auras': auras[:1], 'gear': gear(True)},
+                  {'type': 'combatantinfo', 'sourceID': 3, 'auras': [], 'gear': gear(False)}]
+        a = analyzer.analyze_fight(fight(players), players, {'damageTaken': damage_table(), 'deaths': {'entries': []},
+                                   'interrupts': {'entries': []}, 'dispels': {'entries': []}, 'playerDetails': {}},
+                                   [], [], set(), set(), combatant_events=events)
+        pre = a['prepull']
+        self.assertEqual((pre['A']['flask'], pre['A']['food'], pre['A']['tier'], pre['A']['gems']),
+                         ('Flask of the Shattered Sun', 'Hearty Well Fed', 2, 1))
+        self.assertIsNone(pre['B']['food'])
+        self.assertEqual(pre['A']['buffs'], ['Arcane Intellect'])
+        expected = analyzer.expected_enchant_slots(pre.values())
+        self.assertEqual(expected, {'0', '4'})  # head + chest: most of the raid enchants them
+        report = {r['name']: r for r in analyzer.player_report(
+            [{'number': 1, 'kill': False, 'analysis': dict(a, _duration=600000)}], {})}
+        self.assertEqual(report['C']['missing_enchants'], ['Chest'])
+        self.assertIn('Pulled without flask or food buff', [n['text'] for n in report['C']['feedback']])
+
+
+class TestProgstats(unittest.TestCase):
+    def test_bins_are_folded_and_quantiles_estimated(self):
+        from raidanalysis import progstats
+        payload = {'data': {
+            'encounterStatSummaryV2': {'killCount': 4},
+            'encounterStatOverviewV2': {'metricType': ['PULL_COUNT', 'PULL_COUNT', 'START_ILVL', 'PULL_COUNT'],
+                                        'binStart': [100, 100, 320, 200], 'binEnd': [150, 150, 321, 250],
+                                        'count': [1, 1, 9, 2]}}}
+        stats = progstats.parse(payload)
+        self.assertEqual(stats['bins'], [(100, 150, 2), (200, 250, 2)])  # two days of the same bin folded
+        self.assertEqual(stats['median'], 150)
+        self.assertEqual(progstats.share_needing_more(stats['bins'], 125), 0.75)
+        self.assertIsNone(progstats.parse({'data': {'encounterStatSummaryV2': {'killCount': 0}}}))
+
+
 class TestConsumableUses(unittest.TestCase):
     def test_potions_prepots_and_healthstones(self):
         players = actors('A', 'B')

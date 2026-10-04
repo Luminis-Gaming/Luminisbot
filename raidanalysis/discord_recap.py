@@ -183,16 +183,34 @@ ERRORS = {
 }
 
 
+ANALYZE_WAIT_SECONDS = 600   # Discord lets us edit the reply for 15 minutes
+
+
+async def _analyze_now(code):
+    """Run a sync that includes this report (waiting for a sync already in progress). True if it ran."""
+    from . import sync
+    deadline = asyncio.get_running_loop().time() + ANALYZE_WAIT_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        if not sync._lock.locked():
+            if await sync.sync_guild(limit=1, extra_codes=[code]) is not None:
+                return True
+        await asyncio.sleep(3)
+    return False
+
+
+def _report_code(message):
+    for embed in (message.embeds if message else []):
+        match = _REPORT_CODE_RE.search(embed.url or '') or _REPORT_CODE_RE.search(embed.description or '')
+        if match:
+            return match.group(1)
+    return None
+
+
 async def handle_my_analysis(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True, thinking=True)
     try:
         message = interaction.message
-        code = None
-        for embed in (message.embeds if message else []):
-            match = _REPORT_CODE_RE.search(embed.url or '') or _REPORT_CODE_RE.search(embed.description or '')
-            if match:
-                code = match.group(1)
-                break
+        code = _report_code(message)
         if not code and message:
             code = await asyncio.to_thread(_event_log_code, message.id)
         if not code:
@@ -203,6 +221,21 @@ async def handle_my_analysis(interaction: discord.Interaction):
             await interaction.followup.send(ERRORS['no_characters'], ephemeral=True)
             return
         recap = await asyncio.to_thread(player_recap, code, names)
+        if recap.get('error') == 'not_analyzed':
+            # Nothing yet: analyze it now and turn this private reply into the recap when done.
+            reply = await interaction.followup.send(
+                '⏳ This log hasn\'t been analyzed yet — analyzing it now. This message will turn into your '
+                'recap when it\'s ready (usually a minute or two).', ephemeral=True, wait=True)
+            ran = await _analyze_now(code)
+            recap = await asyncio.to_thread(player_recap, code, names)
+            if recap.get('error'):
+                from .sync import status
+                why = (status.get('last_error') or '') if ran else 'the analysis queue was busy'
+                await reply.edit(content=ERRORS.get(recap['error'], ERRORS['not_analyzed'])
+                                 + (f'\n-# {why[:300]}' if why else ''))
+                return
+            await reply.edit(content=None, embeds=recap_embeds(recap))
+            return
         if recap.get('error'):
             await interaction.followup.send(ERRORS[recap['error']], ephemeral=True)
             return
@@ -215,7 +248,7 @@ async def handle_my_analysis(interaction: discord.Interaction):
 
 class MyAnalysisButton(discord.ui.Button):
     def __init__(self, row=None):
-        super().__init__(label='My analysis', emoji='📊', style=discord.ButtonStyle.primary,
+        super().__init__(label='My analysis', emoji='📊', style=discord.ButtonStyle.secondary,
                          custom_id=CUSTOM_ID, row=row)
 
     async def callback(self, interaction: discord.Interaction):
@@ -230,7 +263,21 @@ class MyAnalysisView(discord.ui.View):
         self.add_item(MyAnalysisButton())
 
 
-def add_button(view, row=None):
-    """Add the 'My analysis' button to an existing message view."""
+def full_analysis_url(code):
+    """Public, read-only night page (no admin login) - None when the site address isn't known."""
+    from .web.routes import public_base_url
+    base = public_base_url()
+    return f'{base}/raids/report/{code}' if base and code else None
+
+
+def add_button(view, row=None, code=None, log_url=None):
+    """Add 'My analysis' (private recap) and, when possible, a 'Full analysis' link to a message view."""
     view.add_item(MyAnalysisButton(row=row))
+    if not code and log_url:
+        match = _REPORT_CODE_RE.search(log_url)
+        code = match.group(1) if match else None
+    url = full_analysis_url(code)
+    if url:
+        view.add_item(discord.ui.Button(label='Full analysis', emoji='⚔️', style=discord.ButtonStyle.link,
+                                        url=url, row=row))
     return view
