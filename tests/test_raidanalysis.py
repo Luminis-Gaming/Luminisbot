@@ -577,3 +577,38 @@ class TestRateLimitPause(unittest.TestCase):
             self.assertEqual(asyncio.run(sync.sync_guild(limit=1)), 0)
             self.assertEqual(calls, [])  # didn't touch WCL at all
             sync.status['paused_until'] = None
+
+
+class TestTopPlayersSameSpec(unittest.TestCase):
+    """Only ever compare a spec with itself, even if WCL's rankings answer with other specs."""
+
+    def test_other_specs_are_dropped(self):
+        import asyncio
+        from unittest import mock
+        from raidanalysis import benchmarks, wcl
+        rankings = [{'name': 'Havocguy', 'spec': 'Havoc', 'amount': 9, 'report': {'code': 'A', 'fightID': 1}},
+                    {'name': 'Devo1', 'spec': 'Devourer', 'amount': 8, 'report': {'code': 'B', 'fightID': 2}},
+                    {'name': 'Sneaky', 'amount': 7, 'report': {'code': 'C', 'fightID': 3}},  # no spec in ranking
+                    {'name': 'Devo2', 'spec': 'Devourer', 'amount': 6, 'report': {'code': 'D', 'fightID': 4}}]
+
+        async def get_rankings(session, *args, **kwargs):
+            return rankings
+
+        async def get_fight(session, code, fight_id, name):
+            spec = 'Havoc' if name == 'Sneaky' else 'Devourer'  # the fight itself says what they played
+            return {'start': 0, 'end': 300000, 'phases': [], 'spec': spec,
+                    'casts': [{'type': 'cast', 'abilityGameID': 1, 'timestamp': 1000}]}
+
+        with mock.patch.object(wcl, 'get_character_rankings', get_rankings), \
+                mock.patch.object(wcl, 'get_player_fight', get_fight):
+            top = asyncio.run(benchmarks.fetch_top_players(None, 1, 4, 'DemonHunter', 'Devourer', 'dps'))
+        self.assertEqual([(p['name'], p['spec']) for p in top], [('Devo1', 'Devourer'), ('Devo2', 'Devourer')])
+        self.assertEqual([p['rank'] for p in top], [1, 2])
+
+    def test_spec_from_fight_details(self):
+        from raidanalysis import wcl
+        details = {'data': {'playerDetails': {'dps': [{'name': 'X', 'icon': 'DemonHunter-Devourer'}],
+                                              'healers': [{'name': 'Y', 'specs': [{'spec': 'Mistweaver'}]}]}}}
+        self.assertEqual(wcl._spec_in_details(details, 'X'), 'Devourer')
+        self.assertEqual(wcl._spec_in_details(details, 'Y'), 'Mistweaver')
+        self.assertIsNone(wcl._spec_in_details(details, 'Z'))

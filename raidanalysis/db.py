@@ -582,6 +582,8 @@ def benchmarks_needed(limit, refresh_days, difficulties, recent_days=30):
               AND b.class = c.class AND b.spec = c.spec
               AND b.fetched_at > NOW() - CASE WHEN b.status = 'error' THEN INTERVAL '1 day'
                                               ELSE make_interval(days => %s) END
+              -- fetched before every top parse's spec was checked: fetch again
+              AND (jsonb_array_length(b.players) = 0 OR b.players -> 0 ? 'spec')
         )
         ORDER BY c.last_played DESC
         LIMIT %s

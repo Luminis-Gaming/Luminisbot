@@ -192,7 +192,8 @@ def top_players(data):
     items = []
     for p in data['top']:
         where = ' · '.join(x for x in (p.get('guild'), f"{p.get('server')}-{p.get('region')}".strip('-')) if x)
-        items.append(f'<li><strong>#{p["rank"]} {esc(p["name"])}</strong> <span class="muted small">{esc(where)}</span> — '
+        spec = f' · {esc(benchmarks.readable(p["spec"]))}' if p.get('spec') else ''
+        items.append(f'<li><strong>#{p["rank"]} {esc(p["name"])}</strong>{spec} <span class="muted small">{esc(where)}</span> — '
                      f'{fmt_amount(p["amount"])} {esc((data["benchmark"] or {}).get("metric") or "dps").upper()} · '
                      f'{fmt_duration(p["duration"])} kill · <a href="https://www.warcraftlogs.com/reports/{esc(p["code"])}'
                      f'#fight={p["fight_id"]}" target="_blank" rel="noopener">log ↗</a></li>')

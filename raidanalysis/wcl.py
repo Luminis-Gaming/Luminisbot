@@ -209,8 +209,9 @@ async def get_character_rankings(session, encounter_id, difficulty, class_name, 
 
 async def get_player_fight(session, code, fight_id, name):
     """
-    One player's casts in someone else's logged kill, plus that fight's timing:
-    {'start', 'end', 'phases': [{'id', 'start'}] (ms into the fight), 'casts': [events]}.
+    One player's casts in someone else's logged kill, plus that fight's timing and the spec they
+    played in it: {'start', 'end', 'phases': [{'id', 'start'}] (ms into the fight), 'casts': [events],
+    'spec': 'Devourer' or None}.
     """
     data = await query(session, """
         query($code: String!, $fights: [Int]!, $filter: String!) {
@@ -218,6 +219,7 @@ async def get_player_fight(session, code, fight_id, name):
             report(code: $code) {
               fights(fightIDs: $fights) { id startTime endTime phaseTransitions { id startTime } }
               events(fightIDs: $fights, dataType: Casts, filterExpression: $filter, limit: 10000) { data }
+              playerDetails(fightIDs: $fights)
             }
           }
         }
@@ -229,4 +231,23 @@ async def get_player_fight(session, code, fight_id, name):
     start = fight['startTime']
     return {'start': start, 'end': fight['endTime'],
             'phases': [{'id': p['id'], 'start': p['startTime'] - start} for p in fight.get('phaseTransitions') or []],
-            'casts': ((report.get('events') or {}).get('data')) or []}
+            'casts': ((report.get('events') or {}).get('data')) or [],
+            'spec': _spec_in_details(report.get('playerDetails'), name)}
+
+
+def _spec_in_details(player_details, name):
+    """The spec a player had in a fight, from its playerDetails ('DemonHunter-Devourer' icon or specs list)."""
+    details = (player_details or {}).get('data', player_details) or {}
+    details = details.get('playerDetails', details) or {}
+    for role in ('tanks', 'healers', 'dps'):
+        for entry in details.get(role) or []:
+            if entry.get('name') != name:
+                continue
+            icon = entry.get('icon') or ''
+            if '-' in icon:
+                return icon.split('-', 1)[1]
+            specs = entry.get('specs') or []
+            if specs:
+                first = specs[0]
+                return first.get('spec') if isinstance(first, dict) else first
+    return None

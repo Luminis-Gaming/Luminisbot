@@ -130,12 +130,17 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
     from . import wcl
     rankings = await wcl.get_character_rankings(session, encounter_id, difficulty, class_name, spec,
                                                 metric_for(role))
-    players = []
+    players, wrong_spec = [], 0
     for ranking in rankings:
         if len(players) >= TOP_N:
             break
         r = _ranking_fields(ranking)
         if r['hidden'] or not r['code'] or not r['fight_id'] or not r['name']:
+            continue
+        # Only ever compare a spec with itself: WCL has answered a filter for a brand-new spec
+        # (Devourer) with the whole class's rankings. Ranking entries name their spec (v2).
+        if isinstance(ranking.get('spec'), str) and _slug(ranking['spec']) != _slug(spec):
+            wrong_spec += 1
             continue
         try:
             fight = await wcl.get_player_fight(session, r['code'], r['fight_id'], r['name'])
@@ -144,17 +149,27 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
         except wcl.WCLError as e:
             logger.info(f"[RAIDS] Skipping top parse {r['code']}#{r['fight_id']}: {e}")
             continue
+        if fight.get('spec') and _slug(fight['spec']) != _slug(spec):  # second check: the fight itself
+            wrong_spec += 1
+            continue
         events = [e for e in fight['casts'] if e.get('type') == 'cast' and analyzer._event_ability(e)]
         counts = Counter(analyzer._event_ability(e) for e in events)
         casts = [[e['timestamp'] - fight['start'], analyzer._event_ability(e)] for e in events
                  if counts[analyzer._event_ability(e)] <= TOP_RARE_LIMIT]
         if not casts:
             continue
-        players.append({'rank': len(players) + 1, 'name': r['name'], 'amount': round(r['amount']),
+        players.append({'rank': len(players) + 1, 'name': r['name'], 'spec': spec, 'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': fight['end'] - fight['start'],
                         'phases': fight['phases'], 'casts': casts})
+    if wrong_spec:
+        logger.warning(f"[RAIDS] Top {spec} {class_name} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
+                       f"parse(s) of another spec")
     return players
+
+
+def _slug(name):
+    return (name or '').replace(' ', '').lower()
 
 
 async def refresh(session, budget_ok, limit=SPECS_PER_RUN):
