@@ -71,6 +71,7 @@ _PUBLIC_STRIP = [
     re.compile(r'<form[^>]*class="tag-form".*?</form>', re.S),
     re.compile(r'<form[^>]*action="[^"]*/(sync|guides)".*?</form>', re.S),     # sync / re-analyze / rescan
     re.compile(r'<th>Tag</th>'),
+    re.compile(r'<span class="admin-only">.*?</span>', re.S),                   # officer-only hints
 ]
 
 
@@ -147,7 +148,7 @@ def _flash(request):
 
 def _with_duration(pull):
     """The pull's analysis plus its duration, as analyzer.scoreboard expects."""
-    analysis = dict(pull.get('analysis') or {})
+    analysis = analyzer.annotate_deaths(dict(pull.get('analysis') or {}))
     analysis['_duration'] = pull['end_ms'] - pull['start_ms']
     return analysis
 
@@ -607,7 +608,7 @@ async def handle_night(request):
                 <th data-sort title="WCL fight %: how much of the encounter was left, accounting for phases">Fight %</th>
                 <th data-sort class="num" title="Boss health when the pull ended">Boss HP</th>
                 <th>Phase</th><th data-sort class="num">Deaths</th>
-                <th data-sort class="num" title="When half the raid was dead - later deaths don't count against anyone">Wipe called</th>
+                <th data-sort class="num" title="When half the raid was dead">Half dead</th>
                 <th data-sort>Why it ended</th>
                 <th data-sort class="num" title="Hits from avoidable mechanics">Avoidable</th><th></th></tr>
             {rows}
@@ -620,8 +621,9 @@ async def handle_night(request):
     {_consumables_card(insight_pulls, merged['players'])}
     <div class="card">
         <h2>💀 Deaths in every pull</h2>
-        <p class="muted small">One row per pull, along its own length: red ticks are deaths, grey ones came after
-           the wipe was called (dashed yellow), thin lines are phase changes. Click a row to open that pull.</p>
+        <p class="muted small">One row per pull, along its own length: red ticks are early deaths by mistake (one of
+           the first 4 deaths, not part of a mass death), grey ones are the rest; the dashed yellow line is where half
+           the raid was dead, thin lines are phase changes. Click a row to open that pull.</p>
         {deaths_strip(insights.death_strip_rows(code, numbered))}
     </div>
     <div class="card">
@@ -648,7 +650,7 @@ async def handle_pull(request):
     if not pull:
         raise web.HTTPFound(f'/admin/raids/report/{quote(code)}?error=' + quote('Pull not found.'))
 
-    analysis = pull['analysis'] or {}
+    analysis = analyzer.annotate_deaths(pull['analysis'] or {})
     phase_names = pull['phase_names'] or {}
     encounter_id, difficulty = pull['encounter_id'], pull['difficulty']
     tags, sources = _effective_tags(encounter_id)
@@ -667,11 +669,11 @@ async def handle_pull(request):
         return _page(f"Players · {pull['encounter_name']} pull {number}", session, body)
 
     death_rows = ''.join(
-        f'<tr{" class=muted" if d.get("after_wipe") else ""}><td class="num">{fmt_duration(d["t"])}</td>'
+        f'<tr{"" if d.get("early") else " class=muted"}><td class="num">{fmt_duration(d["t"])}</td>'
         f'<td>{pname(d["name"])}</td>'
         f'<td>{"<span class=muted>likely</span> " if d.get("likely") else ""}'
         f'{ability(d["ability"], d.get("icon"), d.get("ability_id"), guide_for(d.get("ability_id"), d["ability"]))}</td>'
-        f'<td class="small">{"after wipe called" if d.get("after_wipe") else ""}</td></tr>'
+        f'<td class="small{" bad-text" if d.get("early") else ""}">{analyzer.death_note(d)}</td></tr>'
         for d in analysis.get('deaths') or [])
 
     result = 'Kill' if pull['kill'] else f"Wipe at {pull['fight_pct'] or 0:.1f}%"
@@ -686,8 +688,8 @@ async def handle_pull(request):
            <a href="https://www.warcraftlogs.com/reports/{esc(code)}#fight={fight_id}" target="_blank">Warcraft Logs ↗</a></p>
         {reason_html}
         {pull_timeline(pull, analysis, phase_names)}
-        <p class="muted small">Red ticks are deaths (hover for details); grey ones came after the wipe was called
-           (half the raid dead) and don't count against anyone.</p>
+        <p class="muted small">Red ticks are early deaths by mistake (one of the first 4 deaths, not part of a mass
+           death of 3+ players within 3s); grey ones don't count against anyone. Hover for details.</p>
     </div>
     <div class="card">
         <h2>📋 Mechanics</h2>
@@ -931,7 +933,7 @@ async def handle_boss(request):
     {trends_html}
     <div class="card">
         <h2>👥 Players — {scope_links}</h2>
-        <p class="muted small">{len(scoped)} pulls. Deaths and first deaths only count before the wipe was called.</p>
+        <p class="muted small">{len(scoped)} pulls. Deaths count only as early deaths by mistake: one of a pull's first 4 deaths, and not part of a mass death.</p>
         <div class="grid-2" style="margin-bottom:20px">
             <div><h3>💀 What's killing us</h3>{killers_table(analyzer.killers(analyses), guide_for=guide_for)}</div>
             <div><h3>🧪 Avoidable damage by mechanic</h3>{_avoidable_summary(analyses, tags, guide_for)}</div>
@@ -949,7 +951,8 @@ async def handle_boss(request):
            are meant to take it. Only direct hits count, not damage-over-time ticks — except for auras and pools
            that only ever tick. <span class="pill pill-suggest">suggested</span> = not in the guide, but it only
            ever hits a few players at a time.
-           Newly tagged raid-wide abilities need a <em>Re-analyze</em> of a night to get per-player hits.</p>
+           <span class="admin-only">Newly tagged raid-wide abilities need a <em>Re-analyze</em> of a night to get
+           per-player hits.</span></p>
         <div class="table-wrapper"><table class="compact">
             <tr><th data-sort>Ability</th><th>Source</th><th data-sort class="num">Pulls seen</th>
                 <th data-sort class="num" title="Average share of the raid hit per pull">Raid hit</th>

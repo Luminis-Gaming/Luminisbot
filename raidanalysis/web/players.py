@@ -9,7 +9,7 @@ from urllib.parse import quote
 from .render import (ROLE_ICONS, SERIES_PULL, esc, fmt_duration, guide_button, per_pull_columns, player_name,
                      sparkline)
 
-SUBSCORES = (('survival', 'Survival', 'Share of pull time alive until the wipe was called'),
+SUBSCORES = (('survival', 'Survival', 'Share of pull time alive until half the raid was dead'),
              ('mechanics', 'Mechanics', 'Avoidable hits compared to the raid — 100 = never hit, ~70 = raid average'),
              ('potions', 'Potions', 'Share of pulls with a combat potion'))
 
@@ -143,11 +143,12 @@ def player_page(p, guide_for, pull_href):
     rows = []
     for pp in p['per_pull']:
         if pp['died_at'] is not None:
-            status = (f'<span class="bad-text">died {fmt_duration(pp["died_at"])}</span> '
-                      f'<span class="muted small">to {esc(pp["died_to"])}{" · first" if pp["first"] else ""}</span>')
+            status = (f'<span class="{"bad-text" if pp.get("mistake") else "muted"}">died {fmt_duration(pp["died_at"])}</span> '
+                      f'<span class="muted small">to {esc(pp["died_to"])}{" · first" if pp["first"] else ""}'
+                      f'{" · " + esc(pp["death_note"]) if pp.get("death_note") else ""}</span>')
         else:
             status = '<span class="good-text">alive until the end</span>' if pp['kill'] else \
-                '<span class="good-text">alive until the wipe call</span>'
+                '<span class="good-text">alive until half the raid was dead</span>'
         rows.append(f"""
             <tr onclick="location='{esc(pull_href(pp['number']))}'" style="cursor:pointer">
                 <td class="num">#{pp['number']}</td>
@@ -169,7 +170,7 @@ def player_page(p, guide_for, pull_href):
             <div>
                 <h2>{player_name(p['name'], p['class'])}</h2>
                 <p class="muted">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(p['class']))} ·
-                   {p['pulls']} pulls · {p['deaths']} deaths before the wipe call</p>
+                   {p['pulls']} pulls · {p['deaths']} early death{'s' if p['deaths'] != 1 else ''} by mistake</p>
                 <div class="subscores wide">{_subscore_bars(p['scores'])}</div>
                 <div class="chips">{_contributions(p)}</div>
             </div>

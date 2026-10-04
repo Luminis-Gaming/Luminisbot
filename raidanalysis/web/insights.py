@@ -72,7 +72,9 @@ def build(pulls, tags, guide_for, code):
                                                  f'<span class="muted small">({numbers})</span>', body, 'bad'))
 
     # --- Deaths ---------------------------------------------------------------
-    counted = [d for a in analyses for d in a.get('deaths') or [] if not d.get('after_wipe')]
+    for a in analyses:
+        analyzer.annotate_deaths(a)
+    counted = [d for a in analyses for d in a.get('deaths') or [] if d.get('early')]
     total_deaths = sum(len(a.get('deaths') or []) for a in analyses)
     all_kills = all(p.get('kill') for p in pulls)
     by_ability, by_player, first = {}, {}, {}
@@ -81,8 +83,8 @@ def build(pulls, tags, guide_for, code):
         by_ability[(d.get('ability_id'), d['ability'], d.get('icon'))] += 1
         by_player[d['name']] = by_player.get(d['name'], 0) + 1
     for a in analyses:
-        firsts = [d for d in a.get('deaths') or [] if not d.get('after_wipe')]
-        if firsts:
+        firsts = a.get('deaths') or []
+        if firsts and firsts[0].get('early'):
             first[firsts[0]['name']] = first.get(firsts[0]['name'], 0) + 1
     ability_bars = bar_table([(ability_html(name, icon, aid, guide_for(aid, name)), n, str(n), '')
                               for (aid, name, icon), n in sorted(by_ability.items(), key=lambda kv: -kv[1])], 'Deaths')
@@ -97,11 +99,11 @@ def build(pulls, tags, guide_for, code):
         groups['Deaths'].append(_row('💀', f'<strong>{_plural(total_deaths, "death")}</strong> during the kill'
                                      f'{"s" if not single else ""}', body, 'bad'))
     elif counted:
-        sentence = (f'<strong>{_plural(len(counted), "death")}</strong> before the wipe was called'
+        sentence = (f'<strong>{_plural(len(counted), "early death")}</strong> by mistake'
                     f'{f" ({total_deaths} in total)" if total_deaths != len(counted) else ""}{across}')
         groups['Deaths'].append(_row('💀', sentence, body, 'bad'))
     else:
-        groups['Deaths'].append(_row('💀', 'Nobody died before the wipe was called', body, 'good'))
+        groups['Deaths'].append(_row('💀', 'No early deaths by mistake', body, 'good'))
 
     # --- Avoidable mechanics ----------------------------------------------------
     for ability in merged['abilities']:
@@ -217,7 +219,7 @@ def death_strip_rows(code, pulls):
     """Rows for render.deaths_strip from [(pull_number, pull record with analysis)]."""
     rows = []
     for number, pull in pulls:
-        analysis = pull.get('analysis') or {}
+        analysis = analyzer.annotate_deaths(pull.get('analysis') or {})
         result = 'Kill' if pull['kill'] else f"{pull['fight_pct'] or 0:.1f}%"
         rows.append({'label': f'#{number}  {result}', 'href': f'/admin/raids/report/{code}/{pull["fight_id"]}',
                      'duration': pull['end_ms'] - pull['start_ms'], 'kill': pull['kill'],

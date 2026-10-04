@@ -87,6 +87,38 @@ def _event_ability(event):
     return (event.get('ability') or {}).get('guid')
 
 
+# Which deaths count against a player ("early deaths by mistake"): only the first few of a
+# pull, and never one that's part of a mass death (raid-wide mechanic, enrage, collapse).
+EARLY_DEATH_LIMIT = 4           # if 4 others already died, yours doesn't count
+MASS_DEATH_WINDOW_MS = 3000     # deaths this close together ...
+MASS_DEATH_SIZE = 3             # ... this many of them = a mass death, not a personal mistake
+
+
+def annotate_deaths(analysis):
+    """
+    Mark every death in a pull with 'order' (1-based), 'mass' (died together with 2+ others) and
+    'early' (counts as a personal mistake: one of the first 4 deaths and not part of a mass death).
+    Idempotent; works on stored analyses of any version.
+    """
+    deaths = sorted(analysis.get('deaths') or [], key=lambda d: d['t'])
+    for i, death in enumerate(deaths):
+        together = sum(1 for other in deaths if abs(other['t'] - death['t']) <= MASS_DEATH_WINDOW_MS)
+        death['order'] = i + 1
+        death['mass'] = together >= MASS_DEATH_SIZE
+        death['early'] = i < EARLY_DEATH_LIMIT and not death['mass']
+    analysis['deaths'] = deaths
+    return analysis
+
+
+def death_note(death):
+    """Why a death does or doesn't count, for tables and tooltips."""
+    if death.get('early'):
+        return 'early death by mistake'
+    if death.get('mass'):
+        return 'part of a mass death'
+    return f"death #{death.get('order', '?')} — not counted"
+
+
 def _killing_blow(death):
     """
     (ability, inferred) for a WCL death entry. WCL sometimes records no killing
@@ -392,7 +424,7 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
                             buff_events, heal_events, set(potion_ids), set(defensive_ids))
     boss_casts, boss_abilities = _boss_timeline(fight_start, tables.get('enemyCasts'), enemy_cast_events)
 
-    return {
+    return annotate_deaths({
         'version': ANALYSIS_VERSION,
         'players': sorted(roster.values(), key=lambda p: ({'tank': 0, 'healer': 1}.get(p['role'], 2), p['name'])),
         'deaths': deaths,
@@ -406,7 +438,7 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         'boss_casts': boss_casts,
         'boss_abilities': boss_abilities,
         'prepull': _prepull(names_by_id, roster, combatant_events),
-    }
+    })
 
 
 # ============================================================================
@@ -466,13 +498,13 @@ def scoreboard(analyses, tags):
             r['pulls'] += 1
             r['pull_ms'] += duration
 
-        counted = [d for d in analysis.get('deaths') or [] if not d.get('after_wipe')]
+        deaths = annotate_deaths(analysis)['deaths']
         death_time = {}
-        for i, death in enumerate(counted):
-            if death['name'] in roster:
+        for death in deaths:
+            death_time.setdefault(death['name'], death['t'])
+            if death['early'] and death['name'] in roster:
                 rows[death['name']]['deaths'] += 1
-                death_time.setdefault(death['name'], death['t'])
-                if i == 0:
+                if death['order'] == 1:
                     rows[death['name']]['first_deaths'] += 1
         end = analysis.get('wipe_at') or duration
         for name in roster:
@@ -538,17 +570,23 @@ def merge_pulls(analyses):
 
 
 def killers(analyses):
-    """Abilities that killed players before the wipe moment, most lethal first."""
+    """
+    What's killing the raid, most lethal first: early deaths by mistake plus mass deaths
+    (stragglers dying late, one by one, are left out). 'mistakes' / 'mass' split the count.
+    """
     out = {}
     for analysis in analyses:
-        for death in analysis.get('deaths') or []:
-            if death.get('after_wipe'):
+        for death in annotate_deaths(analysis)['deaths']:
+            if not (death['early'] or death['mass']):
                 continue
             key = death.get('ability_id') or death['ability']
             entry = out.setdefault(key, {'id': death.get('ability_id'), 'name': death['ability'],
-                                         'icon': death.get('icon'), 'count': 0, 'players': {}})
+                                         'icon': death.get('icon'), 'count': 0, 'mistakes': 0, 'mass': 0,
+                                         'players': {}})
             entry['count'] += 1
-            entry['players'][death['name']] = entry['players'].get(death['name'], 0) + 1
+            entry['mistakes' if death['early'] else 'mass'] += 1
+            if death['early']:
+                entry['players'][death['name']] = entry['players'].get(death['name'], 0) + 1
     return sorted(out.values(), key=lambda e: -e['count'])
 
 
@@ -639,12 +677,14 @@ def player_report(pulls, tags):
         analysis = pull['analysis']
         duration = analysis.get('_duration') or 0
         roster = {p['name']: p for p in analysis.get('players') or []}
-        counted = [d for d in analysis.get('deaths') or [] if not d.get('after_wipe')]
-        first_name = counted[0]['name'] if counted else None
+        deaths = annotate_deaths(analysis)['deaths']
+        first_name = deaths[0]['name'] if deaths and deaths[0]['early'] else None
         end = analysis.get('wipe_at') or duration
-        died = {}
-        for d in counted:
-            died.setdefault(d['name'], d)
+        any_death, died = {}, {}  # any death (for time alive) / early deaths by mistake (for blame)
+        for d in deaths:
+            any_death.setdefault(d['name'], d)
+            if d['early']:
+                died.setdefault(d['name'], d)
 
         avoidable = {}
         for ability in analysis.get('abilities') or []:
@@ -660,8 +700,8 @@ def player_report(pulls, tags):
             r = rows.setdefault(name, _new_player_row(player))
             r['pulls'] += 1
             r['pull_ms'] += duration
-            death = died.get(name)
-            r['alive_ms'] += min(death['t'], end) if death else end
+            death, fell = died.get(name), any_death.get(name)
+            r['alive_ms'] += min(fell['t'], end) if fell else end
             used_defensive = (analysis.get('defensives') or {}).get(name, 0)
             potted = (analysis.get('potions') or {}).get(name, 0) > 0
             hits = sum(n for _, _, n in avoidable.get(name, {}).values())
@@ -687,8 +727,10 @@ def player_report(pulls, tags):
                 r['last_prepull'] = prepull
             r['defensives'] += used_defensive
             r['per_pull'].append({'number': pull['number'], 'kill': pull.get('kill'), 'duration': duration,
-                                  'died_at': death['t'] if death else None,
-                                  'died_to': death['ability'] if death else None,
+                                  'died_at': fell['t'] if fell else None,
+                                  'died_to': fell['ability'] if fell else None,
+                                  'death_note': death_note(fell) if fell else None,
+                                  'mistake': bool(death),
                                   'first': first_name == name, 'avoidable_hits': hits,
                                   'potion': potted, 'defensive': used_defensive})
         for key in ('interrupts', 'dispels'):
@@ -746,11 +788,11 @@ def _components(p, players, mechanics_seen, raid_by_ability):
                     'ability': ability, 'weight': COMPONENT_WEIGHTS.get(key, 1.0)})
 
     survival = 100.0 * p['alive_ms'] / p['pull_ms'] if p['pull_ms'] else 100.0
-    add('survival', 'Survival', survival, f'Alive {survival:.0f}% of the time until the wipe call')
+    add('survival', 'Survival', survival, f'Alive {survival:.0f}% of the time until half the raid was dead')
 
     death_rates = [q['deaths'] / q['pulls'] for q in players]
     add('deaths', 'Deaths', _rank_lower_better(p['deaths'] / n, death_rates),
-        f"{p['deaths']} before the wipe call in {n} pull{'s' if n != 1 else ''} "
+        f"{p['deaths']} early death{'s' if p['deaths'] != 1 else ''} by mistake in {n} pull{'s' if n != 1 else ''} "
         f"(raid average {sum(death_rates) / len(death_rates) * n:.1f})")
 
     for ability_id, m in mechanics_seen.items():
@@ -825,7 +867,7 @@ def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by
         add('bad', f"First to die {len(p['first_deaths'])} times (most often to {common})",
             12 + len(p['first_deaths']))
     if n >= 3 and p['deaths'] >= 3 and p['deaths'] / n >= 1.5 * raid_deaths:
-        add('bad', f"Died before the wipe call in {p['deaths']} of {n} pulls "
+        add('bad', f"Early death by mistake in {p['deaths']} of {n} pulls "
                    f"(raid average {raid_deaths * n:.1f})", 9 + p['deaths'] / n)
     # Many deaths are one-shots a healthstone can't fix - only call out clearly-above-raid habits.
     if p['deaths_without_defensive'] >= 3 and p['deaths_without_defensive'] >= 1.5 * raid_no_defensive:
@@ -836,7 +878,7 @@ def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by
         if count >= 3:
             add('info', f"Most often killed by {top} ({count} of {p['deaths']} deaths)", 3)
     if p['scores']['survival'] >= 97 and not p['deaths'] and n >= 2:
-        add('good', 'Never died before a wipe was called', 5)
+        add('good', 'No early deaths by mistake', 5)
 
     # Consumables
     if n >= 3 and p['potion_pulls'] / n < 0.5:

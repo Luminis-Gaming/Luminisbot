@@ -126,7 +126,7 @@ def timeline(pulls, roster):
                     parts.append(f'<rect x="{x(use["t"]):.1f}" y="{mid - 5:.1f}" width="{max(3, x(end) - x(use["t"])):.1f}" '
                                  f'height="10" rx="3" fill="{color}"{opacity}><title>{esc(tip)}</title></rect>')
             for d in deaths:
-                cx, color = x(d['t']), ('rgba(255,255,255,0.35)' if d.get('after_wipe') else DEATH)
+                cx, color = x(d['t']), (DEATH if d.get('early') else 'rgba(255,255,255,0.35)')
                 parts.append(f'<path d="M{cx - 5:.1f},{mid - 5:.1f} L{cx + 5:.1f},{mid + 5:.1f} M{cx + 5:.1f},{mid - 5:.1f} '
                              f'L{cx - 5:.1f},{mid + 5:.1f}" stroke="{color}" stroke-width="2.5">'
                              f'<title>Died to {esc(d["ability"])} at {fmt_duration(d["t"])}</title></path>')

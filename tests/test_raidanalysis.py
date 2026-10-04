@@ -46,18 +46,45 @@ def analyze(players, events=(), deaths=(), kill=False, player_details=None, cast
                                   set(potions), set(defensives))
 
 
-class TestDeathsAndWipeCall(unittest.TestCase):
-    def test_deaths_after_half_the_raid_is_dead_dont_count(self):
-        players = actors('A', 'B', 'C', 'D')
-        deaths = [{'name': n, 'timestamp': 1000 + t, 'killingBlow': {'name': 'Caustic Waves', 'guid': CAUSTIC}}
-                  for n, t in (('A', 100), ('B', 200), ('C', 300), ('D', 400))]
-        a = analyze(players, deaths=deaths)
-        self.assertEqual(a['wipe_at'], 200)  # 2 of 4 dead
-        self.assertEqual([d['after_wipe'] for d in a['deaths']], [False, False, True, True])
+def died(*name_times):
+    return [{'name': n, 'timestamp': 1000 + t, 'killingBlow': {'name': 'Caustic Waves', 'guid': CAUSTIC}}
+            for n, t in name_times]
+
+
+class TestEarlyDeaths(unittest.TestCase):
+    def test_only_the_first_four_deaths_count(self):
+        names = 'ABCDEFGH'
+        a = analyze(actors(*names), deaths=died(*((n, 10000 * (i + 1)) for i, n in enumerate(names))))
+        self.assertEqual(a['wipe_at'], 40000)  # 4 of 8 dead
+        self.assertEqual([d['early'] for d in a['deaths']], [True] * 4 + [False] * 4)
+        self.assertEqual(analyzer.death_note(a['deaths'][4]), 'death #5 — not counted')
 
         board = {r['name']: r for r in analyzer.scoreboard([dict(a, _duration=600000)], {})}
-        self.assertEqual(board['A']['first_deaths'], 1)
-        self.assertEqual(board['C']['deaths'], 0)
+        self.assertEqual((board['A']['deaths'], board['A']['first_deaths']), (1, 1))
+        self.assertEqual(board['E']['deaths'], 0)
+
+    def test_mass_deaths_dont_count(self):
+        # A dies alone; B, C and D die within 3s of each other (an AoE) - only A made a mistake.
+        a = analyze(actors(*'ABCDEFGH'), deaths=died(('A', 5000), ('B', 20000), ('C', 21000), ('D', 22500)))
+        self.assertEqual([(d['name'], d['early'], d['mass']) for d in a['deaths']],
+                         [('A', True, False), ('B', False, True), ('C', False, True), ('D', False, True)])
+        self.assertEqual(analyzer.death_note(a['deaths'][1]), 'part of a mass death')
+
+        killers = analyzer.killers([a])
+        self.assertEqual((killers[0]['count'], killers[0]['mistakes'], killers[0]['mass']), (4, 1, 3))
+        self.assertEqual(killers[0]['players'], {'A': 1})
+
+        out = {p['name']: p for p in analyzer.player_report(
+            [{'number': 1, 'kill': False, 'analysis': dict(a, _duration=600000)}], {})}
+        self.assertEqual(out['A']['deaths'], 1)
+        self.assertEqual(out['B']['deaths'], 0)
+        self.assertFalse(out['B']['per_pull'][0]['mistake'])
+        self.assertIsNotNone(out['B']['per_pull'][0]['died_at'])  # still dead for time-alive purposes
+
+    def test_annotating_stored_analyses(self):
+        stored = {'deaths': [{'name': 'B', 't': 9000}, {'name': 'A', 't': 1000}]}  # pre-v5, unsorted
+        deaths = analyzer.annotate_deaths(stored)['deaths']
+        self.assertEqual([(d['name'], d['order'], d['early']) for d in deaths], [('A', 1, True), ('B', 2, True)])
 
     def test_kills_have_no_wipe_moment(self):
         players = actors('A', 'B')

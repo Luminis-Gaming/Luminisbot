@@ -148,7 +148,7 @@ def recap_embeds(recap):
             title=f'{boss["name"]} ({DIFFICULTY_NAMES.get(boss["difficulty"], boss["difficulty"])}) — '
                   f'{row["score"]}/100 · {label}',
             description=(f'{scores}\n{row["pulls"]} pull{"s" if row["pulls"] != 1 else ""} ({result}) · '
-                         f'{row["deaths"]} death{"s" if row["deaths"] != 1 else ""} before the wipe call · '
+                         f'{row["deaths"]} early death{"s" if row["deaths"] != 1 else ""} by mistake · '
                          f'potted {row["potion_pulls"]}/{row["pulls"]}'),
             color=color)
         bad = [_note_line(n, boss['guide_for']) for n in row['feedback'] if n['tone'] == 'bad'][:3]

@@ -526,7 +526,7 @@ def pull_timeline(pull, analysis, phase_names):
         parts.append(f'<rect x="{left}" y="4" width="{inner_w}" height="26" fill="rgba(255,255,255,0.08)"/>')
 
     for death in analysis.get('deaths') or []:
-        color = 'rgba(255,255,255,0.3)' if death.get('after_wipe') else '#ff6b6b'
+        color = '#ff6b6b' if death.get('early') else 'rgba(255,255,255,0.3)'
         parts.append(f'<line x1="{x(death["t"]):.1f}" x2="{x(death["t"]):.1f}" y1="34" y2="52" '
                      f'stroke="{color}" stroke-width="2"><title>{fmt_duration(death["t"])} '
                      f'{esc(death["name"])} died to {esc(death["ability"])}</title></line>'
@@ -536,7 +536,7 @@ def pull_timeline(pull, analysis, phase_names):
     end_label = f'<text x="{width - right}" y="68" text-anchor="end">{fmt_duration(duration)}</text>'
     if analysis.get('wipe_at') is not None:
         wx = x(analysis['wipe_at'])
-        wipe_text = f'wipe called {fmt_duration(analysis["wipe_at"])}'
+        wipe_text = f'half the raid dead {fmt_duration(analysis["wipe_at"])}'
         if wx > width - right - 150:  # too close to the end label - fold it in
             wipe_text += f' of {fmt_duration(duration)}'
             end_label = ''
@@ -555,9 +555,9 @@ def scoreboard_table(rows, show_avoidable=True):
     if not rows:
         return '<p class="muted">No players.</p>'
     head = ('<tr><th data-sort>Player</th><th data-sort class="num">Pulls</th>'
-            '<th data-sort class="num" title="Deaths before the wipe was called">Deaths</th>'
+            '<th data-sort class="num" title="Early deaths by mistake: one of the first 4 deaths of a pull, not part of a mass death">Early deaths</th>'
             '<th data-sort class="num" title="First player to die in a pull">First death</th>'
-            '<th data-sort class="num" title="Share of pull time alive (until wipe called)">Alive %</th>')
+            '<th data-sort class="num" title="Share of pull time alive (until half the raid was dead)">Alive %</th>')
     if show_avoidable:
         head += ('<th data-sort class="num" title="Hits from abilities tagged avoidable">Avoidable hits</th>'
                  '<th data-sort class="num">Avoidable dmg</th>')
@@ -588,14 +588,21 @@ def scoreboard_table(rows, show_avoidable=True):
 
 
 def killers_table(rows, limit=8, guide_for=lambda ability_id, name: None):
+    """What's killing the raid: early deaths by mistake (who) plus deaths in mass deaths."""
     if not rows:
-        return '<p class="muted">Nobody died before a wipe was called. 🎉</p>'
-    body = ''.join(
-        f'<tr><td>{ability(k["name"], k["icon"], k["id"], guide_for(k["id"], k["name"]))}</td><td class="num">{k["count"]}</td>'
-        f'<td class="small">{", ".join(f"{esc(n)}" + (f" ×{c}" if c > 1 else "") for n, c in sorted(k["players"].items(), key=lambda kv: -kv[1]))}</td></tr>'
-        for k in rows[:limit])
+        return '<p class="muted">No early deaths by mistake or mass deaths. 🎉</p>'
+    body = []
+    for k in rows[:limit]:
+        who = ", ".join(f"{esc(n)}" + (f" ×{c}" if c > 1 else "")
+                        for n, c in sorted(k["players"].items(), key=lambda kv: -kv[1]))
+        split = ' · '.join(part for part in (
+            f'{k["mistakes"]} mistake{"s" if k["mistakes"] != 1 else ""}' if k.get('mistakes') else '',
+            f'{k["mass"]} in mass deaths' if k.get('mass') else '') if part)
+        body.append(f'<tr><td>{ability(k["name"], k["icon"], k["id"], guide_for(k["id"], k["name"]))}</td>'
+                    f'<td class="num">{k["count"]}</td><td class="small">{split}</td>'
+                    f'<td class="small">{who}</td></tr>')
     return (f'<div class="table-wrapper"><table class="compact"><tr><th>Killed by</th><th class="num">Deaths</th>'
-            f'<th>Who</th></tr>{body}</table></div>')
+            f'<th></th><th>Early deaths by mistake</th></tr>{"".join(body)}</table></div>')
 
 
 def tag_buttons(encounter_id, difficulty, ability_id, ability_name, current, source, back):
@@ -627,7 +634,7 @@ def tag_buttons(encounter_id, difficulty, ability_id, ability_name, current, sou
 def deaths_strip(rows):
     """
     Every pull of a boss on one time axis: a bar per pull (its length), phase
-    changes, death ticks (red before the wipe call, grey after) and the wipe call.
+    changes, death ticks (red = early death by mistake, grey = the rest) and where half the raid was dead.
     rows: [{'label', 'href', 'duration', 'phases': [ms], 'deaths': [...], 'wipe_at', 'kill'}]
     """
     if not rows:
@@ -654,13 +661,13 @@ def deaths_strip(rows):
             bar += (f'<line x1="{x(start):.1f}" x2="{x(start):.1f}" y1="{y + 3}" y2="{y + row_h - 3}" '
                     f'stroke="rgba(255,255,255,0.35)" stroke-width="1"/>')
         for d in r['deaths']:
-            color = 'rgba(255,255,255,0.35)' if d.get('after_wipe') else '#ff6b6b'
+            color = '#ff6b6b' if d.get('early') else 'rgba(255,255,255,0.35)'
             bar += (f'<line x1="{x(d["t"]):.1f}" x2="{x(d["t"]):.1f}" y1="{y + 5}" y2="{y + row_h - 5}" '
                     f'stroke="{color}" stroke-width="2"><title>{fmt_duration(d["t"])} {esc(d["name"])} '
                     f'died to {esc(d["ability"])}</title></line>')
         if r.get('wipe_at') is not None:
             bar += (f'<line x1="{x(r["wipe_at"]):.1f}" x2="{x(r["wipe_at"]):.1f}" y1="{y + 2}" y2="{y + row_h - 2}" '
-                    f'stroke="#ffd43b" stroke-width="2" stroke-dasharray="3 2"><title>Wipe called '
+                    f'stroke="#ffd43b" stroke-width="2" stroke-dasharray="3 2"><title>Half the raid dead '
                     f'{fmt_duration(r["wipe_at"])}</title></line>')
         parts.append(f'<a href="{esc(r["href"])}"><rect x="0" y="{y}" width="{width}" height="{row_h}" fill="transparent"/>'
                      f'<text x="{left - 10}" y="{y + row_h / 2 + 4:.1f}" text-anchor="end">{esc(r["label"])}</text>{bar}</a>')
