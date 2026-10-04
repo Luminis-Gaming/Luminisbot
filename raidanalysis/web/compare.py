@@ -11,8 +11,8 @@ from .. import benchmarks
 from ..spells import icon_url
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
 
-VERDICTS = {'good': ('pill-kill', 'In line'), 'ok': ('pill', 'Close'), 'off': ('pill-wipe', 'Off'),
-            'missing': ('pill-wipe', 'Never used')}
+VERDICTS = {'good': ('pill-kill', 'In line'), 'mostly': ('pill-mostly', 'Mostly in line'),
+            'ok': ('pill', 'Hit & miss'), 'off': ('pill-wipe', 'Off'), 'missing': ('pill-wipe', 'Never used')}
 
 
 def _spec_icon_class(spell_id):
@@ -35,6 +35,14 @@ def _ability(row, spells):
     return f'<span class="cmp-ab" data-spell="{row["icon_id"]}">{img}{esc(row["name"])}</span>'
 
 
+def _weak_line(r):
+    """Under the ability: the moments to work on, so a mostly-fine verdict still shows what's left."""
+    if not r.get('weak') or r['category'] not in benchmarks.JUDGED:
+        return ''
+    return (f'<div class="weak-line" title="Moments you line up with less than half the time - '
+            f'most important (more top players there) first">⚠ {esc(benchmarks.weak_text(r["weak"]))}</div>')
+
+
 def summary(data):
     """One row per major ability: top usage, yours, how many top-player moments you hit, verdict."""
     rows = []
@@ -44,7 +52,7 @@ def summary(data):
         top_when = ', '.join(fmt_duration(w['ref_at']) for w in r['windows'][:5]) or '<span class="muted">no shared moment</span>'
         rows.append(f"""
             <tr class="{'' if r['category'] in benchmarks.JUDGED else 'muted-row'}">
-                <td>{_ability(r, data['spells'])}</td>
+                <td>{_ability(r, data['spells'])}{_weak_line(r)}</td>
                 <td class="small muted">{esc(benchmarks.CATEGORY_LABELS.get(r['category'], ''))}</td>
                 <td class="num" data-v="{r['top_per_min']:.3f}">{r['top_per_min'] * 5:.1f}
                     <span class="muted small">({r['top_users']}/{len(data['top'])})</span></td>
@@ -127,10 +135,12 @@ def timeline(data, pull, boss=None, spell_lookup=None):
         chips.append(f'<button type="button" class="tl-chip" data-g="{g}" aria-pressed="{"true" if judged else "false"}">'
                      + (f'<img class="chip-icon" src="{esc(chip_icon)}" alt="">' if chip_icon else '')
                      + f'{esc(r["name"])}</button>')
-        bands = ''.join(f'<i class="win" style="left:{at(w["ref_at"] - w["tolerance"])};'
+        weak_at = {m['ref_at'] for m in r.get('weak') or []}
+        bands = ''.join(f'<i class="win{" weak" if w["ref_at"] in weak_at else ""}" style="left:{at(w["ref_at"] - w["tolerance"])};'
                         f'width:{100 * 2 * w["tolerance"] / longest:.3f}%" '
                         f'data-tip="{w["players"]} of the top {len(top)} press it around {fmt_duration(w["ref_at"])} '
-                        f'(in line = within ±{w["tolerance"] / 1000:.0f} s)"></i>'
+                        f'(in line = within ±{w["tolerance"] / 1000:.0f} s)'
+                        f'{" - one you usually miss" if w["ref_at"] in weak_at else ""}"></i>'
                         for w in r['windows'])
         labels.append(f'<div class="tl-lab grp" data-g="{g}"{hidden}>{_ability(r, spells)}'
                       f'{_verdict_pill(r["verdict"], r["known"]) if judged else ""}</div>')

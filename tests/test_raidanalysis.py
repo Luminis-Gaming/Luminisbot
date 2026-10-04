@@ -691,3 +691,25 @@ class TestTimingMargin(unittest.TestCase):
         row = benchmarks.compare([on_time], top, spells)[0]
         self.assertEqual((row['hits'], row['considered']), (1, 1))
         self.assertEqual(benchmarks.timing_text(row['offset']), '3 s late')
+
+
+class TestWeakMoments(unittest.TestCase):
+    """Mostly right but missing one big moment: not a plain 'In line', and the moment is named."""
+
+    def test_mostly_in_line_names_the_missed_moment(self):
+        from raidanalysis import benchmarks
+        spells = {7: {'name': 'Essence Break', 'meta': 'Instant · 40 sec cooldown',
+                      'description': 'Slash all enemies, increasing damage taken by 80% for 4 sec.'}}
+        top = [{'duration': 300000, 'phases': [], 'casts': [[30000, 7], [150000, 7], [270000, 7]]} for _ in range(5)]
+        pulls = []
+        for n in range(4):
+            middle = 150000 if n == 0 else 141000  # 9 s early on the middle moment in 3 of 4 pulls
+            pulls.append({'number': n + 1, 'duration': 300000, 'phases': [], 'cast_ids': {7},
+                          'casts': [[30000, 7], [middle, 7], [270000, 7]]})
+        row = benchmarks.compare(pulls, top, spells)[0]
+        self.assertEqual((row['hits'], row['considered']), (9, 12))
+        self.assertEqual(row['verdict'], 'mostly')
+        self.assertEqual(benchmarks.weak_text(row['weak']), '2:30 usually 9 s early')
+        note = benchmarks.notes([row], 'Havoc Demon Hunters')[0]
+        self.assertEqual(note['tone'], 'bad')
+        self.assertIn('mostly in line, but work on 2:30 usually 9 s early', note['text'])

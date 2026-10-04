@@ -165,6 +165,9 @@ tr.muted-row td { opacity: 0.7; }
 .cmp-tl .m.cd { width: 16px; height: 16px; }
 .cmp-tl .win { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; background: rgba(255,212,59,0.16);
     border: 1px solid rgba(255,212,59,0.35); }
+.cmp-tl .win.weak { background: rgba(255,107,107,0.16); border-color: rgba(255,107,107,0.55); }
+.pill-mostly { background: rgba(252,196,25,0.16); color: #ffd43b; }
+.weak-line { margin: 3px 0 0 24px; font-size: 12px; color: #ffb4a8; }
 .cmp-tl .ph { position: absolute; top: 2px; bottom: 2px; border-left: 1px dashed rgba(255,255,255,0.35); }
 .cmp-tl.real .al, .cmp-tl:not(.real) .rl, .cmp-tl.real .win { display: none; }
 .tl-chip .chip-icon { width: 16px; height: 16px; border-radius: 3px; }

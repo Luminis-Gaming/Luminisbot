@@ -356,6 +356,7 @@ def compare(pulls, top, spell_info):
         wins = windows(top, ids)
         for w in wins:
             w['tolerance'] = tolerance(w['spread'], effect, cooldown)
+            w.update(considered=0, hits=0, deltas=[], skipped=0)
         hits = considered = 0
         offsets = []  # ms early (-) / late (+) of our nearest cast to each moment, when it's near at all
         for pull, casts in zip(pulls, ours):
@@ -367,12 +368,17 @@ def compare(pulls, top, spell_info):
                 if w['segment'] not in lengths or w['at'] > lengths[w['segment']]:
                     continue
                 considered += 1
+                w['considered'] += 1
                 deltas = [into - w['at'] for key, into in mine if key == w['segment']]
                 nearest = min(deltas, key=abs) if deltas else None
                 if nearest is not None and abs(nearest) <= w['tolerance']:
                     hits += 1
+                    w['hits'] += 1
                 if nearest is not None and abs(nearest) <= NEAR_MS:
                     offsets.append(nearest)
+                    w['deltas'].append(nearest)
+                else:
+                    w['skipped'] += 1
         ours_per_min = ours_casts / minutes if minutes else 0
         verdict = None
         timing = top_per_min <= TIMING_MAX_PER_MIN
@@ -384,19 +390,51 @@ def compare(pulls, top, spell_info):
             verdict = None if g['category'] == TRINKET else 'missing'
         elif considered >= 2:
             rate = hits / considered
-            verdict = 'good' if rate >= 0.75 else 'off' if rate < 0.4 else 'ok'
+            verdict = ('good' if rate >= GOOD_RATE else 'mostly' if rate >= MOSTLY_RATE
+                       else 'ok' if rate >= OFF_RATE else 'off')
         elif top_per_min:
             ratio = ours_per_min / top_per_min
             verdict = 'good' if ratio >= 0.75 else 'off' if ratio < 0.5 else 'ok'
         offset = sorted(offsets)[len(offsets) // 2] if offsets and timing else None
+        weak = weak_moments(wins, ref) if timing else []
         rows.append({'name': name, 'ids': sorted(ids), 'icon_id': min(ids), 'category': g['category'],
                      'top_users': len(g['users']), 'top_per_min': top_per_min, 'ours_per_min': ours_per_min,
                      'ours_casts': ours_casts, 'windows': [dict(w, ref_at=ref.get(w['segment'], 0) + w['at'])
                                                            for w in wins],
                      'hits': hits, 'considered': considered, 'verdict': verdict, 'known': bool(known),
-                     'offset': offset, 'effect_ms': effect})
+                     'offset': offset, 'effect_ms': effect, 'weak': weak})
     order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
     return sorted(rows, key=lambda r: (order.get(r['category'], 9), -r['top_users'], r['name']))
+
+
+# Share of moments lined up for each verdict. "In line" is kept for nearly all of them: a green
+# label reads as "nothing to improve", so a few missed big moments make it "Mostly in line".
+GOOD_RATE, MOSTLY_RATE, OFF_RATE = 0.9, 0.75, 0.4
+WEAK_RATE = 0.5          # a moment you line up with less often than this is one to work on
+
+
+def weak_moments(wins, ref):
+    """
+    The moments a player usually misses, most important first (more top players there, then earlier):
+    [{'ref_at', 'players', 'hits', 'considered', 'how'}] - how: 'usually 9 s early' / 'often not pressed'.
+    """
+    out = []
+    for w in wins:
+        if not w.get('considered') or w['hits'] / w['considered'] >= WEAK_RATE:
+            continue
+        deltas = sorted(w['deltas'])
+        if w['skipped'] > len(deltas):
+            how = 'often not pressed'
+        else:
+            how = f'usually {timing_text(deltas[len(deltas) // 2])}'
+        out.append({'ref_at': ref.get(w['segment'], 0) + w['at'], 'players': w['players'],
+                    'hits': w['hits'], 'considered': w['considered'], 'how': how})
+    return sorted(out, key=lambda m: (-m['players'], m['ref_at']))
+
+
+def weak_text(weak, limit=3):
+    """'2:16 usually 9 s early, 6:46 often not pressed'."""
+    return ', '.join(f"{_clock(m['ref_at'])} {m['how']}" for m in weak[:limit])
 
 
 def timing_text(offset):
@@ -423,6 +461,10 @@ def notes(rows, spec_label, limit=3):
         if r['verdict'] == 'missing':
             bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use it - you never pressed it "
                        f"(talent choice, or a missed cooldown?)")
+        elif r['verdict'] in ('mostly', 'ok', 'off') and r.get('weak'):
+            lead = {'mostly': 'mostly in line, but', 'ok': 'hit and miss -', 'off': 'mostly off -'}[r['verdict']]
+            bad.append(f"{r['name']}: {lead} work on {weak_text(r['weak'])} "
+                       f"({r['hits']} of {r['considered']} moments in line overall)")
         elif r['verdict'] in ('off', 'ok') and r['considered'] >= 2 and timing_text(r['offset']) not in ('', 'on time'):
             bad.append(f"{r['name']}: top {spec_label} press it around {moments} - you were usually "
                        f"{timing_text(r['offset'])} ({r['hits']} of {r['considered']} moments in line)")
