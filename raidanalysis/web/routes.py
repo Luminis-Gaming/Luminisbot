@@ -340,6 +340,7 @@ async def handle_overview(request):
             <input type="number" name="limit" value="10" min="1" max="50" style="width:80px">
             <input type="text" name="code" placeholder="…or a WCL report URL / code to import" style="min-width:320px">
             <button class="btn btn-primary btn-sm" {'disabled' if st['running'] else ''}>🔄 Sync now</button>
+            {_full_budget_box()}
         </form>
         {_benchmarks_line(st['running']) if session is not PUBLIC_SESSION else ''}
     </div>
@@ -390,7 +391,7 @@ async def handle_sync(request):
         raise web.HTTPFound('/admin/raids?error=' + quote(sync._pause_message()))
     # Mark it running now, so the page we redirect to already shows (and polls) the progress banner.
     sync.status.update(running=True, current='Starting sync…')
-    asyncio.create_task(sync.sync_guild(limit=limit, force_codes=codes))
+    asyncio.create_task(sync.sync_guild(limit=limit, force_codes=codes, full_budget=bool(data.get('full_budget'))))
 
     if codes:  # importing / re-analyzing one report: go watch it fill in
         raise web.HTTPFound(f'/admin/raids/report/{codes[0]}')
@@ -407,10 +408,17 @@ async def handle_fetch_benchmarks(request):
         raise web.HTTPFound('/admin/raids?error=' + quote('A sync is already running - try again when it is done.'))
     if sync._paused():
         raise web.HTTPFound('/admin/raids?error=' + quote(sync._pause_message()))
+    data = await request.post()
     sync.status.update(running=True, current='Fetching top players…')
-    asyncio.create_task(sync.fetch_all_benchmarks())
+    asyncio.create_task(sync.fetch_all_benchmarks(full_budget=bool(data.get('full_budget'))))
     raise web.HTTPFound('/admin/raids?msg=' + quote('Fetching the top players for every spec in the background - '
                                                      'progress shows at the top of the page.'))
+
+
+def _full_budget_box():
+    return ('<label class="small muted full-budget" title="Let this run use up to 98% of the hour\'s WCL points '
+            'instead of 70%. The bot\'s other WCL buttons (DPS / Heal / Deaths) may be short until the hour resets.">'
+            '<input type="checkbox" name="full_budget" value="1"> Use the full WCL budget</label>')
 
 
 def _benchmarks_line(running):
@@ -427,6 +435,7 @@ def _benchmarks_line(running):
             <button class="btn btn-secondary btn-sm" {'disabled' if running else ''}
                     title="About {1 + benchmarks.TOP_N} WCL requests per combo; pauses at the WCL budget limit">
                 Fetch all top players</button>
+            {_full_budget_box()}
         </form>"""
 
 
@@ -562,6 +571,7 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
            <form method="post" action="/admin/raids/sync" class="inline-form" style="margin-left:10px">
                <input type="hidden" name="code" value="{esc(code)}">
                <button class="btn btn-secondary btn-sm" title="Fetch this report again from WCL">🔄 Re-analyze</button>
+               {_full_budget_box()}
            </form></div>
         <div class="boss-tabs">{''.join(tabs)}</div>
         <div class="pull-chips">{''.join(chips)}</div>

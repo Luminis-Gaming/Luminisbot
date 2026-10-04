@@ -117,7 +117,8 @@ def _budget_message():
     w = status.get('wcl') or {}
     resets = f", resets in {int((w.get('reset_in') or 0) / 60)} min" if w.get('reset_in') else ''
     return (f"Paused to stay within the WCL API budget ({w.get('spent', '?')}/{w.get('limit', '?')} points "
-            f"used this hour{resets}) — continues on a later sync")
+            f"used this hour{resets}) — continues on a later sync"
+            + ("" if _share > WCL_BUDGET_SHARE else " (tick 'Use the full WCL budget' to go further now)"))
 
 
 def _event_codes_to_sync(already_queued):
@@ -136,6 +137,11 @@ def _event_codes_to_sync(already_queued):
 # features (DPS / Heal / Deaths buttons). The sync stops once this share of the hour's budget
 # is used and carries on next run.
 WCL_BUDGET_SHARE = 0.7
+# An admin can let one run (Sync now / Re-analyze / Fetch all) use nearly the whole hour instead -
+# the small rest keeps us off WCL's hard limit. The bot's other WCL buttons may then be short until
+# the hour resets.
+FULL_BUDGET_SHARE = 0.98
+_share = WCL_BUDGET_SHARE  # the current run's share (one run at a time: _lock)
 
 
 # After WCL answers 429 we leave it alone until its hourly budget resets (or for this long when
@@ -175,10 +181,10 @@ async def _budget_ok(session):
     spent, cap = limits.get('pointsSpentThisHour') or 0, limits.get('limitPerHour') or 3600
     status['wcl'] = {'spent': spent, 'limit': cap, 'reset_in': limits.get('pointsResetIn'),
                      'checked': time.time()}
-    return spent < WCL_BUDGET_SHARE * cap
+    return spent < _share * cap
 
 
-async def sync_guild(limit=10, force_codes=(), extra_codes=()):
+async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False):
     """
     Sync the guild's latest `limit` reports, the logs attached to raid events, extra_codes
     (e.g. a log someone asked about in Discord) and force_codes (re-analyzed from scratch).
@@ -189,6 +195,8 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
         status.update(running=False, current=None, last_result=_pause_message(), last_error=_pause_message())
         return 0
     async with _lock:
+        global _share
+        _share = FULL_BUDGET_SHARE if full_budget else WCL_BUDGET_SHARE
         status.update(running=True, last_error=None)
         started = time.time()
         total, reports, errors = 0, 0, []
@@ -259,6 +267,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
         except Exception:
             logger.exception("[RAIDS] Spell tooltip lookup failed")
         finally:
+            _share = WCL_BUDGET_SHARE
             status.update(running=False, current=None, last_finished=time.time(), last_new=total,
                           last_result=f"{total} new pull(s) from {reports} report(s) "
                                       f"in {time.time() - started:.0f}s",
@@ -269,7 +278,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
 BENCHMARK_BATCH = 5
 
 
-async def fetch_all_benchmarks():
+async def fetch_all_benchmarks(full_budget=False):
     """
     Admin "Fetch all top players" button: benchmarks for every spec / boss we played lately that has
     none (or a stale one), instead of a few per sync - then the Wowhead text for their spells. Stops
@@ -281,6 +290,8 @@ async def fetch_all_benchmarks():
     if _lock.locked():
         return None
     async with _lock:
+        global _share
+        _share = FULL_BUDGET_SHARE if full_budget else WCL_BUDGET_SHARE
         status.update(running=True, last_error=None, current='Fetching top players…')
         started = time.time()
         done, error = 0, None
@@ -307,6 +318,7 @@ async def fetch_all_benchmarks():
             logger.exception("[RAIDS] Fetching all benchmarks failed")
             error = str(e)
         finally:
+            _share = WCL_BUDGET_SHARE
             left = max(0, total - done)
             status.update(running=False, current=None, last_finished=time.time(), last_new=0,
                           last_result=f"Top players fetched for {done} spec/boss combo(s) in "

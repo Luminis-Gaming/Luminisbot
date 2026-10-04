@@ -192,6 +192,7 @@ tr.muted-row td { opacity: 0.7; }
 .tl-track .tl-hit-line { stroke: transparent; stroke-width: 12; }
 .tl-track .tl-mark { cursor: help; }
 .warn-text { color: #ffd43b; }
+.full-budget { display: inline-flex; align-items: center; gap: 5px; margin-left: 6px; cursor: pointer; }
 .ability-cell[data-spell] { cursor: help; }
 .tl-track .tl-mark:hover line:first-child { stroke: #fff; }
 .tl-ruler { position: relative; height: 20px; font-size: 11px; color: var(--muted); }

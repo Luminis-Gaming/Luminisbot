@@ -612,3 +612,41 @@ class TestTopPlayersSameSpec(unittest.TestCase):
         self.assertEqual(wcl._spec_in_details(details, 'X'), 'Devourer')
         self.assertEqual(wcl._spec_in_details(details, 'Y'), 'Mistweaver')
         self.assertIsNone(wcl._spec_in_details(details, 'Z'))
+
+
+class TestFullBudget(unittest.TestCase):
+    """An admin run can go past the usual 70% share of the hour's WCL points (needs psycopg2)."""
+
+    def test_full_budget_goes_past_seventy_percent(self):
+        import asyncio
+        from unittest import mock
+        try:
+            from raidanalysis import sync, wcl
+        except ImportError as e:
+            self.skipTest(f'sync needs {e.name}')
+        reached = []
+
+        async def rate_limit(session):
+            return {'pointsSpentThisHour': 2529, 'limitPerHour': 3600, 'pointsResetIn': 1200}
+
+        async def reports(session, guild_id, limit=10):
+            reached.append('reports')
+            return []
+
+        async def nothing(*a, **k):
+            return 0
+
+        with mock.patch.object(wcl, 'get_rate_limit', rate_limit), \
+                mock.patch.object(wcl, 'list_guild_reports', reports), \
+                mock.patch.object(sync, '_event_codes_to_sync', lambda queued: []), \
+                mock.patch('raidanalysis.benchmarks.refresh', nothing), \
+                mock.patch('raidanalysis.guides.scan_missing', nothing), \
+                mock.patch('raidanalysis.spells.fill_missing', nothing), \
+                mock.patch.dict('sys.modules', {'wcl_api': mock.Mock(WCL_GUILD_ID=1)}):
+            sync.status['paused_until'] = None
+            asyncio.run(sync.sync_guild(limit=1))
+            self.assertEqual(reached, [])  # 2529/3600 > 70%: stopped before touching reports
+            self.assertIn('Use the full WCL budget', sync.status['last_error'])
+            asyncio.run(sync.sync_guild(limit=1, full_budget=True))
+            self.assertEqual(reached, ['reports'])
+            self.assertEqual(sync._share, sync.WCL_BUDGET_SHARE)  # back to normal after the run
