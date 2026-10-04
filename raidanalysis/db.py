@@ -508,22 +508,23 @@ def spells_missing(limit):
     """Spell IDs our analyses mention without a cached tooltip (failed lookups retried after an hour)."""
     rows = _run("""
         WITH mentioned AS (
-            SELECT DISTINCT (x->>'id')::bigint AS id FROM raid_pulls,
-                   jsonb_array_elements(COALESCE(analysis->'boss_abilities', '[]'::jsonb)) x
-            UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
-                   jsonb_array_elements(COALESCE(analysis->'cooldowns', '[]'::jsonb)) x
-            UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
-                   jsonb_array_elements(COALESCE(analysis->'consumables', '[]'::jsonb)) x
-            UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
-                   jsonb_array_elements(COALESCE(analysis->'deaths', '[]'::jsonb)) x
-            UNION SELECT DISTINCT (c->>1)::bigint FROM raid_benchmarks,
+            SELECT DISTINCT (c->>1)::bigint AS id, 0 AS priority FROM raid_benchmarks,
                    jsonb_array_elements(players) p, jsonb_array_elements(p->'casts') c
+            UNION SELECT DISTINCT (x->>'id')::bigint, 1 FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'boss_abilities', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (x->>'ability_id')::bigint, 1 FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'cooldowns', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (x->>'ability_id')::bigint, 1 FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'consumables', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (x->>'ability_id')::bigint, 1 FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'deaths', '[]'::jsonb)) x
         )
-        SELECT m.id FROM mentioned m
+        SELECT m.id FROM (SELECT id, MIN(priority) AS priority FROM mentioned GROUP BY id) m
         LEFT JOIN raid_spells s ON s.spell_id = m.id
         WHERE m.id IS NOT NULL AND m.id > 0
           AND (s.spell_id IS NULL OR s.parser < %s
                OR (s.status = 'error' AND s.fetched_at < NOW() - INTERVAL '1 hour'))
+        ORDER BY m.priority
         LIMIT %s
     """, (_spell_parser(), limit), fetch='all')
     return [r['id'] for r in rows]

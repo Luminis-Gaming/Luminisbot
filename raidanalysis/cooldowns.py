@@ -42,8 +42,8 @@ _BY_CATEGORY = {
     ),
     'utility': (
         'Bloodlust', 'Heroism', 'Time Warp', 'Fury of the Aspects', 'Primal Rage', 'Ancient Hysteria',
-        'Stampeding Roar', 'Wind Rush Totem', 'Time Spiral', 'Blessing of Freedom', 'Leap of Faith',
-        "Tiger's Lust", 'Rescue', 'Demonic Gateway', "Gorefiend's Grasp", "Ursol's Vortex", 'Ring of Peace',
+        'Stampeding Roar', 'Wind Rush Totem', "Spiritwalker's Grace", 'Time Spiral', 'Blessing of Freedom',
+        'Leap of Faith', "Tiger's Lust", 'Rescue', 'Demonic Gateway', "Gorefiend's Grasp", "Ursol's Vortex", 'Ring of Peace',
         'Rebirth', 'Raise Ally', 'Soulstone', 'Intercession', 'Symbol of Hope',
     ),
 }

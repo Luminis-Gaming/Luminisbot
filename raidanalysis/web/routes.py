@@ -846,6 +846,7 @@ async def handle_player(request):
         raise web.HTTPFound(f'/admin/raids/report/{quote(code)}?boss={selected[0]}-{selected[1]}&view=players'
                             f'&error=' + quote(f'{name} was not in those pulls.'))
     fights = {number: pull['fight_id'] for number, pull in numbered}
+    await benchmarks.ensure_spells_for(list(enumerate(groups[selected], 1)), name)
     body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
             + players.player_page(player, guide_for,
                                   lambda number: f'/admin/raids/report/{code}/{fights[number]}')
@@ -910,6 +911,12 @@ def _compare_card(code, selected, name, numbered):
     </div>"""
 
 
+def _boss_timeline_of(numbered, fight_id):
+    """The boss's casts in one of our pulls: {'abilities', 'casts'} from its analysis."""
+    analysis = next((p.get('analysis') or {} for _, p in numbered if p['fight_id'] == fight_id), {})
+    return {'abilities': analysis.get('boss_abilities') or [], 'casts': analysis.get('boss_casts') or []}
+
+
 async def handle_compare(request):
     """GET /admin/raids/report/{code}/compare/{name}?boss=&pull= - cooldowns vs the top parses of the spec."""
     session = _session(request)
@@ -923,6 +930,7 @@ async def handle_compare(request):
     numbered = list(enumerate(groups[selected], 1))
     boss_name = groups[selected][0]['encounter_name']
     back = f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'
+    await benchmarks.ensure_spells_for(numbered, name)
     data = benchmarks.for_player(numbered, name)
     head = (f'<div class="card"><p><a href="{back}">← {esc(name)} on {esc(boss_name)}</a></p>'
             f'<h1>⚔️ {esc(name)} vs the top {esc(data["label"]) if data else "players"}</h1>'
@@ -958,10 +966,11 @@ async def handle_compare(request):
     <div class="card">
         <h2>🕒 Timeline</h2>
         <p class="muted small">Grouped by ability: your pull first, then the top players. Shaded bands are the
-           moments most of them agree on. <strong>Align phases</strong> lines everyone's phases up;
+           moments most of them agree on; the boss's abilities on top are from your pull.
+           <strong>Align phases</strong> lines everyone's phases up;
            <strong>Real time</strong> shows each fight as it happened. Pick abilities with the chips; hover
            anything for details. Pull: {pull_links}</p>
-        {compare.timeline(data, pull)}
+        {compare.timeline(data, pull, _boss_timeline_of(numbered, pull['fight_id']), spells.lookup)}
     </div>"""
     return _page(f'{name} vs top players · {boss_name}', session, body)
 

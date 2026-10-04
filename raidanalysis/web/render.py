@@ -117,6 +117,9 @@ tr.muted-row td { opacity: 0.7; }
 .cmp-tl .tl-row { height: 20px; }
 .cmp-tl .tl-row.grp { height: 26px; box-shadow: inset 0 1px rgba(255,255,255,0.15); }
 .cmp-tl .tl-row.you { background: rgba(116,132,236,0.10); }
+.cmp-tl .tl-lab.boss, .cmp-tl .tl-row.boss { height: 16px; }
+.cmp-tl .tl-lab.boss { font-size: 11px; font-weight: 400; }
+.cmp-tl .tl-lab.boss .ability-icon { width: 13px; height: 13px; }
 .cmp-tl .m.cd { width: 16px; height: 16px; }
 .cmp-tl .win { position: absolute; top: 4px; bottom: 4px; border-radius: 4px; background: rgba(255,212,59,0.16);
     border: 1px solid rgba(255,212,59,0.35); }

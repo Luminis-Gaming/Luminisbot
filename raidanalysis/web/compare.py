@@ -11,7 +11,7 @@ import json
 
 from .. import benchmarks
 from ..spells import icon_url
-from .render import esc, fmt_amount, fmt_duration
+from .render import ICON_BASE, esc, fmt_amount, fmt_duration
 
 VERDICTS = {'good': ('pill-kill', 'In line'), 'ok': ('pill', 'Close'), 'off': ('pill-wipe', 'Off'),
             'missing': ('pill-wipe', 'Never used')}
@@ -63,10 +63,17 @@ def summary(data):
         {''.join(rows)}</table></div>"""
 
 
-def timeline(data, pull):
-    """Grouped by ability: a header lane with the shared moments, then You and the top 5 underneath."""
+def timeline(data, pull, boss=None, spell_lookup=None):
+    """
+    Grouped by ability: a header lane with the shared moments, then You and the top 5 underneath -
+    under the boss's abilities from your pull (boss = {'abilities', 'casts'} from its analysis), so
+    you can see what a cooldown was lined up against. spell_lookup(ids) -> Wowhead text (spells.lookup).
+    """
     top, rows, spells = data['top'], data['rows'], data['spells']
     ref = benchmarks.reference_starts(top)
+    boss = boss or {}
+    boss_meta = {a['id']: a for a in boss.get('abilities') or []}
+    boss_casts = [(t, sid) for t, sid in boss.get('casts') or [] if sid in boss_meta]
     lanes = [{'label': f'You · pull #{pull["number"]}', 'you': True, 'duration': pull['duration'],
               'phases': pull['phases'], 'casts': pull['casts'],
               'who': f'You (pull #{pull["number"]}, {fmt_duration(pull["duration"])}'
@@ -77,13 +84,36 @@ def timeline(data, pull):
                       'who': f'#{p["rank"]} {p["name"]} ({fmt_amount(p["amount"])} · {fmt_duration(p["duration"])} kill)'})
     for lane in lanes:
         lane['aligned'] = [(benchmarks.align(t, lane['phases'], ref), t, sid) for t, sid in lane['casts']]
+    boss_aligned = [(benchmarks.align(t, pull['phases'], ref), t, sid) for t, sid in boss_casts]
     longest = max([lane['duration'] for lane in lanes]
-                  + [a for lane in lanes for a, _, _ in lane['aligned']] + [1])
+                  + [a for lane in lanes for a, _, _ in lane['aligned']] + [a for a, _, _ in boss_aligned] + [1])
 
     def at(t):
         return f'{100 * max(0, min(t, longest)) / longest:.3f}%'
 
     labels, tracks, chips, icons = [], [], [], {}
+    # Boss abilities from your pull on top (one lane per ability name, like the consumables timeline).
+    boss_spells = {}
+    if boss_aligned:
+        chips.append('<button type="button" class="tl-chip" data-g="boss" aria-pressed="true">'
+                     '👹 Boss abilities</button>')
+        labels.append(f'<div class="tl-lab grp" data-g="boss"><span>👹 Boss · your pull #{pull["number"]}</span></div>')
+        tracks.append('<div class="tl-row grp" data-g="boss"></div>')
+        by_name = {}
+        for a, t, sid in boss_aligned:
+            by_name.setdefault(boss_meta[sid]['name'], []).append((a, t, sid))
+        for name, casts in sorted(by_name.items(), key=lambda kv: min(t for _, t, _ in kv[1])):
+            first = casts[0][2]
+            for _, _, sid in casts:
+                boss_spells.setdefault(sid, (name, boss_meta[sid].get('icon')))
+            icon = boss_meta[first].get('icon')
+            img = f'<img class="ability-icon" src="{ICON_BASE}{esc(icon)}" alt="" loading="lazy">' if icon else ''
+            labels.append(f'<div class="tl-lab boss" data-g="boss" data-spell="{first}" '
+                          f'data-tip="Cast {len(casts)}× in your pull #{pull["number"]}">{img}<span>{esc(name)}</span></div>')
+            ticks = ''.join(f'<i class="m tick" style="left:{at(a)}" data-a="{at(a)}" data-r="{at(t)}" '
+                            f'data-spell="{sid}" data-tip="Your pull #{pull["number"]} · {fmt_duration(t)}"></i>'
+                            for a, t, sid in sorted(casts))
+            tracks.append(f'<div class="tl-row boss" data-g="boss">{ticks}</div>')
     for g, r in enumerate(rows):
         ids = set(r['ids'])
         judged = r['category'] in benchmarks.JUDGED
@@ -126,6 +156,11 @@ def timeline(data, pull):
     icon_css = ''.join(f'.{_spec_icon_class(sid)}{{background-image:url({esc(url)})}}' for sid, url in icons.items() if url)
     spell_json = {sid: {'name': info.get('name') or '', 'icon': icon_url(info.get('icon')), 'meta': info.get('meta') or '',
                         'desc': info.get('description') or ''} for sid, info in spells.items()}
+    known = spell_lookup(list(boss_spells)) if spell_lookup and boss_spells else {}
+    for sid, (name, icon) in boss_spells.items():
+        info = known.get(sid) or {}
+        spell_json[sid] = {'name': info.get('name') or name, 'icon': f'{ICON_BASE}{icon}' if icon else icon_url(info.get('icon')),
+                           'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
     has_phases = len(ref) > 1
     return f"""<div class="tl cmp-tl" data-duration="{longest}">
         <style>{icon_css}</style>

@@ -53,7 +53,7 @@ NOT_MAJOR = {
     'Heroic Leap', 'Charge', 'Intervene', 'Disengage', 'Blink', 'Shimmer', 'Demonic Circle', 'Demonic Circle: Teleport',
     'Roll', 'Chi Torpedo', 'Transcendence', 'Transcendence: Transfer', 'Fel Rush', 'Vengeful Retreat',
     'Infernal Strike', "Death's Advance", 'Wraith Walk', 'Death Grip', 'Sprint', 'Dash', 'Tiger Dash', 'Wild Charge',
-    'Divine Steed', "Spiritwalker's Grace", 'Spirit Walk', 'Ghost Wolf', 'Hover', 'Glide', 'Aspect of the Cheetah',
+    'Divine Steed', 'Spirit Walk', 'Ghost Wolf', 'Hover', 'Glide', 'Aspect of the Cheetah',
     'Shadowstep', 'Grappling Hook', 'Burning Rush', 'Feral Lunge', 'Flying Serpent Kick', 'Rescue', 'Leap of Faith',
     'Kick', 'Pummel', 'Mind Freeze', 'Counterspell', 'Wind Shear', 'Rebuke', 'Skull Bash', 'Solar Beam', 'Disrupt',
     'Spear Hand Strike', 'Quell', 'Counter Shot', 'Muzzle', 'Silence', 'Spell Lock', 'Axe Toss', 'Optical Blast',
@@ -164,6 +164,9 @@ async def refresh(session, budget_ok, limit=SPECS_PER_RUN):
         try:
             players = await fetch_top_players(session, *key, combo['role'])
             db.save_benchmark(*key, metric_for(combo['role']), players, 'ok' if players else 'empty')
+            # Which of their spells are major cooldowns comes from Wowhead's text: look it up now, not
+            # whenever the general backlog gets there (a spell without it silently drops out).
+            await ensure_spells({sid for p in players for _, sid in p['casts']})
         except Exception as e:  # retried after a day
             logger.warning(f"[RAIDS] Top players for {key} failed: {e}")
             db.save_benchmark(*key, metric_for(combo['role']), [], 'error', str(e)[:300])
@@ -364,6 +367,26 @@ def our_pulls(pulls, name):
 # ============================================================================
 # Glue for the pages and the Discord recap (DB)
 # ============================================================================
+
+async def ensure_spells(spell_ids):
+    """Look up (on Wowhead) whichever of these spells we've never looked up. Returns how many."""
+    from . import db, spells
+    ids = {int(i) for i in spell_ids if i}
+    missing = sorted(ids - db.attempted_spell_ids(ids)) if ids else []
+    return await spells.fetch_ids(missing) if missing else 0
+
+
+async def ensure_spells_for(numbered, name):
+    """Before comparing one character: make sure their spec's top-player spells have Wowhead text."""
+    from . import db
+    player = next((p for _, pull in numbered for p in (pull.get('analysis') or {}).get('players') or []
+                   if p['name'] == name and p.get('spec')), None)
+    if not player or not numbered:
+        return 0
+    first = numbered[0][1]
+    bench = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
+    return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']})
+
 
 def readable(slug):
     """'DeathKnight' -> 'Death Knight', 'BeastMastery' -> 'Beast Mastery'."""
