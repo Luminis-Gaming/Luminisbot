@@ -77,3 +77,15 @@ CREATE TABLE IF NOT EXISTS raid_guide_abilities (
     embed_url TEXT NOT NULL,                     -- shown in an iframe on the admin pages
     PRIMARY KEY (encounter_id, guide_id)
 );
+
+-- Wowhead tooltip text for the timeline tooltips (raidanalysis/spells.py),
+-- looked up once per spell after a sync.
+CREATE TABLE IF NOT EXISTS raid_spells (
+    spell_id BIGINT PRIMARY KEY,
+    name TEXT,
+    icon TEXT,                                   -- Wowhead icon name (wow.zamimg.com)
+    meta TEXT,                                   -- 'Instant · 1 min cooldown'
+    description TEXT,                            -- plain text, scaled numbers shown as X
+    status TEXT NOT NULL,                        -- 'ok', 'not_found' or 'error' (retried after a day)
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);

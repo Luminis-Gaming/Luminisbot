@@ -98,6 +98,102 @@ th[data-sort]:hover { color: var(--text); }
 .chart .grid { stroke: rgba(255,255,255,0.06); }
 .chart .axis-label { fill: var(--faint); }
 .chart a:hover circle.mark { stroke: #fff; stroke-width: 2; }
+/* Consumables timeline toggles (consumables.toolbar) */
+.tl-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.tl-chip, .tl-pick summary { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid var(--border); background: transparent; color: var(--muted); font: inherit; font-size: 12px;
+    cursor: pointer; list-style: none; }
+.tl-chip:hover, .tl-pick summary:hover { color: var(--text); }
+.tl-chip[aria-pressed=true] { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+.tl-chip.partial { color: var(--text); border-style: dashed; border-color: var(--border-strong); }
+.tl-chip i, .tl-static i { display: inline-block; width: 12px; height: 4px; border-radius: 2px; background: var(--c); }
+.tl-chip[aria-pressed=false] i { opacity: 0.35; }
+.tl-static { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: 6px; }
+.tl-pick summary::-webkit-details-marker { display: none; }
+.tl-pick[open] { flex-basis: 100%; }
+.tl-pick[open] summary { color: var(--text); border-color: var(--border-strong); }
+.tl-pick-menu { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface-2, rgba(255,255,255,0.03)); display: grid; gap: 10px 22px;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.tl-pick-menu h5 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.tl-pick-menu label { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 12px; cursor: pointer; }
+.tl-pick-menu .ability-icon { width: 16px; height: 16px; }
+/* Editor-style zoomable timeline (deaths_strip) */
+.tl { margin: 6px 0 18px; }
+.tl-tools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.tl-tools .muted { margin-right: auto; }
+.tl-tools button { min-width: 30px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
+.tl-tools button:hover { color: var(--text); border-color: var(--border-strong); }
+.tl-tools input[type=range] { width: 140px; accent-color: #7484ec; }
+@media (pointer: coarse), (max-width: 600px) { .tl-tools .muted { display: none; } }
+.tl-body { display: grid; grid-template-columns: 118px minmax(0, 1fr); }
+.tl-labels a { display: flex; align-items: center; justify-content: flex-end; padding-right: 10px;
+    font-size: 11px; color: var(--muted); text-decoration: none; white-space: nowrap; overflow: hidden; }
+.tl-labels a:hover { color: var(--text); }
+.tl-ruler-gap { height: 20px; }
+.tl-scroll { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.tl-inner { position: relative; width: 100%; }
+.tl-track { display: block; width: 100%; }
+.tl-track * { vector-effect: non-scaling-stroke; }
+.tl-track .grid { stroke: rgba(255,255,255,0.06); }
+.tl-track .tl-hit { fill: transparent; }
+.tl-track a:hover .tl-hit { fill: rgba(255,255,255,0.04); }
+.tl-track .tl-hit-line { stroke: transparent; stroke-width: 10; }
+.tl-ruler { position: relative; height: 20px; font-size: 11px; color: var(--muted); }
+.tl-ruler span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
+.tl-ruler span.first { transform: none; }
+.tl-head { position: absolute; top: 0; bottom: 20px; border-left: 1px solid rgba(255,255,255,0.6); pointer-events: none; }
+.tl-head span { position: absolute; top: 100%; transform: translateX(-50%); margin-top: 2px; padding: 0 5px;
+    border-radius: 4px; background: #2a2f45; color: var(--text); font-size: 11px; white-space: nowrap; }
+.tl-scroll { cursor: grab; }
+.tl.dragging .tl-scroll { cursor: grabbing; user-select: none; }
+.tl [hidden] { display: none !important; }
+/* HTML timeline (consumables): rows of absolutely placed marks, positioned in % of the track */
+.cons-tl { --label-w: 150px; }
+.cons-tl .tl-body { grid-template-columns: var(--label-w) minmax(0, 1fr); }
+.cons-tl .tl-scroll { padding: 0 10px; }  /* room for marks right at the start / end of the pull */
+.tl-lab { height: 22px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding-right: 10px;
+    font-size: 12px; white-space: nowrap; overflow: hidden; }
+.tl-lab span { overflow: hidden; text-overflow: ellipsis; }
+.tl-lab.boss { height: 16px; font-size: 11px; color: var(--muted); cursor: help; }
+.tl-lab.boss .ability-icon { width: 13px; height: 13px; }
+.tl-row { position: relative; height: 22px; }
+.tl-row.boss { height: 16px; }
+.tl-row:not(.boss)::before { content: ''; position: absolute; left: 0; right: 0; top: 50%;
+    border-top: 1px solid rgba(255,255,255,0.06); }
+.tl-lab.sep, .tl-row.sep { box-shadow: inset 0 1px rgba(255,255,255,0.15); }
+.tl-grid { position: absolute; inset: 0 0 20px 0; pointer-events: none; }
+.tl-grid i, .tl-phase { position: absolute; top: 0; bottom: 0; border-left: 1px solid rgba(255,255,255,0.06); }
+.tl-phase { bottom: 20px; border-left: 1px dashed rgba(255,255,255,0.3); pointer-events: none; }
+.tl .m { position: absolute; top: 50%; transform: translate(-50%, -50%); }
+.tl .m:hover { z-index: 3; }
+.m.tick { width: 2px; height: 10px; background: #9aa1b9; border-radius: 1px; }
+.m.tick::after { content: ''; position: absolute; inset: -3px -4px; }
+.m.tick:hover { background: #fff; }
+.m.bar { height: 10px; min-width: 3px; border-radius: 3px; transform: translateY(-50%); }
+.m.k-potion { background: var(--potion); }
+.m.k-mana { background: var(--mana); }
+.m.dia { width: 9px; height: 9px; background: var(--defensive); transform: translate(-50%, -50%) rotate(45deg);
+    box-shadow: 0 0 0 1.5px var(--surface); }
+.m.death { font-size: 13px; font-weight: 700; line-height: 1; color: rgba(255,255,255,0.4); font-style: normal; }
+.m.death.early { color: #ff6b6b; }
+.m.cd { width: 16px; height: 16px; border-radius: 4px; background-color: var(--surface); background-size: cover;
+    box-shadow: 0 0 0 1.5px var(--surface); }
+.m.cd:hover, .m.dia:hover, .m.bar:hover { box-shadow: 0 0 0 1.5px #fff; }
+.cons-tl.multi .m { opacity: 0.6; }
+.cons-tl.multi .m:hover { opacity: 1; }
+@media (max-width: 600px) { .cons-tl { --label-w: 96px; } }
+/* Spell tooltip (PAGE_JS) */
+.sp-tip { position: fixed; z-index: 1000; max-width: 330px; padding: 9px 11px; border-radius: 8px; pointer-events: none;
+    background: #10142a; border: 1px solid var(--border-strong); box-shadow: 0 10px 28px rgba(0,0,0,0.5);
+    font-size: 12px; line-height: 1.45; color: var(--text); }
+.sp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.sp-head img { width: 22px; height: 22px; border-radius: 4px; }
+.sp-name { font-weight: 600; font-size: 13px; }
+.sp-meta { color: var(--muted); font-size: 11px; }
+.sp-ctx { margin-top: 4px; color: #ffd43b; }
+.sp-desc { margin-top: 6px; color: #c9cfe6; white-space: pre-line; }
 .legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .legend span::before { content: ''; display: inline-block; width: 14px; height: 3px; border-radius: 2px;
     background: var(--c); vertical-align: middle; margin-right: 6px; }
@@ -296,6 +392,160 @@ document.querySelectorAll('.expand-all').forEach(btn => btn.addEventListener('cl
   items.forEach(d => { d.open = open; });
   btn.textContent = open ? 'Collapse all' : 'Expand all';
 }));
+// Consumables timeline: the chips and the Abilities checkboxes choose what's drawn.
+document.querySelectorAll('.cons-tl').forEach(tl => {
+  const boxes = [...tl.querySelectorAll('.tl-pick input')];
+  const marks = [...tl.querySelectorAll('.tl-inner [data-f]')];
+  const apply = () => {
+    const on = new Set([...tl.querySelectorAll('.tl-chip[data-f][aria-pressed=true]')].map(b => b.dataset.f));
+    const picked = new Set(boxes.filter(b => b.checked).map(b => b.value));
+    marks.forEach(el => { el.hidden = !(el.dataset.f === 'cd' ? picked.has(el.dataset.ab) : on.has(el.dataset.f)); });
+    tl.querySelectorAll('.tl-chip[data-cat]').forEach(chip => {
+      const mine = boxes.filter(b => b.dataset.cat === chip.dataset.cat), n = mine.filter(b => b.checked).length;
+      chip.setAttribute('aria-pressed', n && n === mine.length ? 'true' : 'false');
+      chip.classList.toggle('partial', n > 0 && n < mine.length);
+    });
+  };
+  tl.querySelectorAll('.tl-chip').forEach(chip => chip.addEventListener('click', () => {
+    if (chip.dataset.cat) {
+      const mine = boxes.filter(b => b.dataset.cat === chip.dataset.cat), all = mine.every(b => b.checked);
+      mine.forEach(b => { b.checked = !all; });
+    } else {
+      chip.setAttribute('aria-pressed', chip.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+    }
+    apply();
+  }));
+  boxes.forEach(b => b.addEventListener('change', apply));
+  apply();
+});
+// Editor-style timelines: drag to pan, Ctrl/Cmd/Alt + scroll (or pinch) zooms around the pointer, the
+// slider and -/+/Fit zoom around the middle, a playhead shows the time under the mouse.
+document.querySelectorAll('.tl').forEach(tl => {
+  const duration = +tl.dataset.duration, scroll = tl.querySelector('.tl-scroll'), inner = tl.querySelector('.tl-inner');
+  const grid = tl.querySelector('.tl-grid'), ruler = tl.querySelector('.tl-ruler'), head = tl.querySelector('.tl-head');
+  const slider = tl.querySelector('input[type=range]'), track = tl.querySelector('.tl-track');
+  const maxZoom = Math.max(1, duration / 8000);  // all the way in = about 8 seconds across
+  let zoom = 1;
+  slider.disabled = maxZoom === 1;
+  const clock = (ms, digits) => {
+    const s = ms / 1000, rest = digits ? (s % 60).toFixed(digits) : String(Math.round(s % 60) % 60);
+    return Math.floor((digits ? s : Math.round(s)) / 60) + ':' + rest.padStart(digits ? digits + 3 : 2, '0');
+  };
+  const drawAxis = () => {
+    const width = inner.clientWidth, perMs = width / duration;
+    const step = [1, 2, 5, 10, 15, 30, 60, 120, 300].map(s => s * 1000).find(s => s * perMs >= 64) || 600000;
+    grid.replaceChildren(); ruler.replaceChildren();
+    for (let t = 0; t <= duration; t += step) {
+      if (track) {  // SVG track drawn in milliseconds (deaths strip)
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        const attrs = {class: 'grid', x1: t, x2: t, y1: 0, y2: track.viewBox.baseVal.height};
+        Object.entries(attrs).forEach(([k, v]) => line.setAttribute(k, v));
+        grid.appendChild(line);
+      } else {      // HTML track, marks placed in %
+        const line = document.createElement('i'); line.style.left = (100 * t / duration) + '%'; grid.appendChild(line);
+      }
+      if (t && t * perMs > width - 18) continue;
+      const label = document.createElement('span');
+      label.textContent = clock(t); label.style.left = (100 * t / duration) + '%';
+      if (!t) label.className = 'first';
+      ruler.appendChild(label);
+    }
+  };
+  const setZoom = (z, anchor) => {  // anchor: px from the left edge of the visible track that stays put
+    z = Math.min(maxZoom, Math.max(1, z));
+    const x = anchor ?? scroll.clientWidth / 2, t = (scroll.scrollLeft + x) / inner.clientWidth * duration;
+    zoom = z; inner.style.width = (100 * z) + '%';
+    scroll.scrollLeft = t / duration * inner.clientWidth - x;
+    if (maxZoom > 1) slider.value = Math.round(100 * Math.log(z) / Math.log(maxZoom));
+    drawAxis();
+  };
+  scroll.addEventListener('wheel', e => {
+    if (!(e.ctrlKey || e.metaKey || e.altKey)) return;
+    e.preventDefault();
+    setZoom(zoom * Math.exp(-e.deltaY * 0.0025), e.clientX - scroll.getBoundingClientRect().left);
+  }, {passive: false});
+  slider.addEventListener('input', () => setZoom(Math.pow(maxZoom, slider.value / 100)));
+  tl.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () =>
+    setZoom(b.dataset.zoom === 'fit' ? 1 : zoom * (b.dataset.zoom === 'in' ? 2 : 0.5))));
+  // Drag to pan (mouse / pen; touch scrolls natively). A drag never counts as a click on a row link.
+  let drag = null, swallowClick = false;
+  scroll.addEventListener('click', e => {
+    if (swallowClick) { e.preventDefault(); e.stopPropagation(); swallowClick = false; }
+  }, true);
+  scroll.addEventListener('pointerdown', e => {
+    swallowClick = false;
+    if (e.pointerType === 'touch' || e.button !== 0) return;
+    drag = {x: e.clientX, left: scroll.scrollLeft, moved: false, id: e.pointerId};
+  });
+  scroll.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (!drag.moved && Math.abs(dx) > 4) {
+      drag.moved = true; scroll.setPointerCapture(drag.id); tl.classList.add('dragging');
+    }
+    if (drag.moved) scroll.scrollLeft = drag.left - dx;
+  });
+  const endDrag = () => {
+    if (drag && drag.moved) { tl.classList.remove('dragging'); swallowClick = true; }
+    drag = null;
+  };
+  scroll.addEventListener('pointerup', endDrag);
+  scroll.addEventListener('pointercancel', endDrag);
+  inner.addEventListener('pointermove', e => {
+    const box = inner.getBoundingClientRect(), x = e.clientX - box.left;
+    head.hidden = false; head.style.left = x + 'px';
+    head.firstChild.textContent = clock(Math.max(0, x / box.width * duration), zoom > 4 ? 1 : 0);
+  });
+  inner.addEventListener('pointerleave', () => { head.hidden = true; });
+  new ResizeObserver(drawAxis).observe(scroll);
+});
+// Rich tooltips for timeline marks: what/when from data-tip, plus the spell's name, icon, cooldown and
+// Wowhead description from the timeline's spell-data JSON.
+(() => {
+  const tip = document.createElement('div');
+  tip.className = 'sp-tip'; tip.hidden = true; document.body.appendChild(tip);
+  const data = new WeakMap();
+  const spellsFor = el => {
+    const box = el.closest('.tl');
+    if (!box) return {};
+    if (!data.has(box)) {
+      const node = box.querySelector('.spell-data');
+      let parsed = {};
+      try { parsed = node ? JSON.parse(node.textContent) : {}; } catch (e) { /* no spell text */ }
+      data.set(box, parsed);
+    }
+    return data.get(box);
+  };
+  const line = (cls, text, parent) => {
+    const div = document.createElement('div'); div.className = cls; div.textContent = text; (parent || tip).appendChild(div);
+  };
+  const place = (x, y) => {
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - w - 8)) + 'px';
+    tip.style.top = (y + 18 + h > innerHeight ? Math.max(8, y - h - 12) : y + 18) + 'px';
+  };
+  const show = (el, x, y) => {
+    const spell = el.dataset.spell ? spellsFor(el)[el.dataset.spell] : null;
+    tip.replaceChildren();
+    if (spell) {
+      const headRow = document.createElement('div'); headRow.className = 'sp-head';
+      if (spell.icon) { const img = document.createElement('img'); img.src = spell.icon; img.alt = ''; headRow.appendChild(img); }
+      line('sp-name', spell.name, headRow);
+      tip.appendChild(headRow);
+      if (spell.meta) line('sp-meta', spell.meta);
+    }
+    if (el.dataset.tip) line('sp-ctx', el.dataset.tip);
+    if (spell && spell.desc) line('sp-desc', spell.desc);
+    tip.hidden = !tip.childNodes.length;
+    place(x, y);
+  };
+  document.addEventListener('pointerover', e => {
+    const el = e.target.closest && e.target.closest('.tl [data-tip]');
+    if (el && !el.closest('.dragging')) show(el, e.clientX, e.clientY); else tip.hidden = true;
+  });
+  document.addEventListener('pointermove', e => { if (!tip.hidden) place(e.clientX, e.clientY); });
+  document.addEventListener('scroll', () => { tip.hidden = true; }, true);
+})();
 // Mechanic clip pop-up: the Mythic Trap iframe only loads when someone opens it.
 document.addEventListener('click', e => {
   const btn = e.target.closest('.clip-btn');
@@ -633,46 +883,59 @@ def tag_buttons(encounter_id, difficulty, ability_id, ability_name, current, sou
 
 def deaths_strip(rows):
     """
-    Every pull of a boss on one time axis: a bar per pull (its length), phase
-    changes, death ticks (red = early death by mistake, grey = the rest) and where half the raid was dead.
+    Every pull of a boss on one time axis, as an editor-style timeline: a bar per pull (its length),
+    phase changes, death ticks (red = early death by mistake, grey = the rest) and where half the raid
+    was dead. Pull names stay pinned on the left; the track zooms (Ctrl/⌘ + scroll or pinch around the
+    pointer, slider, −/+/Fit) and scrolls sideways - see PAGE_JS. The track is drawn in milliseconds
+    with preserveAspectRatio="none", so zooming is just a wider element and strokes stay crisp.
     rows: [{'label', 'href', 'duration', 'phases': [ms], 'deaths': [...], 'wipe_at', 'kill'}]
     """
     if not rows:
         return ''
-    row_h, left, right, top = 22, 118, 12, 8
-    width = 900
+    row_h = 22
     longest = max(r['duration'] for r in rows) or 1
-    inner_w = width - left - right
-    height = top + row_h * len(rows) + 22
-
-    def x(t):
-        return left + inner_w * max(0, min(t, longest)) / longest
-
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Deaths in every pull">']
-    for minute in range(0, int(longest / 60000) + 1):
-        mx = x(minute * 60000)
-        parts.append(f'<line class="grid" x1="{mx:.1f}" x2="{mx:.1f}" y1="{top}" y2="{height - 18}"/>'
-                     f'<text x="{mx:.1f}" y="{height - 4}" text-anchor="middle">{minute}:00</text>')
+    height = row_h * len(rows)
+    labels = ''.join(f'<a href="{esc(r["href"])}" style="height:{row_h}px">{esc(r["label"])}</a>' for r in rows)
+    grid = ''.join(f'<line class="grid" x1="{t}" x2="{t}" y1="0" y2="{height}"/>'
+                   for t in range(0, longest + 1, 60000))
+    ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{100 * t / longest:.3f}%">'
+                    f'{fmt_duration(t)}</span>' for t in range(0, longest + 1, 60000))
+    track = []
     for i, r in enumerate(rows):
-        y = top + i * row_h
-        bar = (f'<rect x="{left}" y="{y + 4}" width="{max(2, x(r["duration"]) - left):.1f}" height="{row_h - 8}" '
-               f'rx="3" fill="{"rgba(81,207,102,0.25)" if r["kill"] else "rgba(255,255,255,0.08)"}"/>')
+        y = i * row_h
+        parts = [f'<rect class="tl-hit" x="0" y="{y}" width="{longest}" height="{row_h}"/>',
+                 f'<rect x="0" y="{y + 4}" width="{r["duration"]}" height="{row_h - 8}" '
+                 f'fill="{"rgba(81,207,102,0.25)" if r["kill"] else "rgba(255,255,255,0.08)"}"/>']
         for start in r['phases']:
-            bar += (f'<line x1="{x(start):.1f}" x2="{x(start):.1f}" y1="{y + 3}" y2="{y + row_h - 3}" '
-                    f'stroke="rgba(255,255,255,0.35)" stroke-width="1"/>')
+            parts.append(f'<line x1="{start}" x2="{start}" y1="{y + 3}" y2="{y + row_h - 3}" '
+                         f'stroke="rgba(255,255,255,0.35)" stroke-width="1"/>')
+        if r.get('wipe_at') is not None:
+            parts.append(f'<g><line x1="{r["wipe_at"]}" x2="{r["wipe_at"]}" y1="{y + 2}" y2="{y + row_h - 2}" '
+                         f'stroke="#ffd43b" stroke-width="2" stroke-dasharray="3 2"/>'
+                         f'<title>Half the raid dead {fmt_duration(r["wipe_at"])}</title></g>')
         for d in r['deaths']:
             color = '#ff6b6b' if d.get('early') else 'rgba(255,255,255,0.35)'
-            bar += (f'<line x1="{x(d["t"]):.1f}" x2="{x(d["t"]):.1f}" y1="{y + 5}" y2="{y + row_h - 5}" '
-                    f'stroke="{color}" stroke-width="2"><title>{fmt_duration(d["t"])} {esc(d["name"])} '
-                    f'died to {esc(d["ability"])}</title></line>')
-        if r.get('wipe_at') is not None:
-            bar += (f'<line x1="{x(r["wipe_at"]):.1f}" x2="{x(r["wipe_at"]):.1f}" y1="{y + 2}" y2="{y + row_h - 2}" '
-                    f'stroke="#ffd43b" stroke-width="2" stroke-dasharray="3 2"><title>Half the raid dead '
-                    f'{fmt_duration(r["wipe_at"])}</title></line>')
-        parts.append(f'<a href="{esc(r["href"])}"><rect x="0" y="{y}" width="{width}" height="{row_h}" fill="transparent"/>'
-                     f'<text x="{left - 10}" y="{y + row_h / 2 + 4:.1f}" text-anchor="end">{esc(r["label"])}</text>{bar}</a>')
-    parts.append('</svg>')
-    return ''.join(parts)
+            parts.append(f'<g><line x1="{d["t"]}" x2="{d["t"]}" y1="{y + 5}" y2="{y + row_h - 5}" stroke="{color}" '
+                         f'stroke-width="2"/><line class="tl-hit-line" x1="{d["t"]}" x2="{d["t"]}" y1="{y}" '
+                         f'y2="{y + row_h}"/><title>{fmt_duration(d["t"])} {esc(d["name"])} died to '
+                         f'{esc(d["ability"])}</title></g>')
+        track.append(f'<a href="{esc(r["href"])}">{"".join(parts)}</a>')
+    return f"""<div class="tl" data-duration="{longest}">
+        <div class="tl-tools"><span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom · hover for details</span>
+            <button type="button" data-zoom="out" title="Zoom out">−</button>
+            <input type="range" min="0" max="100" value="0" aria-label="Zoom">
+            <button type="button" data-zoom="in" title="Zoom in">+</button>
+            <button type="button" data-zoom="fit" title="Show the whole pull">Fit</button></div>
+        <div class="tl-body">
+            <div class="tl-labels">{labels}<div class="tl-ruler-gap"></div></div>
+            <div class="tl-scroll"><div class="tl-inner">
+                <svg class="tl-track" viewBox="0 0 {longest} {height}" preserveAspectRatio="none"
+                     style="height:{height}px" role="img" aria-label="Deaths in every pull">
+                    <g class="tl-grid">{grid}</g>{"".join(track)}</svg>
+                <div class="tl-ruler">{ruler}</div>
+                <div class="tl-head" hidden><span></span></div>
+            </div></div>
+        </div></div>"""
 
 
 def bar_table(rows, value_head='', note_head=''):

@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from .. import analyzer, db, guides, progstats, sync
+from .. import analyzer, db, guides, progstats, sync, teams
 from . import consumables, insights, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, deaths_strip, difficulty_pill,
                      pull_histogram,
@@ -186,8 +186,28 @@ def _boss_status(boss):
 # GET /admin/raids - raid nights + boss progression + sync controls
 # ============================================================================
 
+def _team_query(team, **more):
+    """'?team=sun&nights=3' - the query string that keeps a team (and other params) on links."""
+    params = {'team': team, **more}
+    query = '&'.join(f'{k}={quote(str(v))}' for k, v in params.items() if v)
+    return f'?{query}' if query else ''
+
+
+def _team_pill(channel_id):
+    team = teams.of_channel(channel_id)
+    if team is None:
+        return ''
+    if team == teams.OTHER:
+        return ('<span class="pill pill-wipe" title="Raid event posted outside the team signup channels - '
+                'not counted in boss progress">for fun</span>')
+    return f'<span class="pill">{esc(teams.label(team))}</span>'
+
+
 def _overview_filters(request, tiers):
-    """(zone_id or None, difficulty or None, filter-bar HTML). Defaults to the newest tier, all difficulties."""
+    """
+    (zone_id or None, difficulty or None, team or None, filter-bar HTML). Defaults to the newest
+    tier, all difficulties, all teams.
+    """
     known = [t for t in tiers if t['zone_id'] is not None]
     tier_arg = request.query.get('tier')
     if tier_arg == 'all':
@@ -196,6 +216,7 @@ def _overview_filters(request, tiers):
         zone_id = int(tier_arg)
     else:
         zone_id = known[0]['zone_id'] if known else None
+    team = teams.parse(request.query.get('team'))
     diff_arg = request.query.get('difficulty')
     difficulty = int(diff_arg) if diff_arg and diff_arg.isdigit() and int(diff_arg) in DIFFICULTY_NAMES else None
 
@@ -207,18 +228,23 @@ def _overview_filters(request, tiers):
     diff_options = f'<option value=""{" selected" if difficulty is None else ""}>All difficulties</option>' + ''.join(
         f'<option value="{d}"{" selected" if d == difficulty else ""}>{name}</option>'
         for d, name in sorted(DIFFICULTY_NAMES.items(), reverse=True))
+    team_options = f'<option value=""{" selected" if team is None else ""}>All teams</option>' + ''.join(
+        f'<option value="{key}"{" selected" if key == team else ""}>{esc(teams.label(key))}</option>'
+        for key, _ in teams.options())
     bar = (f'<form method="get" class="filter-bar">'
            f'<label>Raid tier <select name="tier" onchange="this.form.submit()">{tier_options}</select></label>'
            f'<label>Difficulty <select name="difficulty" onchange="this.form.submit()">{diff_options}</select></label>'
+           f'<label>Team <select name="team" onchange="this.form.submit()">{team_options}</select></label>'
            f'<noscript><button class="btn btn-secondary btn-sm">Filter</button></noscript></form>')
-    return zone_id, difficulty, bar
+    return zone_id, difficulty, team, bar
 
 
 async def handle_overview(request):
     session = _session(request)
-    zone_id, difficulty, filter_bar = _overview_filters(request, db.list_tiers())
-    reports = db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty)
-    bosses = db.list_bosses(zone_id=zone_id, difficulty=difficulty)
+    zone_id, difficulty, team, filter_bar = _overview_filters(request, db.list_tiers())
+    reports = db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty, team=team)
+    bosses = db.list_bosses(zone_id=zone_id, difficulty=difficulty, team=team)
+    team_q = _team_query(team)
 
     st = sync.status
     if st['running']:
@@ -241,8 +267,8 @@ async def handle_overview(request):
                        f'points this hour{resets}{last}</p>')
 
     boss_rows = ''.join(f"""
-        <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}'" style="cursor:pointer">
-            <td><a href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}" style="color:#fff">
+        <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}'" style="cursor:pointer">
+            <td><a href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}" style="color:#fff">
                 <strong>{esc(b['name'])}</strong></a></td>
             <td>{difficulty_pill(b['difficulty'])}</td>
             <td class="num">{b['pulls']}</td>
@@ -260,6 +286,7 @@ async def handle_overview(request):
             <tr>
                 <td>{ts(r['start_time'], 'date')}</td>
                 <td><a href="/admin/raids/report/{esc(r['code'])}" style="color:#fff"><strong>{esc(r['title'])}</strong></a>
+                    {_team_pill(r['event_channel_id'])}
                     {'<span class="pill pill-wipe">imported</span>' if r['source'] == 'manual' else ''}
                     {f'<br><span class="small muted">📅 {esc(r["event_title"])}</span>' if r['event_title'] else ''}</td>
                 <td>{esc(r['zone_name'] or '')} {diffs}</td>
@@ -285,7 +312,9 @@ async def handle_overview(request):
     </div>
     <div class="card">{filter_bar}</div>
     <div class="card">
-        <h2>🐉 Bosses</h2>
+        <h2>🐉 Bosses{f" — {esc(teams.label(team))}" if team else ""}</h2>
+        <p class="muted small">{"Only this team's raid nights." if team else "Both teams together."} Raid events
+           posted outside the team signup channels (e.g. #for-fun-raids) aren't counted.</p>
         <div class="table-wrapper"><table class="compact">
             <tr><th>Boss</th><th>Difficulty</th><th class="num">Pulls</th><th class="num">Nights</th>
                 <th>Progress</th><th>Last pulled</th></tr>
@@ -524,17 +553,19 @@ def _consumables_card(insight_pulls, roster):
     reference = consumables.reference_pull(insight_pulls)
     if single:
         hint = ('Enemy casts on top; each player\'s potions (bar = buff duration), healthstones / healing potions '
-                '(diamonds) and deaths underneath. Hover anything for details.')
+                '(diamonds), deaths and cooldowns underneath. Toggle what to show with the chips - pick single '
+                'cooldowns under Abilities. Hover anything for details.')
     else:
         hint = ('Every potion and healthstone from every pull on one axis — clusters show each player\'s habits '
-                '(e.g. always potting at the pull and again around 5:00).')
+                '(e.g. always potting at the pull and again around 5:00). Toggle consumables and cooldowns with the '
+                'chips.')
         if reference:
             which = 'the kill' if reference.get('kill') else 'the longest pull'
             hint += (f' Enemy casts on top are from pull #{reference["number"]} ({which}); boss timers are mostly '
                      'the same every pull, but shift when a phase is pushed faster or slower. Open a single pull '
                      'for its exact timeline.')
     return (f'<div class="card"><h2>🧪 Consumables timeline</h2><p class="muted small">{hint}</p>'
-            f'{consumables.timeline(insight_pulls, roster)}</div>')
+            f'{consumables.timeline(insight_pulls, roster, db.get_spells)}</div>')
 
 
 def _insight_pulls(numbered, enrage_ids=()):
@@ -630,7 +661,7 @@ async def handle_night(request):
         <h2>💀 Deaths in every pull</h2>
         <p class="muted small">One row per pull, along its own length: red ticks are early deaths by mistake (one of
            the first 4 deaths, not part of a mass death), grey ones are the rest; the dashed yellow line is where half
-           the raid was dead, thin lines are phase changes. Click a row to open that pull.</p>
+           the raid was dead, thin lines are phase changes. Zoom in like a video editor's timeline to pick apart deaths that happen close together; click a row to open that pull.</p>
         {deaths_strip(insights.death_strip_rows(code, numbered))}
     </div>
     <div class="card">
@@ -794,13 +825,17 @@ async def handle_boss(request):
         difficulty = int(request.match_info['difficulty'])
     except ValueError:
         raise web.HTTPNotFound()
-    pulls = db.get_boss_pulls(encounter_id, difficulty, with_analysis=True)
+    team = teams.parse(request.query.get('team'))
+    base = f'/admin/raids/boss/{encounter_id}/{difficulty}'
+    pulls = db.get_boss_pulls(encounter_id, difficulty, with_analysis=True, team=team)
     if not pulls:
+        if team:
+            raise web.HTTPFound(base + '?error=' + quote(f'No {teams.label(team)} pulls on that boss yet.'))
         raise web.HTTPFound('/admin/raids?error=' + quote('No pulls for that boss yet.'))
     tags, sources = _effective_tags(encounter_id)
     guide_for = _guide_lookup(encounter_id)
     name = pulls[-1]['encounter_name']
-    here = f'/admin/raids/boss/{encounter_id}/{difficulty}'
+    here = base + _team_query(team)
 
     # Nights (most recent first in the table, chronological in the chart)
     nights = {}
@@ -868,7 +903,7 @@ async def handle_boss(request):
     heat_html = (f'<h3 style="margin-top:20px">How far we got, night by night</h3>'
                  f'<p class="muted small">Pulls that reached each phase; darker = more of the night\'s pulls got there.</p>'
                  f'{phase_heatmap(list(reversed(heat_nights)), phase_order)}' if len(phase_order) > 1 else '')
-    trends_html = _player_trends(night_data, encounter_id, difficulty)
+    trends_html = _player_trends(night_data, encounter_id, difficulty, team)
     comparison_html = await _progstats_card(encounter_id, pulls) if difficulty == progstats.MYTHIC else ''
 
     # Mechanics seen on this boss, with tagging
@@ -907,8 +942,12 @@ async def handle_boss(request):
                                  here + '#mechanics')}</td>
             </tr>""")
 
+    team_links = ' · '.join(
+        f'<a href="{base}{_team_query(key, nights=last_n or None)}" style="color:{"#fff" if key == team else "#8b9cff"}">'
+        f'{esc(teams.label(key) if key else "All teams")}</a>'
+        for key in [None] + [k for k, _ in teams.options()])
     scope_links = ' · '.join(
-        f'<a href="{here}{"?nights=" + str(n) if n else ""}" style="color:{"#fff" if n == last_n else "#8b9cff"}">'
+        f'<a href="{base}{_team_query(team, nights=n or None)}" style="color:{"#fff" if n == last_n else "#8b9cff"}">'
         f'{label}</a>'
         for n, label in ((1, 'last night'), (3, 'last 3 nights'), (0, 'all nights')) if n <= len(nights))
 
@@ -916,8 +955,9 @@ async def handle_boss(request):
     best_all = min((p['fight_pct'] or 0 for p in pulls if not p['kill']), default=None)
     body = f"""
     <div class="card">
-        <p><a href="/admin/raids">← Raid Analysis</a></p>
+        <p><a href="/admin/raids{_team_query(team)}">← Raid Analysis</a></p>
         <h1>{esc(name)} {difficulty_pill(difficulty)}</h1>
+        <p class="small">{team_links}</p>
         {_flash(request)}
         <div class="stats">
             <div class="stat"><div class="stat-value">{len(pulls)}</div><div class="stat-label">Pulls</div></div>
@@ -947,7 +987,7 @@ async def handle_boss(request):
         </div>
         {scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags))}
     </div>
-    {_guides_card(encounter_id, difficulty, here)}
+    {_guides_card(encounter_id, difficulty, base)}
     <div class="card" id="mechanics">
         <h2>🎯 Mechanics</h2>
         <p class="muted small">Every enemy ability that hit the raid on this boss. Tags marked <em>auto</em> come
@@ -1038,19 +1078,19 @@ async def _progstats_card(encounter_id, pulls):
     </div>"""
 
 
-def _trend_url(encounter_id, difficulty, name):
-    return f'/admin/raids/boss/{encounter_id}/{difficulty}/player/{quote(name)}'
+def _trend_url(encounter_id, difficulty, name, team=None):
+    return f'/admin/raids/boss/{encounter_id}/{difficulty}/player/{quote(name)}{_team_query(team)}'
 
 
-def _player_trends(night_data, encounter_id, difficulty):
-    return players.trends_card(night_data, lambda key: _trend_url(encounter_id, difficulty, key),
+def _player_trends(night_data, encounter_id, difficulty, team=None):
+    return players.trends_card(night_data, lambda key: _trend_url(encounter_id, difficulty, key, team),
                                db.character_owners())
 
 
-def _boss_night_data(encounter_id, difficulty, tags, guide_for):
-    """Per-night pulls and player reports for one boss, oldest night first."""
+def _boss_night_data(encounter_id, difficulty, tags, guide_for, team=None):
+    """Per-night pulls and player reports for one boss (one team's, or all teams'), oldest night first."""
     nights = {}
-    for pull in db.get_boss_pulls(encounter_id, difficulty, with_analysis=True):
+    for pull in db.get_boss_pulls(encounter_id, difficulty, with_analysis=True, team=team):
         nights.setdefault(pull['report_code'], []).append(pull)
     return _night_data(nights, encounter_id, tags, guide_for)
 
@@ -1078,12 +1118,13 @@ async def handle_player_trend(request):
     name = request.match_info['name']
     tags, _ = _effective_tags(encounter_id)
     guide_for = _guide_lookup(encounter_id)
-    night_data = _boss_night_data(encounter_id, difficulty, tags, guide_for)
+    team = teams.parse(request.query.get('team'))
+    night_data = _boss_night_data(encounter_id, difficulty, tags, guide_for, team)
     owners = db.character_owners()
     history = players.player_history(night_data, owners)
     # The link carries a person key; a plain character name (e.g. from a night's player page) works too.
     entry = history.get(name) or history.get(players.person_key(name, owners))
-    back = f'/admin/raids/boss/{encounter_id}/{difficulty}'
+    back = f'/admin/raids/boss/{encounter_id}/{difficulty}{_team_query(team)}'
     if not entry:
         raise web.HTTPFound(back + '?error=' + quote(f'No pulls for {name} on this boss.'))
     boss_name = night_data[-1]['pulls'][0]['encounter_name']

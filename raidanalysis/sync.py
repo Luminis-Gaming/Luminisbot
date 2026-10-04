@@ -9,7 +9,7 @@ import time
 
 import aiohttp
 
-from . import analyzer, db, wcl
+from . import analyzer, cooldowns, db, wcl
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,12 @@ async def _analyze_pull(session, code, fight, actors):
     if damage_ids:
         damage_events = await wcl.get_events(session, code, fight['id'], 'DamageTaken',
                                              f"ability.id in ({','.join(map(str, damage_ids))})")
+    cooldown_meta = cooldowns.cooldown_meta(tables.get('casts'))
     consumable_events, buff_events, heal_events = [], [], []
-    if potion_ids or defensive_ids:
+    cast_ids = potion_ids + defensive_ids + sorted(cooldown_meta)
+    if cast_ids:  # potions, healthstones and tracked cooldowns in one request
         consumable_events = await wcl.get_events(session, code, fight['id'], 'Casts',
-                                                 f"ability.id in ({','.join(map(str, potion_ids + defensive_ids))})")
+                                                 f"ability.id in ({','.join(map(str, cast_ids))})")
     if potion_ids:  # buff windows: how long each potion lasted, and pre-pots
         buff_events = await wcl.get_events(session, code, fight['id'], 'Buffs',
                                            f"ability.id in ({','.join(map(str, potion_ids))})")
@@ -62,7 +64,7 @@ async def _analyze_pull(session, code, fight, actors):
 
     return analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
                                   set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events,
-                                  combatant_events)
+                                  combatant_events, cooldown_meta)
 
 
 async def sync_report(session, code, source='guild', force=False):
@@ -181,6 +183,9 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=()):
             status['current'] = 'Looking up mechanic clips on Mythic Trap…'
             from .guides import scan_missing
             await scan_missing()
+            # Wowhead tooltips (name, cooldown, description) for spells the new pulls mention.
+            from .spells import fill_missing
+            await fill_missing()
         except Exception as e:
             logger.exception("[RAIDS] Sync failed")
             errors.append(str(e))

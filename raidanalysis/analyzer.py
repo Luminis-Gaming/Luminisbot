@@ -6,7 +6,7 @@ The stored analysis is tag-independent: which abilities count as "avoidable"
 is applied at render time, so retagging a mechanic never needs a re-sync.
 """
 
-ANALYSIS_VERSION = 5
+ANALYSIS_VERSION = 6
 
 # Officer tags on boss abilities (stored in raid_ability_tags).
 TAG_AVOIDABLE = 'avoidable'                   # any hit is a mistake
@@ -165,6 +165,24 @@ HEAL_MERGE_MS = 1500         # heal events this close together are one healthsto
 BOSS_CAST_SPAM_LIMIT = 40    # enemy abilities cast more often than this per pull are left off the timeline
 
 
+def _cooldown_uses(fight_start, names_by_id, roster, meta, cast_events):
+    """
+    Every cast of a tracked cooldown (see cooldowns.py): who, what, when, and on whom for
+    externals. meta = {spell id: {'name', 'icon', 'category'}}.
+    """
+    uses = []
+    for event in sorted((e for e in cast_events if e.get('type') == 'cast'), key=lambda e: e['timestamp']):
+        guid, name = _event_ability(event), names_by_id.get(event.get('sourceID'))
+        if guid not in meta or name not in roster:
+            continue
+        target = names_by_id.get(event.get('targetID'))
+        uses.append({'t': event['timestamp'] - fight_start, 'name': name, 'ability_id': guid,
+                     'ability': meta[guid]['name'], 'icon': meta[guid].get('icon'),
+                     'category': meta[guid]['category'],
+                     'target': target if target in roster and target != name else None})
+    return uses
+
+
 def _consumable_uses(fight_start, duration, names_by_id, roster, casts_table, consumable_events,
                      buff_events, heal_events, potion_ids, defensive_ids):
     """
@@ -315,7 +333,7 @@ def _boss_timeline(fight_start, enemy_casts_table, enemy_cast_events):
 
 
 def analyze_fight(fight, actors, tables, damage_events, consumable_events, potion_ids, defensive_ids,
-                  buff_events=(), heal_events=(), enemy_cast_events=(), combatant_events=()):
+                  buff_events=(), heal_events=(), enemy_cast_events=(), combatant_events=(), cooldown_meta=None):
     """
     Build the stored analysis for one pull.
 
@@ -435,6 +453,7 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         'potions': potions,
         'defensives': defensives,
         'consumables': uses,
+        'cooldowns': _cooldown_uses(fight_start, names_by_id, roster, cooldown_meta or {}, consumable_events),
         'boss_casts': boss_casts,
         'boss_abilities': boss_abilities,
         'prepull': _prepull(names_by_id, roster, combatant_events),

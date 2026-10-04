@@ -6,6 +6,7 @@ abilities on top and every player's consumables (and deaths) underneath.
 Needs analyses from ANALYSIS_VERSION 4+ ('consumables', 'boss_casts');
 older nights only have counts until they're re-analyzed.
 """
+from .. import cooldowns
 from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name
 
 # What the timeline colors encode is the *kind* of consumable (validated with the
@@ -33,11 +34,40 @@ def _icon(icon):
     return f'<img class="ability-icon" src="{ICON_BASE}{esc(icon)}" alt="" loading="lazy">' if icon else ''
 
 
-def legend():
-    items = [f'<span style="--c:{KIND_COLORS[k]}">{KIND_LABELS[k]}</span>' for k in ('potion', 'mana', 'defensive')]
-    items.append(f'<span style="--c:{DEATH}">Death</span>')
-    items.append(f'<span style="--c:{BOSS_TICK}">Enemy ability cast</span>')
-    return f'<div class="legend">{"".join(items)}</div>'
+def toolbar(pulls, single):
+    """
+    Toggle chips for what the timeline shows (they double as its legend): each consumable kind,
+    deaths, each cooldown group - and an Abilities dropdown to pick single cooldowns. Cooldowns
+    start hidden to keep the default view calm. PAGE_JS does the toggling.
+    """
+    chips = [f'<button type="button" class="tl-chip" data-f="{k}" aria-pressed="true">'
+             f'<i style="--c:{KIND_COLORS[k]}"></i>{KIND_LABELS[k]}</button>' for k in ('potion', 'mana', 'defensive')]
+    if single:
+        chips.append(f'<button type="button" class="tl-chip" data-f="death" aria-pressed="true">'
+                     f'<i style="--c:{DEATH}"></i>Deaths</button>')
+    used = {}
+    for p in pulls:
+        for cd in p['analysis'].get('cooldowns') or []:
+            entry = used.setdefault((cd['category'], cd['ability']), {'icon': cd.get('icon'), 'count': 0})
+            entry['count'] += 1
+    groups = []
+    for key, label, emoji in cooldowns.CATEGORIES:
+        abilities = sorted(((name, e) for (cat, name), e in used.items() if cat == key), key=lambda x: -x[1]['count'])
+        if not abilities:
+            continue
+        total = sum(e['count'] for _, e in abilities)
+        chips.append(f'<button type="button" class="tl-chip" data-cat="{key}" aria-pressed="false">{emoji} {label} '
+                     f'<span class="muted">{total}</span></button>')
+        boxes = ''.join(f'<label><input type="checkbox" data-cat="{key}" value="{esc(name)}">{_icon(e["icon"])}'
+                        f'{esc(name)} <span class="muted">×{e["count"]}</span></label>' for name, e in abilities)
+        groups.append(f'<div><h5>{emoji} {label}</h5>{boxes}</div>')
+    if groups:
+        chips.append(f'<details class="tl-pick"><summary>Abilities ▾</summary>'
+                     f'<div class="tl-pick-menu">{"".join(groups)}</div></details>')
+    elif not any('cooldowns' in p['analysis'] for p in pulls):
+        chips.append('<span class="muted small">Re-analyze to see cooldowns (defensives, externals, raid CDs).</span>')
+    chips.append(f'<span class="tl-static"><i style="--c:{BOSS_TICK}"></i>Enemy ability cast</span>')
+    return f'<div class="tl-chips">{"".join(chips)}</div>'
 
 
 # ============================================================================
@@ -56,98 +86,138 @@ def reference_pull(pulls):
     return max(with_casts, key=lambda p: (bool(p.get('kill')), p['analysis'].get('_duration') or 0))
 
 
-def timeline(pulls, roster):
+def timeline(pulls, roster, spell_lookup=None):
     """
     pulls: [{'number', 'kill', 'analysis' (with _duration), 'phases': [ms]}]. One pull = exact
     WCL-style timeline with the enemy's casts and deaths; several = every use from every pull on one
     axis (habits show up as clusters) under the enemy casts of reference_pull(), deaths left out.
+
+    Drawn as an editor-style timeline (see render.deaths_strip and PAGE_JS): names pinned on the
+    left, marks placed in % of the track so zooming keeps icons their size, drag to pan. Every
+    mark has a rich tooltip - what/when from data-tip, plus the spell's Wowhead text from the
+    page's spell-data JSON. spell_lookup(ids) -> {id: {'name', 'icon', 'meta', 'description'}}.
     """
     single = len(pulls) == 1
     longest = max((p['analysis'].get('_duration') or 0) for p in pulls) or 1
-    lanes = []  # (label, kind, marks)
     reference = reference_pull(pulls)
+    spells = {}  # spell id -> (name, rpglogs icon) as the logs know it
 
+    def at(t):
+        return f'{100 * max(0, min(t, longest)) / longest:.3f}%'
+
+    def prefix(pull):
+        return '' if single else f'Pull {pull["number"]} · '
+
+    labels, rows = [], []
     if reference:
         # One lane per ability *name* - bosses often cast the same ability under several spell IDs.
         analysis = reference['analysis']
-        names = {a['id']: a['name'] for a in analysis.get('boss_abilities') or []}
+        meta = {a['id']: a for a in analysis.get('boss_abilities') or []}
         by_name = {}
         for t, guid in analysis.get('boss_casts') or []:
-            if guid in names:
-                by_name.setdefault(names[guid], []).append(t)
-        for name, casts in sorted(by_name.items(), key=lambda kv: min(kv[1])):
-            lanes.append((name, 'boss', sorted(casts)))
+            if guid in meta:
+                by_name.setdefault(meta[guid]['name'], []).append((t, guid))
+        source = '' if single else f' · pull {reference["number"]}'
+        for name, casts in sorted(by_name.items(), key=lambda kv: min(kv[1])[0]):
+            for _, guid in casts:
+                spells.setdefault(guid, (name, meta[guid].get('icon')))
+            first = casts[0][1]
+            labels.append(f'<div class="tl-lab boss" data-spell="{first}" data-tip="Cast {len(casts)}× this pull">'
+                          f'{_icon(meta[first].get("icon"))}<span>{esc(name)}</span></div>')
+            ticks = ''.join(f'<i class="m tick" style="left:{at(t)}" data-spell="{guid}" '
+                            f'data-tip="{fmt_duration(t)}{source}"></i>' for t, guid in sorted(casts))
+            rows.append(f'<div class="tl-row boss">{ticks}</div>')
 
-    for player in roster:
-        uses = [(u, p) for p in pulls for u in p['analysis'].get('consumables') or [] if u['name'] == player['name']]
-        deaths = ([d for d in pulls[0]['analysis'].get('deaths') or [] if d['name'] == player['name']]
-                  if single else [])
-        lanes.append((player['name'], 'player', (uses, deaths)))
-
-    row_h, boss_h, left, right, top = 22, 15, 150, 14, 8
-    height = top + sum(boss_h if k == 'boss' else row_h for _, k, _ in lanes) + 30
-    width = 900
-    inner = width - left - right
-
-    def x(t):
-        return left + inner * max(0, min(t, longest)) / longest
-
-    parts = [f'<svg class="chart timeline" viewBox="0 0 {width} {height}" role="img" '
-             f'aria-label="Consumables timeline">']
-    for minute in range(0, int(longest / 60000) + 1):
-        parts.append(f'<line class="grid" x1="{x(minute * 60000):.1f}" x2="{x(minute * 60000):.1f}" '
-                     f'y1="{top}" y2="{height - 22}"/><text x="{x(minute * 60000):.1f}" y="{height - 6}" '
-                     f'text-anchor="middle">{minute}:00</text>')
-    if reference:
-        for start in reference['phases']:
-            parts.append(f'<line x1="{x(start):.1f}" x2="{x(start):.1f}" y1="{top}" y2="{height - 22}" '
-                         f'stroke="rgba(255,255,255,0.3)" stroke-dasharray="4 3"/>')
-
-    y = top
-    boss_done = False
-    for label, lane_kind, marks in lanes:
-        h = boss_h if lane_kind == 'boss' else row_h
-        mid = y + h / 2
-        if lane_kind == 'player' and not boss_done and any(k == 'boss' for _, k, _ in lanes):
-            parts.append(f'<line x1="0" x2="{width}" y1="{y:.1f}" y2="{y:.1f}" stroke="rgba(255,255,255,0.15)"/>')
-            boss_done = True
-        short = label if len(label) <= 22 else label[:21] + '…'
-        parts.append(f'<text x="{left - 8}" y="{mid + 4:.1f}" text-anchor="end"'
-                     f'{" class=axis-label" if lane_kind == "boss" else ""}>{esc(short)}</text>')
-        if lane_kind == 'boss':
-            source = '' if single else f' (pull #{reference["number"]})'
-            for t in marks:
-                parts.append(f'<line x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{y + 3:.1f}" y2="{y + h - 3:.1f}" '
-                             f'stroke="{BOSS_TICK}" stroke-width="2"><title>{esc(label)} — {fmt_duration(t)}{source}'
-                             f'</title></line>')
-        else:
-            uses, deaths = marks
-            parts.append(f'<line class="grid" x1="{left}" x2="{width - right}" y1="{mid:.1f}" y2="{mid:.1f}"/>')
-            for use, pull in uses:
+    for i, player in enumerate(roster):
+        sep = ' sep' if i == 0 and rows else ''
+        marks = []
+        for pull in pulls:
+            for use in pull['analysis'].get('consumables') or []:
+                if use['name'] != player['name']:
+                    continue
                 k = kind(use)
-                color = KIND_COLORS[k]
-                opacity = '' if single else ' opacity="0.55"'
-                tip = (f'{"Pull " + str(pull["number"]) + ": " if not single else ""}{use["ability"]} at '
-                       f'{fmt_duration(use["t"])}{" (pre-pot)" if use.get("prepot") else ""}')
+                spells.setdefault(use['ability_id'], (use['ability'], use.get('icon')))
+                tip = f'{prefix(pull)}{fmt_duration(use["t"])}{" (pre-pot)" if use.get("prepot") else ""}'
                 if k == 'defensive':
-                    tip += f' — healed {fmt_amount(use.get("healing") or 0)}'
-                    cx = x(use['t'])
-                    parts.append(f'<path d="M{cx:.1f},{mid - 6:.1f} L{cx + 6:.1f},{mid:.1f} L{cx:.1f},{mid + 6:.1f} '
-                                 f'L{cx - 6:.1f},{mid:.1f} Z" fill="{color}" stroke="#161a2c" stroke-width="1.5"{opacity}>'
-                                 f'<title>{esc(tip)}</title></path>')
+                    tip += f' · healed {fmt_amount(use.get("healing") or 0)}'
+                    marks.append(f'<i class="m dia" data-f="{k}" style="left:{at(use["t"])}" '
+                                 f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}"></i>')
                 else:
                     end = use.get('end') or (use['t'] + POTION_BUFF_FALLBACK_MS)
-                    tip += f' — {fmt_duration(end - use["t"])} buff' if single else ''
-                    parts.append(f'<rect x="{x(use["t"]):.1f}" y="{mid - 5:.1f}" width="{max(3, x(end) - x(use["t"])):.1f}" '
-                                 f'height="10" rx="3" fill="{color}"{opacity}><title>{esc(tip)}</title></rect>')
-            for d in deaths:
-                cx, color = x(d['t']), (DEATH if d.get('early') else 'rgba(255,255,255,0.35)')
-                parts.append(f'<path d="M{cx - 5:.1f},{mid - 5:.1f} L{cx + 5:.1f},{mid + 5:.1f} M{cx + 5:.1f},{mid - 5:.1f} '
-                             f'L{cx - 5:.1f},{mid + 5:.1f}" stroke="{color}" stroke-width="2.5">'
-                             f'<title>Died to {esc(d["ability"])} at {fmt_duration(d["t"])}</title></path>')
-        y += h
-    parts.append('</svg>')
-    return legend() + ''.join(parts)
+                    tip += f' · {fmt_duration(end - use["t"])} buff'
+                    width = 100 * (min(end, longest) - max(0, use['t'])) / longest
+                    marks.append(f'<i class="m bar k-{k}" data-f="{k}" style="left:{at(use["t"])};width:{width:.3f}%" '
+                                 f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}"></i>')
+            for cd in pull['analysis'].get('cooldowns') or []:
+                if cd['name'] != player['name']:
+                    continue
+                spells.setdefault(cd['ability_id'], (cd['ability'], cd.get('icon')))
+                tip = (f'{prefix(pull)}{"→ " + cd["target"] + " · " if cd.get("target") else ""}'
+                       f'{fmt_duration(cd["t"])}')
+                marks.append(f'<i class="m cd sp{cd["ability_id"]}" data-f="cd" data-ab="{esc(cd["ability"])}" '
+                             f'style="left:{at(cd["t"])}" data-spell="{cd["ability_id"]}" data-tip="{esc(tip)}" hidden></i>')
+        if single:
+            for d in pulls[0]['analysis'].get('deaths') or []:
+                if d['name'] != player['name']:
+                    continue
+                if d.get('ability_id'):
+                    spells.setdefault(d['ability_id'], (d['ability'], d.get('icon')))
+                marks.append(f'<i class="m death{" early" if d.get("early") else ""}" data-f="death" '
+                             f'style="left:{at(d["t"])}" data-spell="{d.get("ability_id") or ""}" '
+                             f'data-tip="Died at {fmt_duration(d["t"])} · {esc(_death_text(d))}">✕</i>')
+        labels.append(f'<div class="tl-lab{sep}">{esc(player["name"])}</div>')
+        rows.append(f'<div class="tl-row{sep}">{"".join(marks)}</div>')
+
+    phases = ''.join(f'<i class="tl-phase" style="left:{at(start)}"></i>' for start in (reference or {}).get('phases') or [])
+    grid = ''.join(f'<i style="left:{at(t)}"></i>' for t in range(0, longest + 1, 60000))
+    ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{at(t)}">{fmt_duration(t)}</span>'
+                    for t in range(0, longest + 1, 60000))
+    icon_css = ''.join(f'.sp{sid}{{background-image:url({ICON_BASE}{esc(icon)})}}'
+                       for sid, (_, icon) in spells.items() if icon)
+    return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}"
+        style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']}">
+        <style>{icon_css}</style>
+        {toolbar(pulls, single)}
+        <div class="tl-tools"><span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom</span>
+            <button type="button" data-zoom="out" title="Zoom out">−</button>
+            <input type="range" min="0" max="100" value="0" aria-label="Zoom">
+            <button type="button" data-zoom="in" title="Zoom in">+</button>
+            <button type="button" data-zoom="fit" title="Show the whole pull">Fit</button></div>
+        <div class="tl-body">
+            <div class="tl-labels">{"".join(labels)}<div class="tl-ruler-gap"></div></div>
+            <div class="tl-scroll"><div class="tl-inner">
+                <div class="tl-grid">{grid}</div>{phases}
+                {"".join(rows)}
+                <div class="tl-ruler">{ruler}</div>
+                <div class="tl-head" hidden><span></span></div>
+            </div></div>
+        </div>
+        <script type="application/json" class="spell-data">{_spell_json(spells, spell_lookup)}</script>
+    </div>"""
+
+
+def _death_text(death):
+    from .. import analyzer
+    return analyzer.death_note(death)
+
+
+def _spell_json(spells, spell_lookup):
+    """{id: {name, icon, meta, desc}} for the tooltips: Wowhead's text where we have it, the log's name otherwise."""
+    import json
+    known = spell_lookup(list(spells)) if spell_lookup and spells else {}
+    out = {}
+    for sid, (name, icon) in spells.items():
+        info = known.get(sid) or {}
+        out[sid] = {'name': info.get('name') or name,
+                    'icon': f'{ICON_BASE}{icon}' if icon else spell_icon_url(info.get('icon')),
+                    'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
+    # Inside <script>: keep "</script>" from ever closing it early.
+    return json.dumps(out, ensure_ascii=False).replace('</', '<\\/')
+
+
+def spell_icon_url(icon):
+    from ..spells import icon_url
+    return icon_url(icon)
 
 
 # ============================================================================

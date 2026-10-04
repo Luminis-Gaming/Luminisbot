@@ -11,6 +11,7 @@ from psycopg2.extras import Json, RealDictCursor
 
 from mythicplus.db import get_db_connection
 
+from . import teams
 from .analyzer import TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK, TAG_IGNORE
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,18 @@ def ensure_guide_schema(cursor):
             video_url TEXT,
             embed_url TEXT NOT NULL,
             PRIMARY KEY (encounter_id, guide_id)
+        );
+    """)
+    # Wowhead tooltip text for the timeline (spells.py)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_spells (
+            spell_id BIGINT PRIMARY KEY,
+            name TEXT,
+            icon TEXT,
+            meta TEXT,
+            description TEXT,
+            status TEXT NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
     """)
 
@@ -217,7 +230,7 @@ def event_report_codes(since_days=None):
 # The raid event (raid_system) a report is attached to, if any.
 _EVENT_JOIN = """
     LEFT JOIN LATERAL (
-        SELECT e.id AS event_id, e.title AS event_title FROM raid_events e
+        SELECT e.id AS event_id, e.title AS event_title, e.channel_id AS event_channel_id FROM raid_events e
         WHERE e.log_url LIKE '%%' || r.code || '%%'
         ORDER BY e.event_date DESC LIMIT 1
     ) ev ON TRUE
@@ -246,11 +259,16 @@ def list_tiers():
     """, fetch='all')
 
 
-def list_reports(limit=50, zone_id=None, difficulty=None):
+def list_reports(limit=50, zone_id=None, difficulty=None, team=None):
+    """Raid nights, newest first. A team narrows it to that team's nights; all teams lists every night."""
     where, params = _filters(zone_id, difficulty)
+    if team:
+        team_where, team_params = teams.sql_filter(team)
+        where, params = where + team_where, params + team_params
     return _run(f"""
         SELECT r.code, r.title, r.owner, r.zone_name, r.start_time, r.end_time, r.synced_at, r.source,
                MAX(ev.event_id) AS event_id, MAX(ev.event_title) AS event_title,
+               MAX(ev.event_channel_id) AS event_channel_id,
                COUNT(p.fight_id) AS pulls,
                COUNT(p.fight_id) FILTER (WHERE p.kill) AS kills,
                COALESCE(SUM(p.end_ms - p.start_ms), 0) AS combat_ms,
@@ -300,22 +318,28 @@ _SUMMARY_COLS = ('report_code', 'fight_id', 'encounter_id', 'encounter_name', 'd
                  'phases')
 
 
-def get_boss_pulls(encounter_id, difficulty, with_analysis=False):
+def get_boss_pulls(encounter_id, difficulty, with_analysis=False, team=None):
+    """Every pull of a boss, oldest first - one team's, or all teams' (never for-fun raids)."""
     cols = 'p.*' if with_analysis else ', '.join(f'p.{c}' for c in _SUMMARY_COLS)
+    team_where, team_params = teams.sql_filter(team)
     return _run(f"""
         SELECT {cols}, r.title AS report_title, r.start_time AS report_start, r.phase_names
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
-        WHERE p.encounter_id = %s AND p.difficulty = %s
+        {_EVENT_JOIN}
+        WHERE p.encounter_id = %s AND p.difficulty = %s {team_where}
         ORDER BY r.start_time + p.start_ms
-    """, (encounter_id, difficulty), fetch='all')
+    """, (encounter_id, difficulty, *team_params), fetch='all')
 
 
-def list_bosses(zone_id=None, difficulty=None):
+def list_bosses(zone_id=None, difficulty=None, team=None):
     """
     One row per boss+difficulty we have pulls for, with progression summary. Hardest difficulty
-    first, then roughly raid order (when we first pulled each boss).
+    first, then roughly raid order (when we first pulled each boss). One team's, or all teams'
+    (never for-fun raids - see teams.py).
     """
     where, params = _filters(zone_id, difficulty)
+    team_where, team_params = teams.sql_filter(team)
+    where, params = where + team_where, params + team_params
     return _run(f"""
         SELECT p.encounter_id, MAX(p.encounter_name) AS name, p.difficulty, MAX(r.zone_name) AS zone_name,
                COUNT(*) AS pulls,
@@ -325,6 +349,7 @@ def list_bosses(zone_id=None, difficulty=None):
                MIN(r.start_time) AS first_seen, MAX(r.start_time) AS last_seen,
                COUNT(DISTINCT r.code) AS nights
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        {_EVENT_JOIN}
         WHERE TRUE {where}
         GROUP BY p.encounter_id, p.difficulty
         ORDER BY p.difficulty DESC, MIN(r.start_time + p.start_ms)
@@ -457,3 +482,50 @@ def character_owners():
     return resolve_owners([(r['character_name'], r['discord_id'], r['n']) for r in signups],
                           [(r['character_name'], r['discord_id']) for r in linked],
                           {r['discord_id']: r['display'] for r in displays})
+
+
+# ============================================================================
+# SPELL TOOLTIPS (spells.py)
+# ============================================================================
+
+def spells_missing(limit):
+    """Spell IDs our analyses mention without a cached tooltip (failed lookups retried after a day)."""
+    rows = _run("""
+        WITH mentioned AS (
+            SELECT DISTINCT (x->>'id')::bigint AS id FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'boss_abilities', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'cooldowns', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'consumables', '[]'::jsonb)) x
+            UNION SELECT DISTINCT (x->>'ability_id')::bigint FROM raid_pulls,
+                   jsonb_array_elements(COALESCE(analysis->'deaths', '[]'::jsonb)) x
+        )
+        SELECT m.id FROM mentioned m
+        LEFT JOIN raid_spells s ON s.spell_id = m.id
+        WHERE m.id IS NOT NULL AND m.id > 0
+          AND (s.spell_id IS NULL OR (s.status = 'error' AND s.fetched_at < NOW() - INTERVAL '1 day'))
+        LIMIT %s
+    """, (limit,), fetch='all')
+    return [r['id'] for r in rows]
+
+
+def save_spell(spell_id, info, status):
+    info = info or {}
+    _run("""
+        INSERT INTO raid_spells (spell_id, name, icon, meta, description, status, fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (spell_id) DO UPDATE SET name = EXCLUDED.name, icon = EXCLUDED.icon, meta = EXCLUDED.meta,
+            description = EXCLUDED.description, status = EXCLUDED.status, fetched_at = NOW()
+    """, (spell_id, info.get('name'), info.get('icon'), info.get('meta'), info.get('description'), status))
+
+
+def get_spells(spell_ids):
+    """{spell id: {'name', 'icon', 'meta', 'description'}} for the cached ones."""
+    if not spell_ids:
+        return {}
+    rows = _run("""
+        SELECT spell_id, name, icon, meta, description FROM raid_spells
+        WHERE status = 'ok' AND spell_id = ANY(%s)
+    """, ([int(i) for i in spell_ids],), fetch='all')
+    return {r['spell_id']: r for r in rows}

@@ -363,6 +363,36 @@ class TestConsumableUses(unittest.TestCase):
         self.assertEqual(uses[('B', 'defensive', None)]['healing'], 350000)
         self.assertEqual(sum(1 for u in a['consumables'] if u['kind'] == 'defensive'), 1)
 
+    def test_cooldowns_by_name_with_external_targets(self):
+        from raidanalysis import cooldowns
+        players = actors('Dk', 'Priest', 'Tank')
+        casts = {'entries': [{'guid': 51052, 'name': 'Anti-Magic Zone', 'abilityIcon': 'amz.jpg'},
+                             {'guid': 33206, 'name': 'Pain Suppression', 'abilityIcon': 'ps.jpg'},
+                             {'guid': 585, 'name': 'Smite'}]}
+        meta = cooldowns.cooldown_meta(casts)
+        self.assertEqual({g: m['category'] for g, m in meta.items()}, {51052: 'raid', 33206: 'external'})
+        tables = {'damageTaken': damage_table(), 'deaths': {'entries': []}, 'interrupts': {'entries': []},
+                  'dispels': {'entries': []}, 'playerDetails': {}, 'casts': casts}
+        events = [{'type': 'cast', 'sourceID': 1, 'targetID': 1, 'abilityGameID': 51052, 'timestamp': 61000},
+                  {'type': 'cast', 'sourceID': 2, 'targetID': 3, 'abilityGameID': 33206, 'timestamp': 91000},
+                  {'type': 'cast', 'sourceID': 2, 'targetID': 3, 'abilityGameID': 585, 'timestamp': 92000}]
+        a = analyzer.analyze_fight(fight(players), players, tables, [], events, set(), set(), cooldown_meta=meta)
+        self.assertEqual([(c['t'], c['name'], c['ability'], c['target']) for c in a['cooldowns']],
+                         [(60000, 'Dk', 'Anti-Magic Zone', None), (90000, 'Priest', 'Pain Suppression', 'Tank')])
+
+
+class TestSpellTooltips(unittest.TestCase):
+    def test_wowhead_tooltip_to_plain_text(self):
+        from raidanalysis import spells
+        info = spells.parse({'name': "Light's Potential", 'icon': 'potion', 'tooltip': (
+            '<table><tr><td><table width="100%"><tr><td><a class="whtt-name" href="/spell=1"><b>Light\'s Potential</b>'
+            '</a></td><th><b class="q0"><br>Level <!--lvl-->90</b></th></tr></table><table width="100%"><tr><td>Instant'
+            '</td><th><!--cooldownText-->5 min cooldown<!--cooldownText--></th></tr></table></td></tr></table><table>'
+            '<tr><td><div class="q">Absorbs up to [Total Health * 30 / 100] damage &amp; lasts <!--pts1-->30 sec.'
+            '<br />Stacks.</div></td></tr></table>')})
+        self.assertEqual(info['meta'], 'Instant · 5 min cooldown')
+        self.assertEqual(info['description'], 'Absorbs up to X damage & lasts 30 sec.\nStacks.')
+
 
 class TestSuggestions(unittest.TestCase):
     def test_tank_only_abilities_are_not_suggested(self):
