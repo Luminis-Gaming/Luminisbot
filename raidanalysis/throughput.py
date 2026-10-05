@@ -670,6 +670,11 @@ def cpm(numbered, name, top, items=frozenset()):
         for ability, n in p['cast_names'].items():
             top_rates.setdefault(ability, []).append(n / (p['duration'] / 60000))
     need = min(3, len(top))
+    # Interrupts, crowd control, movement, defensives, externals, raid cooldowns: pressed when the fight asks,
+    # not as often as you can - never a casts-per-minute verdict (the cooldown comparison and the score cover them)
+    from .benchmarks import NOT_MAJOR
+    from .cooldowns import COOLDOWNS
+    situational = set(NOT_MAJOR) | set(COOLDOWNS)
     abilities = []
     for ability in (set(top_rates) | set(ours)) - set(items):
         rates = top_rates.get(ability, [])
@@ -681,7 +686,8 @@ def cpm(numbered, name, top, items=frozenset()):
             continue
         # Never cast at all is a talent or a trinket you don't have, not a rate to work on; one the top
         # players barely press (a Blackout Kick in downtime) isn't part of the rotation.
-        judged = len(rates) >= need and ours.get(ability) and top_rate >= JUDGE_MIN_CPM
+        judged = (len(rates) >= need and ours.get(ability) and top_rate >= JUDGE_MIN_CPM
+                  and ability not in situational)
         abilities.append({'name': ability, 'ours': our_rate, 'top': top_rate, 'top_users': len(rates),
                           'casts': ours.get(ability, 0),
                           'verdict': _cpm_verdict(our_rate, top_rate) if judged else None})

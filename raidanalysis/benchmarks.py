@@ -592,45 +592,55 @@ def _clock(ms):
     return f'{s // 60}:{s % 60:02d}'
 
 
+def _moments(windows, count=2):
+    """'0:28 and 1:30' - when the top players press it (the first few moments)."""
+    times = [_clock(w['ref_at']) for w in windows[:count]]
+    return ' and '.join(times) if len(times) <= 2 else ', '.join(times[:-1]) + ' and ' + times[-1]
+
+
 def notes(rows, spec_label, limit=3):
     """
-    Feedback lines from compare(): [{'tone': 'good'|'bad'|'info', 'text'}] - misses first, a couple of
-    wins. A trinket you don't have is loot luck, not a mistake: it's a tip about what's worth getting.
+    Feedback lines from compare() - the recap's, so short: the takeaway first (how often you were in line,
+    as a share), then at most the one moment that matters most. [{'tone': 'good'|'bad'|'info', 'text'}] -
+    misses first, a couple of wins. A trinket you don't have is loot luck, not a mistake: it's a tip about
+    what's worth getting.
     """
     bad, good, info = [], [], []
     for r in rows:
         if r['category'] not in JUDGED or not r['verdict']:
             continue
-        moments = ', '.join(_clock(w['ref_at']) for w in r['windows'][:4])
+        share = f"{100 * r['hits'] / r['considered']:.0f}%" if r.get('considered') else None
         if r['verdict'] == 'not_equipped':
             info.append(trinket_tip(r, spec_label))
         elif r['category'] == ROTATIONAL:
             if r['verdict'] == 'missing':
-                bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} keep it rolling - you never "
-                           f"pressed it (not talented?)")
+                bad.append(f"{r['name']}: never pressed - {r['top_users']} of the top {spec_label} keep it rolling "
+                           f"(talented?)")
             elif r['verdict'] in ('off', 'ok'):
-                bad.append(f"{r['name']}: {r['ours_per_min']:.1f}× per minute - the top {spec_label} manage "
-                           f"{r['top_per_min']:.1f}×. No set moment for it: press it whenever it's ready")
+                bad.append(f"{r['name']}: {r['ours_per_min']:.1f} a minute - the top {spec_label} "
+                           f"{r['top_per_min']:.1f}. Press it whenever it's ready")
             continue
-        if r['verdict'] == 'missing':
-            bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use it - you never pressed it "
-                       f"(not talented, or a missed cooldown?)")
+        elif r['verdict'] == 'missing':
+            bad.append(f"{r['name']}: never pressed - {r['top_users']} of the top {spec_label} use it (talented?)")
         elif r['verdict'] in ('mostly', 'ok', 'off') and r.get('weak'):
-            lead = {'mostly': 'mostly in line, but', 'ok': 'hit and miss -', 'off': 'mostly off -'}[r['verdict']]
-            bad.append(f"{r['name']}: {lead} work on {weak_text(r['weak'])} "
-                       f"({r['hits']} of {r['considered']} moments in line overall)")
+            worst = r['weak'][0]
+            if r['verdict'] == 'mostly':
+                bad.append(f"{r['name']}: mostly in line ({share}) - except {_clock(worst['ref_at'])}, {worst['how']}")
+            else:
+                bad.append(f"{r['name']}: in line only {share} of the time - worst at {_clock(worst['ref_at'])}, "
+                           f"{worst['how']}")
         elif r['verdict'] in ('off', 'ok') and r['considered'] >= 2 and timing_text(r['offset']) not in ('', 'on time'):
-            bad.append(f"{r['name']}: top {spec_label} press it around {moments} - you were usually "
-                       f"{timing_text(r['offset'])} ({r['hits']} of {r['considered']} moments in line)")
+            bad.append(f"{r['name']}: you press it about {timing_text(r['offset'])} - the top {spec_label} around "
+                       f"{_moments(r['windows'])}")
         elif r['verdict'] == 'off' and r['considered'] >= 2:
-            bad.append(f"{r['name']}: top {spec_label} press it around {moments} - across your pulls you "
-                       f"lined up with {r['hits']} of {r['considered']} such moments")
+            bad.append(f"{r['name']}: in line only {share} of the time - the top {spec_label} press it around "
+                       f"{_moments(r['windows'])}")
         elif r['verdict'] == 'off':
-            bad.append(f"{r['name']}: {r['ours_per_min'] * 5:.1f}× per 5 min - the top {spec_label} manage "
+            bad.append(f"{r['name']}: {r['ours_per_min'] * 5:.1f}× per 5 min - the top {spec_label} "
                        f"{r['top_per_min'] * 5:.1f}×")
         elif r['verdict'] == 'good':
-            good.append(f"{r['name']} lined up with the top {spec_label}"
-                        + (f" ({r['hits']}/{r['considered']} moments)" if r['considered'] >= 2 else ''))
+            good.append(f"{r['name']}: lined up with the top {spec_label}"
+                        + (f" ({share} of the time)" if r['considered'] >= 2 else ''))
     return ([{'tone': 'bad', 'text': t} for t in bad[:limit]]
             + [{'tone': 'good', 'text': t} for t in good[:max(1, limit - len(bad))]]
             + [{'tone': 'info', 'text': t} for t in info[:1]])

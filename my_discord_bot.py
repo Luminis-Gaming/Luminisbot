@@ -160,7 +160,7 @@ async def check_for_new_logs():
                     )
                     embed.set_footer(text="Click the buttons below to view performance data")
                     
-                    # Add buttons. No "My analysis" / "Full analysis" here: the log is posted as the raid
+                    # Add buttons. No "My performance" / "Full analysis" here: the log is posted as the raid
                     # starts, before there's anything to analyze - they're on the raid's signup, which
                     # gets this log attached (auto_link_raid_log below).
                     view = LogButtonsView()
@@ -331,7 +331,7 @@ async def on_ready():
         client.add_view(LogButtonsView())
         client.add_view(RaidButtonsView())  # Add raid system buttons
         mythicplus.register_views(client)   # M+ event buttons (survive restarts)
-        raidanalysis.register_views(client) # "My analysis" button on raid events (and older log posts)
+        raidanalysis.register_views(client) # "My performance" button on raid events (and older log posts)
         client.added_view = True
     
     # Sync command tree and start background tasks

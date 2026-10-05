@@ -716,7 +716,7 @@ class TestWeakMoments(unittest.TestCase):
         self.assertEqual(benchmarks.weak_text(row['weak']), '2:30 usually 9 s early')
         note = benchmarks.notes([row], 'Havoc Demon Hunters')[0]
         self.assertEqual(note['tone'], 'bad')
-        self.assertIn('mostly in line, but work on 2:30 usually 9 s early', note['text'])
+        self.assertEqual(note['text'], 'Essence Break: mostly in line (75%) - except 2:30, usually 9 s early')
 
 
 class TestFrequentCooldownTiming(unittest.TestCase):
@@ -1184,7 +1184,7 @@ class TestPlayersCompactOutput(unittest.TestCase):
 
 
 class TestCoach(unittest.TestCase):
-    """The 'My analysis' coaching: the bosses that mattered, the few things that cost the most, what went well."""
+    """The 'My performance' coaching: the bosses that mattered, the few things that cost the most, what went well."""
 
     def test_boss_weights(self):
         from raidanalysis import coach
@@ -1258,3 +1258,14 @@ class TestCoach(unittest.TestCase):
                                                                                       'label': 'Mistweaver Monks'})]
         self.assertTrue(any(t.startswith('Rising Sun Kick: 3.0 casts a minute') for t in tips))
         self.assertFalse(any('Blackout Kick' in t for t in tips))
+
+    def test_no_rotation_tip_for_utility(self):
+        """An interrupt is pressed when the fight asks for it - never a casts-per-minute tip, however often."""
+        from raidanalysis import coach, throughput
+        pull = (1, {'fight_id': 1, 'start_ms': 0, 'end_ms': 600000, 'analysis': {'players': [], 'extras': {
+            'duration': 600000, 'players': {'Mage': {'casts': {'Frostbolt': 150, 'Counterspell': 1}}}}}})
+        top = [{'duration': 600000, 'cast_names': {'Frostbolt': 155, 'Counterspell': 12}}] * 5   # 2 a minute
+        rows = {a['name']: a for a in throughput.cpm([pull], 'Mage', top)['abilities']}
+        self.assertIsNone(rows['Counterspell']['verdict'])
+        tips = coach.rotation_insights([pull], 'Mage', 'dps', {'top': top, 'rows': [], 'label': 'Frost Mages'})
+        self.assertFalse(any('Counterspell' in i['text'] for i in tips))

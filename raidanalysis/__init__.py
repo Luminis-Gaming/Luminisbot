@@ -30,10 +30,10 @@ _sync_loop = None
 
 
 def register_views(client):
-    """Make the 'My analysis' button work on existing messages after a restart. Call from on_ready."""
+    """Make the 'My performance' button work on existing messages after a restart. Call from on_ready."""
     from .discord_recap import MyAnalysisView
     client.add_view(MyAnalysisView())
-    logger.info("[RAIDS] 'My analysis' button registered")
+    logger.info("[RAIDS] 'My performance' button registered")
 
 
 def start_tasks():

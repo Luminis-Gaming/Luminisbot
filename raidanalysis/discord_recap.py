@@ -1,5 +1,5 @@
 """
-"📊 My analysis" - a private, per-player raid recap in Discord.
+"📊 My performance" - a private, per-player raid recap in Discord.
 
 The button sits on raid events with a linked log (and older log posts). Clicking it replies with an
 ephemeral message (only the clicker sees it): one message for the night - the few things to work on and
@@ -220,14 +220,14 @@ async def handle_my_analysis(interaction: discord.Interaction):
         embed, view = recap_message(recap)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
-        logger.exception('[RAIDS] My analysis failed')
+        logger.exception('[RAIDS] My performance failed')
         await interaction.followup.send('Something went wrong building your analysis — try again in a bit.',
                                         ephemeral=True)
 
 
 class MyAnalysisButton(discord.ui.Button):
     def __init__(self, row=None):
-        super().__init__(label='My analysis', emoji='📊', style=discord.ButtonStyle.secondary,
+        super().__init__(label='My performance', emoji='📊', style=discord.ButtonStyle.secondary,
                          custom_id=CUSTOM_ID, row=row)
 
     async def callback(self, interaction: discord.Interaction):
@@ -250,7 +250,7 @@ def full_analysis_url(code):
 
 
 def add_button(view, row=None, code=None, log_url=None):
-    """Add 'My analysis' (private recap) and, when possible, a 'Full analysis' link to a message view."""
+    """Add 'My performance' (private recap) and, when possible, a 'Full analysis' link to a message view."""
     view.add_item(MyAnalysisButton(row=row))
     if not code and log_url:
         match = _REPORT_CODE_RE.search(log_url)

@@ -1,5 +1,5 @@
 """
-Coaching for one player's raid night - what the "📊 My analysis" recap says.
+Coaching for one player's raid night - what the "📊 My performance" recap says.
 
 Every insight the data has is a candidate - mechanics and deaths (analyzer feedback), priority adds and
 reaction, potion timing (the focus data), cooldowns against the top players, rotation and uptime, wasted
