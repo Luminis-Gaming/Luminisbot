@@ -10,7 +10,7 @@ compact card each.
 
 Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from data-tip / data-spell).
 """
-from .. import focus
+from .. import focus, spells
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
 
 # Categorical slots, dark steps, in fixed order (validated on the card surface #161a2c: all checks pass).
@@ -167,7 +167,8 @@ def _cooldown_lanes(cooldowns, auras, duration):
         presses = f'{len(cd["casts"])}× this pull' if cd['casts'] else 'its buff'
         lanes.append((f'<div class="tl-lab f-cd" data-spell="{cd["sid"]}" data-tip="{esc(name)} · {presses}">'
                       f'{_icon(cd["icon"])}<span>{esc(name)}</span></div>', 'f-cd', bars + marks, f'cds{i}'))
-        picks.append((f'cds{i}', name, cd['icon'], len(cd['casts']) or len((aura or {}).get('bands') or [])))
+        picks.append((f'cds{i}', name, cd['icon'], len(cd['casts']) or len((aura or {}).get('bands') or []),
+                      cd['sid'], f'{name} · {presses}'))
     return lanes, picks
 
 
@@ -182,7 +183,8 @@ def _external_lanes(auras, duration):
         lanes.append((f'<div class="tl-lab f-cd" data-spell="{aura["id"]}" data-tip="{esc(aura["name"])} from {esc(who)}">'
                       f'{_icon(aura["icon"])}<span>{esc(aura["name"])}</span></div>', 'f-cd',
                       _bands(aura, 'ext', duration, f'{esc(aura["name"])} from {esc(who)}'), f'ext{i}'))
-        picks.append((f'ext{i}', aura['name'], aura['icon'], len(aura['bands'])))
+        picks.append((f'ext{i}', aura['name'], aura['icon'], len(aura['bands']), aura['id'],
+                      f'{aura["name"]} from {who}'))
     return lanes, picks
 
 
@@ -319,15 +321,17 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     groups = [(cat, label, picks) for cat, label, picks in (('cds', '⚔️ Your cooldowns', cd_picks),
                                                            ('ext', '🤝 Buffs from others', ext_picks)) if picks]
     on |= {cat for cat, _, _ in groups} | {key for _, _, picks in groups for key, *_ in picks}
+    spells.offer([sid for _, _, picks in groups for *_, sid, _ in picks])  # their tooltips may be looked up
     menu = ''.join(
-        f'<div><h5>{label}</h5>' + ''.join(f'<label><input type="checkbox" value="{key}" data-cat="{cat}" checked>'
-                                           f'{_icon(icon)}{esc(name)} <span class="muted">×{count}</span></label>'
-                                           for key, name, icon, count in picks) + '</div>'
+        f'<div><h5>{label}</h5>' + ''.join(
+            f'<label data-spell="{sid}" data-tip="{esc(tip)}"><input type="checkbox" value="{key}" data-cat="{cat}" '
+            f'checked>{_icon(icon)}{esc(name)} <span class="muted">×{count}</span></label>'
+            for key, name, icon, count, sid, tip in picks) + '</div>'
         for cat, label, picks in groups)
     chips = ''.join(f'<button type="button" class="tl-chip" data-cat="{cat}" aria-pressed="true">{label}</button>'
                     for cat, label, _ in groups)
     if groups:
-        chips += (f'<details class="tl-pick"><summary>Pick cooldowns & buffs ▾</summary>'
+        chips += (f'<details class="tl-pick"><summary>🎛️ Pick cooldowns & buffs ▾</summary>'
                   f'<div class="tl-pick-menu">{menu}</div></details>')
     chips += ''.join(
         f'<button type="button" class="tl-chip" data-g="{key}" aria-pressed="{"true" if key in on else "false"}" '
@@ -336,6 +340,12 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
         f'</button>' for target, key in keys.items())
     phase_lines = ''.join(f'<i class="tl-phase al" style="left:{_at(p["start"], duration)}"></i>'
                           for p in phases[1:] if p.get('start'))
+    # Each spawn as a dashed line in its add's colour, top to bottom: do your cooldowns, buffs and potion line
+    # up with it? (Shown with the add's chip.)
+    phase_lines += ''.join(
+        f'<i class="tl-phase fspawnline" data-g="{keys[k["target"]]}"{"" if keys[k["target"]] in on else " hidden"} '
+        f'style="left:{_at(w["start"], duration)};--c:{color_of.get(k["target"], OTHER_COLOR)}"></i>'
+        for k in kinds for w in k['spawns'])
     every = 30000 if duration <= 240000 else 60000
     grid = ''.join(f'<i style="left:{_at(t, duration)}"></i>' for t in range(0, duration + 1, every))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{_at(t, duration)}">{fmt_duration(t)}</span>'

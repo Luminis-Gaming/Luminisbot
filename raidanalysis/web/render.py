@@ -238,6 +238,11 @@ tr.muted-row td { opacity: 0.7; }
 .tl-pick summary::-webkit-details-marker { display: none; }
 .tl-pick[open] { flex-basis: 100%; }
 .tl-pick[open] summary { color: var(--text); border-color: var(--border-strong); }
+/* The picker is a button, not another chip: accent-tinted so it's found without looking for it */
+.tl-pick summary { background: color-mix(in srgb, var(--accent) 22%, transparent); border-color: var(--accent);
+    color: var(--text); font-weight: 600; }
+.tl-pick summary:hover { background: color-mix(in srgb, var(--accent) 34%, transparent); }
+.tl-pick[open] summary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tl-pick-menu { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
     background: var(--surface-2, rgba(255,255,255,0.03)); display: grid; gap: 10px 22px;
     grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
@@ -297,6 +302,7 @@ tr.muted-row td { opacity: 0.7; }
 .tl-grid { position: absolute; inset: 0 0 20px 0; pointer-events: none; }
 .tl-grid i, .tl-phase { position: absolute; top: 0; bottom: 0; border-left: 1px solid rgba(255,255,255,0.06); }
 .tl-phase { bottom: 20px; border-left: 1px dashed rgba(255,255,255,0.3); pointer-events: none; }
+.focus-tl .tl-phase.fspawnline { border-left: 2px dashed var(--c); opacity: 0.85; z-index: 1; }
 .tl .m { position: absolute; top: 50%; transform: translate(-50%, -50%); }
 .tl .m:hover { z-index: 3; }
 .m.tick { width: 2px; height: 10px; background: #9aa1b9; border-radius: 1px; }
