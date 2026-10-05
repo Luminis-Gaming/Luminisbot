@@ -318,13 +318,17 @@ def top_auras(tables, start, duration):
 
 def target_ranking(numbered, stored=None):
     """
-    Everyone's damage by target over these pulls: [{'name', 'type', 'total', 'main' (the pulls' biggest
-    target), 'complete', 'players': [{'name', 'class', 'role', 'damage', 'share' (of the target's total),
-    'pulls' (how many of these pulls they hit it in)}]}] - targets by total, players by damage.
+    Everyone's damage by target over these pulls: [{'name', 'type', 'total', 'pulls' (how many of these
+    pulls it was in), 'main' (the pulls' biggest target), 'complete', 'players': [{'name', 'class', 'role',
+    'damage', 'share' (of the target's total), 'dps', 'pulls'}]}] - targets by total.
+    Players are ranked by DPS on the target: their damage to it over the length of the pulls they were in
+    that had it - so someone in 4 of 9 pulls is measured on their 4, and a pull without that add doesn't
+    count against anyone. 'pulls': how many of those they were in.
     stored: {fight id: {target: {player: damage}}} (focus.by_target_cached - every player); a pull without
     it falls back to its DamageDone table, which lists only each player's top 5 targets ('complete' False).
     """
     targets, mains, complete = {}, {}, True
+    seconds, present, in_pulls = {}, {}, {}  # (target, player) -> seconds / pulls of theirs that had it; target -> pulls
     for _, pull in numbered:
         analysis = pull.get('analysis') or {}
         extras = analysis.get('extras') or {}
@@ -341,6 +345,13 @@ def target_ranking(numbered, stored=None):
             complete = False
             hits = [(name, target, damage, kind) for name, row in (extras.get('players') or {}).items()
                     for target, damage, kind in row.get('targets') or []]
+        duration = ((pull.get('end_ms') or 0) - (pull.get('start_ms') or 0)) / 1000
+        here = {target for _, target, _, _ in hits}
+        for target in here:
+            in_pulls[target] = in_pulls.get(target, 0) + 1
+            for name in roster:
+                seconds[(target, name)] = seconds.get((target, name), 0) + duration
+                present[(target, name)] = present.get((target, name), 0) + 1
         for name, target, damage, kind in hits:
             t = targets.setdefault(target, {'name': target, 'type': kind, 'total': 0, 'players': {}})
             t['total'] += damage
@@ -348,14 +359,17 @@ def target_ranking(numbered, stored=None):
             p = t['players'].setdefault(name, {'name': name, 'class': who.get('class') or '',
                                                'role': who.get('role') or 'dps', 'damage': 0, 'pulls': 0})
             p['damage'] += damage
-            p['pulls'] += 1
     main = max(mains, key=mains.get) if mains else None
     out = []
     for t in targets.values():
-        players = sorted(t['players'].values(), key=lambda p: -p['damage'])
-        for p in players:
+        for p in t['players'].values():
+            time = seconds.get((t['name'], p['name'])) or 0
             p['share'] = p['damage'] / t['total'] if t['total'] else 0
-        out.append(dict(t, players=players, main=t['name'] == main, complete=complete))
+            p['dps'] = p['damage'] / time if time else 0
+            p['pulls'] = present.get((t['name'], p['name'])) or 1
+        players = sorted(t['players'].values(), key=lambda p: (-p['dps'], -p['damage']))
+        out.append(dict(t, players=players, pulls=in_pulls.get(t['name'], 0), main=t['name'] == main,
+                        complete=complete))
     return sorted(out, key=lambda t: -t['total'])
 
 

@@ -11,18 +11,22 @@ from .render import CLASS_COLORS, ROLE_ICONS, esc, fmt_amount
 ROWS_SHOWN = 8  # per target card; the rest behind "Show all"
 
 
-def _row(p, rank, top, highlight=None, extra=False):
-    """One player's bar; extra: past the top shown, until the card's button opens it."""
+def _row(p, rank, top, highlight=None, extra=False, of_pulls=None):
+    """
+    One player's bar: their DPS on the target (the bar, against the best) and total damage on it. extra:
+    past the top shown, until the card's button opens it; of_pulls: how many pulls had the target.
+    """
     color = CLASS_COLORS.get(p['class'], '#9aa1b9')
-    badge = ('<span class="dt-star" title="Most damage to it">★</span>' if rank == 1 else
+    badge = ('<span class="dt-star" title="Highest DPS on it">★</span>' if rank == 1 else
              f'<span class="dt-num">{rank}</span>')
     classes = 'dt-row' + (' you' if p['name'] == highlight else '') + (' extra' if extra else '')
-    pulls = f' · {p["pulls"]} pull{"s" if p["pulls"] != 1 else ""}' if p.get('pulls', 1) > 1 else ''
-    return (f'<div class="{classes}" title="{esc(p["name"])}: {fmt_amount(p["damage"])} '
-            f'({100 * p["share"]:.1f}% of it){pulls}"><span class="dt-rank">{badge}</span>'
+    pulls = f' in {p["pulls"]} of {of_pulls} pulls' if of_pulls and of_pulls > 1 else ''
+    return (f'<div class="{classes}" title="{esc(p["name"])}: {fmt_amount(p["dps"])} DPS on it{pulls} · '
+            f'{fmt_amount(p["damage"])} damage ({100 * p["share"]:.1f}% of all damage to it)">'
+            f'<span class="dt-rank">{badge}</span>'
             f'<span class="dt-name" style="color:{color}">{ROLE_ICONS.get(p["role"], "")} {esc(p["name"])}</span>'
-            f'<div class="dt-bar" style="--c:{color};--w:{100 * p["damage"] / top:.1f}%">'
-            f'<span>{fmt_amount(p["damage"])}</span><b>{100 * p["share"]:.0f}%</b></div></div>')
+            f'<div class="dt-bar" style="--c:{color};--w:{100 * p["dps"] / top:.1f}%">'
+            f'<span>{fmt_amount(p["dps"])}</span><b>{fmt_amount(p["damage"])}</b></div></div>')
 
 
 def ranking(target, highlight=None, shown=ROWS_SHOWN):
@@ -34,15 +38,16 @@ def ranking(target, highlight=None, shown=ROWS_SHOWN):
     players = [p for p in target['players'] if p['damage'] > 0]
     if not players:
         return '<p class="muted small">Nobody hit it.</p>'
-    top = players[0]['damage']
+    top = max(p['dps'] for p in players) or 1
+    of_pulls = target.get('pulls')
     if highlight is not None:
-        rows = [_row(p, i, top, highlight) for i, p in enumerate(players, 1)]
+        rows = [_row(p, i, top, highlight, of_pulls=of_pulls) for i, p in enumerate(players, 1)]
         mine = next((i for i, p in enumerate(players) if p['name'] == highlight), None)
         head = rows[:shown]
         if mine is not None and mine >= shown:  # you're further down: shown under the top, the gap marked
             head += ['<div class="dt-gap">⋯</div>', rows[mine]]
         return f'<div class="dt-rows">{"".join(head)}</div>'
-    rows = ''.join(_row(p, i, top, extra=i > shown) for i, p in enumerate(players, 1))
+    rows = ''.join(_row(p, i, top, extra=i > shown, of_pulls=of_pulls) for i, p in enumerate(players, 1))
     button = (f'<button type="button" class="dt-toggle"><span class="l-more">Show all {len(players)}</span>'
               f'<span class="l-less">Show top {shown}</span></button>' if len(players) > shown else '')
     return f'<div class="dt-rows">{rows}{button}</div>'
@@ -79,7 +84,9 @@ def section(ranked, priority=(), scope='', loading=''):
     <div class="card dt-wrap" id="damage-by-target">
         <div class="sec-head"><div class="sec-title"><span class="sec-icon">🎯</span><div><h2>Damage by target</h2>
             <p class="sec-sub">Who did the damage to each target{f' - {esc(scope)}' if scope else ''}: priority adds
-               first, then the boss and the rest. ★ = the most damage to it. Hover a row for the exact numbers.</p>
+               first, then the boss and the rest. Ranked by DPS on it over the pulls each player was in that had it,
+               so missing a few pulls doesn't count against you: the bar is DPS, the number on the right total damage.
+               ★ = the highest DPS on it. Hover a row for the details.</p>
             </div></div>
         </div>
         {loading}

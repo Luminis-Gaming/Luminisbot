@@ -1140,8 +1140,9 @@ class TestDamageByTarget(unittest.TestCase):
         self.assertLess(card.index('Venomous Heart'), card.index("Ula&#x27;tek"))   # priority first
         self.assertIn('Holy', card)                                                 # healers rank like everyone
         crowd = {'name': 'Blightscale Clutch', 'players': [
-            {'name': f'P{i}', 'class': 'Mage', 'role': 'dps', 'damage': 100 - i, 'share': 0.1, 'pulls': 1}
-            for i in range(10)] + [{'name': 'Zero', 'class': 'Mage', 'role': 'dps', 'damage': 0, 'share': 0, 'pulls': 1}]}
+            {'name': f'P{i}', 'class': 'Mage', 'role': 'dps', 'damage': 100 - i, 'dps': 1 - i / 100, 'share': 0.1,
+             'pulls': 1} for i in range(10)]
+            + [{'name': 'Zero', 'class': 'Mage', 'role': 'dps', 'damage': 0, 'dps': 0, 'share': 0, 'pulls': 1}]}
         html = targets.ranking(crowd)
         self.assertNotIn('Zero', html)                                              # 0 damage: left out
         self.assertIn('Show all 10', html)                                          # the count matches the list
@@ -1269,3 +1270,18 @@ class TestCoach(unittest.TestCase):
         self.assertIsNone(rows['Counterspell']['verdict'])
         tips = coach.rotation_insights([pull], 'Mage', 'dps', {'top': top, 'rows': [], 'label': 'Frost Mages'})
         self.assertFalse(any('Counterspell' in i['text'] for i in tips))
+
+    def test_ranked_by_dps_over_the_pulls_you_were_in(self):
+        """In 1 of 2 pulls with the add, but the hardest hitter in it: first - total damage would say otherwise."""
+        from raidanalysis import throughput
+        def pull(fid, players):
+            return (fid, {'fight_id': fid, 'start_ms': 0, 'end_ms': 100000, 'analysis': {
+                'players': [{'name': n, 'class': 'Mage', 'role': 'dps'} for n in players],
+                'extras': {'targets': [{'name': "Ula'tek", 'total': 1, 'type': 'Boss'}], 'players': {}}}})
+        stored = {1: {'Heart': {'Steady': 1000, 'Late': 1500}}, 2: {'Heart': {'Steady': 1000}}}
+        ranked = {t['name']: t for t in throughput.target_ranking([pull(1, ['Steady', 'Late']), pull(2, ['Steady'])],
+                                                                   stored)}
+        heart = ranked['Heart']
+        self.assertEqual([(p['name'], p['dps'], p['pulls']) for p in heart['players']],
+                         [('Late', 15.0, 1), ('Steady', 10.0, 2)])                  # 1500 over 100 s vs 2000 over 200 s
+        self.assertEqual(heart['pulls'], 2)
