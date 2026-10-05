@@ -400,14 +400,9 @@ tr.muted-row td { opacity: 0.7; }
 .focus-table .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
     border-bottom: 1px solid var(--border); }
 .focus-table .col-pull, .focus-table .col-all { border-left: 1px solid var(--border); }
-/* Mechanics tab's players table: execution (ours) and output (Warcraft Logs) labelled apart */
-.players-compact .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
-    border-bottom: 1px solid var(--border); }
-.players-compact .grp-output { border-left: 1px solid var(--border); }
-.players-compact th.grp-output, .players-compact .group-head .grp-output { color: #ff8000; }
-.parse-big .parse { font-size: 16px; font-weight: 800; }
-.score-legend { color: var(--muted); margin: 0 0 10px; line-height: 1.8; }
-.score-legend .score-badge { font-size: 11px; padding: 1px 7px; }
+/* Mechanics tab's players table: the WCL parse next to our score, told apart */
+.parse-cell .parse { font-size: 15px; font-weight: 800; }
+.score-legend { color: var(--muted); margin: 0 0 10px; }
 /* Damage by target (targets.py): ranked players per target, class-colored bars, a gold star for the top */
 .dt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 12px; }
 .dt-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
@@ -418,9 +413,15 @@ tr.muted-row td { opacity: 0.7; }
 .dt-row { display: grid; grid-template-columns: 22px minmax(90px, 150px) 1fr; gap: 8px; align-items: center;
     padding: 2px 4px; border-radius: 6px; font-size: 12px; }
 .dt-row.you { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
-.dt-wrap:not(.heal) .dt-row.heal { display: none; }
+/* The top rows, the rest behind the button at the bottom */
+.dt-rows:not(.open) .dt-row.extra, .l-less, .dt-rows.open .l-more { display: none; }
+.dt-rows.open .l-less { display: inline; }
+.dt-toggle { justify-self: start; margin-top: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.dt-toggle:hover { color: var(--text); border-color: var(--border-strong); }
 .dt-star { text-align: center; font-size: 16px; line-height: 1; color: #ffd100; text-shadow: 0 0 6px rgba(255,209,0,0.65); }
 .dt-rank { text-align: center; color: var(--faint); font-variant-numeric: tabular-nums; }
+.dt-num { color: var(--faint); }
 .dt-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dt-bar { position: relative; height: 20px; border-radius: 4px; background: var(--surface-3); overflow: hidden;
     display: flex; justify-content: space-between; align-items: center; }
@@ -429,8 +430,6 @@ tr.muted-row td { opacity: 0.7; }
 .dt-bar span, .dt-bar b { position: relative; padding: 0 7px; font-size: 11px; color: #fff; font-variant-numeric: tabular-nums;
     text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85); }
 .dt-gap { text-align: center; color: var(--faint); line-height: 10px; }
-.dt-more summary { cursor: pointer; font-size: 12px; color: var(--muted); margin: 4px 0; }
-.dt-more summary:hover { color: var(--text); }
 .dtable tr.dt-click { cursor: pointer; }
 .dtable tr.dt-click:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .dt-caret { display: inline-block; width: 10px; color: var(--faint); transition: transform 0.15s; }
@@ -904,8 +903,8 @@ document.querySelectorAll('.dtable tr.dt-click').forEach(tr => {
   tr.addEventListener('click', e => { if (!e.target.closest('a, button, input, summary')) toggle(); });
   tr.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
 });
-document.querySelectorAll('.dt-wrap .dt-heal-toggle').forEach(box =>
-  box.addEventListener('change', () => box.closest('.dt-wrap').classList.toggle('heal', box.checked)));
+document.querySelectorAll('.dt-toggle').forEach(btn =>
+  btn.addEventListener('click', () => btn.closest('.dt-rows').classList.toggle('open')));
 // Focus cards: Overall / per-spawn tabs.
 document.querySelectorAll('.fcard .ftabs').forEach(bar => bar.querySelectorAll('[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => {

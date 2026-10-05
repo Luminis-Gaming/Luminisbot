@@ -1138,7 +1138,15 @@ class TestDamageByTarget(unittest.TestCase):
         self.assertIn('dt-row you', html)
         card = targets.section(list(ranked.values()), {'Venomous Heart'}, 'all 2 pulls tonight')
         self.assertLess(card.index('Venomous Heart'), card.index("Ula&#x27;tek"))   # priority first
-        self.assertIn('dt-row heal', card)                                          # healers: behind the toggle
+        self.assertIn('Holy', card)                                                 # healers rank like everyone
+        crowd = {'name': 'Blightscale Clutch', 'players': [
+            {'name': f'P{i}', 'class': 'Mage', 'role': 'dps', 'damage': 100 - i, 'share': 0.1, 'pulls': 1}
+            for i in range(10)] + [{'name': 'Zero', 'class': 'Mage', 'role': 'dps', 'damage': 0, 'share': 0, 'pulls': 1}]}
+        html = targets.ranking(crowd)
+        self.assertNotIn('Zero', html)                                              # 0 damage: left out
+        self.assertIn('Show all 10', html)                                          # the count matches the list
+        self.assertEqual(html.count('dt-row extra'), 2)                             # 9th and 10th behind the button
+        self.assertLess(html.index('dt-row extra'), html.index('dt-toggle'))        # the button at the bottom
 
     def test_stored_full_lists_win(self):
         """WCL's plain table has only each player's top 5 targets: the stored per-target tables have everyone."""
@@ -1154,7 +1162,7 @@ class TestDamageByTarget(unittest.TestCase):
 
 
 class TestPlayersCompactOutput(unittest.TestCase):
-    """The Mechanics tab's players table: execution (our score) and output (WCL) labelled apart."""
+    """The Mechanics tab's players table: a Parse column (WCL, average) next to our Score, told apart."""
 
     def test_output_columns(self):
         from raidanalysis.web import players
@@ -1168,10 +1176,8 @@ class TestPlayersCompactOutput(unittest.TestCase):
                    'scores': {k: 70 for k, _, _ in players.SUBSCORES}, 'deaths': 0, 'avoidable_hits': 0,
                    'interrupts': 0, 'dispels': 0, 'feedback': []} for n in roster]
         html = players.compact_table(report, lambda n: '#', [pull(1, 60), pull(2, 90)])
-        self.assertIn('Execution · our mechanics grade', html)
-        self.assertIn('It says nothing about your damage', html)
-        self.assertIn('class="parse p75">90<', html)                                # best parse, WCL colors
-        self.assertIn('avg 75 · 2 parses', html)
-        self.assertIn('300k', html)                                                  # 30M over 100 s
-        self.assertIn('#1 of 2', html)
-        self.assertIn('class="num bad" data-v="0.600"', html)                       # Boops: 60% active
+        self.assertIn('<b>Score</b> = our 0-100 grade for the mechanics', html)     # told apart from a parse
+        self.assertLess(html.index('>Score</th>'), html.index('>Parse</th>'))
+        self.assertLess(html.index('>Parse</th>'), html.index('>Player</th>'))       # between score and player
+        self.assertIn('title="Average 75 over 2 parses · best 90"><span class="parse p75">75</span>', html)
+        self.assertIn('title="No Warcraft Logs parse in these pulls">—', html)      # Boops: none

@@ -230,56 +230,25 @@ def player_page(p, guide_for, pull_href):
     </div>"""
 
 
-def _output(numbered, name, role):
-    """A player's output over these pulls, from Warcraft Logs (throughput.per_pull): best / average parse,
-    average DPS (HPS for healers), average rank among the raid's same role, average active time."""
+def _parse_cell(numbered, name, role):
+    """The Parse column: a player's average WCL parse over these pulls in WCL's colors - best and count on hover."""
     from .. import throughput
-    rows = throughput.per_pull(numbered, name, role)
-    parses = [r['parse'] for r in rows if r['parse'] is not None]
-    amounts = [r['amount'] for r in rows if r['amount']]
-    ranks = [(r['raid_rank'], r['raid_size']) for r in rows if r['raid_rank']]
-    active = [r['active'] for r in rows if r['active'] is not None]
-    return {'best': max(parses) if parses else None, 'avg': sum(parses) / len(parses) if parses else None,
-            'parses': len(parses), 'amount': sum(amounts) / len(amounts) if amounts else None,
-            'rank': sum(r for r, _ in ranks) / len(ranks) if ranks else None,
-            'size': max((s for _, s in ranks), default=0), 'active': sum(active) / len(active) if active else None}
-
-
-def _output_cells(o, role):
-    """The Output columns: WCL parse (best, in WCL's colors; the average under it), DPS / HPS, active time."""
     from .performance import parse_html
-    if o['best'] is None:
-        parse = '<td class="num muted" data-v="-1" title="No Warcraft Logs parse for these pulls (kills only, '\
-                'unless wipe parses are scraped)">—</td>'
-    else:
-        parse = (f'<td class="num" data-v="{o["best"]:.0f}"><span class="parse-big">{parse_html(o["best"])}</span>'
-                 + (f'<div class="muted small">avg {o["avg"]:.0f} · {o["parses"]} parses</div>' if o['parses'] > 1 else
-                    '<div class="muted small">1 parse</div>') + '</td>')
-    metric = 'HPS' if role == 'healer' else 'DPS'
-    if o['amount'] is None:
-        amount = '<td class="num muted" data-v="0">—</td>'
-    else:
-        rank = (f'<div class="muted small" title="Average rank among the raid\'s '
-                f'{"healers" if role == "healer" else "tanks" if role == "tank" else "DPS"} over these pulls">'
-                f'#{o["rank"]:.1f}'.replace('.0', '') + f' of {o["size"]}</div>' if o['rank'] is not None else '')
-        amount = (f'<td class="num" data-v="{o["amount"]:.0f}" title="Average {metric} per pull">'
-                  f'<b>{fmt_amount(o["amount"])}</b> <span class="muted small">{metric}</span>{rank}</td>')
-    if o['active'] is None:
-        active = '<td class="num muted" data-v="0">—</td>'
-    else:
-        band = 'bad' if o['active'] < 0.7 else 'warn-text' if o['active'] < 0.85 else ''
-        active = (f'<td class="num {band}" data-v="{o["active"]:.3f}" title="Share of the pull casting or attacking">'
-                  f'{100 * o["active"]:.0f}%</td>')
-    return parse + amount + active
+    parses = [r['parse'] for r in throughput.per_pull(numbered, name, role) if r['parse'] is not None]
+    if not parses:
+        return '<td class="num muted" data-v="-1" title="No Warcraft Logs parse in these pulls">—</td>'
+    avg = sum(parses) / len(parses)
+    tip = f'Average {avg:.0f} over {len(parses)} parse{"s" if len(parses) != 1 else ""} · best {max(parses):.0f}'
+    return f'<td class="num parse-cell" data-v="{avg:.1f}" title="{tip}">{parse_html(avg)}</td>'
 
 
 def compact_table(report, href, numbered=()):
     """
-    The Players card on the Mechanics tab: a short version of the Players tab - score, sub-scores, the
-    key numbers and each player's top improvement point - and, from Warcraft Logs, their output (parse,
-    DPS / HPS, active time) - one row per player, linking to their page. The two groups are labelled apart:
-    our execution score isn't a parse. report: analyzer.player_report rows; href(name) -> the player's page
-    for these pulls; numbered: [(pull number, pull)] for the output columns.
+    The Players card on the Mechanics tab: a short version of the Players tab - score, their Warcraft Logs
+    parse (average), sub-scores, the key numbers and each player's top improvement point - one row per
+    player, linking to their page. Score and parse are told apart (headers, one legend line): our score grades
+    the mechanics, a parse is output. report: analyzer.player_report rows; href(name) -> the player's page for
+    these pulls; numbered: [(pull number, pull)] for the parses.
     """
     if not report:
         return '<p class="muted">No players.</p>'
@@ -298,6 +267,7 @@ def compact_table(report, href, numbered=()):
         rows.append(f"""
             <tr class="click-row" onclick="location='{link}'" title="Open {esc(p['name'])}'s page for these pulls">
                 <td data-v="{p['score']}"><span class="score-badge {band}" title="{label}">{p['score']}</span></td>
+                {_parse_cell(numbered, p['name'], p.get('role')) if numbered else ''}
                 <td data-v="{esc(p['name'])}"><a href="{link}" class="plain-link">{player_name(p['name'], p['class'])}</a>
                     <div class="muted small">{ROLE_ICONS.get(p.get('role'), '')} {spec}{esc(_class_label(p['class']))}</div></td>
                 {subs}
@@ -305,37 +275,23 @@ def compact_table(report, href, numbered=()):
                 <td class="num {'bad' if p['avoidable_hits'] else 'good-text'}">{p['avoidable_hits']}</td>
                 <td class="num{'' if p['interrupts'] else ' muted'}">{p['interrupts']}</td>
                 <td class="num{'' if p['dispels'] else ' muted'}">{p['dispels']}</td>
-                {_output_cells(_output(numbered, p['name'], p.get('role')), p.get('role')) if numbered else ''}
                 <td class="small tip-cell">{tip_html}</td>
             </tr>""")
     sub_heads = ''.join(f'<th data-sort class="num" title="{esc(hint)}">{label}</th>' for _, label, hint in SUBSCORES)
-    execution = 2 + len(SUBSCORES) + 4
-    output_group = ('<th colspan="3" class="grp-output">📈 Output · from Warcraft Logs</th>' if numbered else '')
-    output_heads = ('<th data-sort class="num grp-output" title="Warcraft Logs percentile for your damage (healing for '
-                    'healers) against everyone of your spec - best of these pulls, the average under it">WCL parse</th>'
-                    '<th data-sort class="num" title="Average per pull, and your average rank in the raid">DPS / HPS</th>'
-                    '<th data-sort class="num" title="Share of the pull you were casting or attacking">Active</th>'
-                    if numbered else '')
-    legend = ('<p class="score-legend small"><span class="score-badge good">86</span> <b>Execution score</b> - our own '
-              '0-100 grade for how you played the mechanics: deaths, avoidable damage, interrupts, dispels, consumables. '
-              'It says nothing about your damage. &nbsp; <span class="parse-big">' + _parse_sample() + '</span> '
-              '<b>WCL parse</b> - Warcraft Logs\' percentile for your damage / healing against everyone of your spec, '
-              'in its colors.</p>' if numbered else '')
+    parse_head = ('<th data-sort class="num" title="Warcraft Logs parse: the average percentile of your damage '
+                  '(healing for healers) against everyone of your spec over these pulls, in its colors - hover a '
+                  'number for the best. Not our score.">Parse</th>' if numbered else '')
+    legend = ('<p class="score-legend small"><b>Score</b> = our 0-100 grade for the mechanics (deaths, avoidable '
+              'damage, interrupts, consumables) · <b>Parse</b> = Warcraft Logs\' percentile for your damage / '
+              'healing</p>' if numbered else '')
     return f"""{legend}<div class="table-wrapper"><table class="compact players-compact">
-        <tr class="group-head"><th colspan="{execution}" class="grp-exec">🛡️ Execution · our mechanics grade</th>
-            {output_group}<th></th></tr>
-        <tr><th data-sort title="Our execution score (0-100) - not a parse">Score</th><th data-sort>Player</th>{sub_heads}
+        <tr><th data-sort title="Our execution score (0-100) for the mechanics - not a parse">Score</th>{parse_head}
+            <th data-sort>Player</th>{sub_heads}
             <th data-sort class="num" title="Early deaths by mistake">Deaths</th>
             <th data-sort class="num" title="Hits from avoidable mechanics">Avoidable</th>
             <th data-sort class="num">Interrupts</th><th data-sort class="num">Dispels</th>
-            {output_heads}
             <th>Top thing to work on</th></tr>
         {''.join(rows)}</table></div>"""
-
-
-def _parse_sample():
-    from .performance import parse_html
-    return parse_html(97)
 
 
 def player_url(code, name, boss_key, fight_id=None):

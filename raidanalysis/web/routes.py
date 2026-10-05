@@ -819,15 +819,15 @@ async def handle_night(request):
     name = boss_pulls[0]['encounter_name']
 
     if request.query.get('view') == 'players':
-        by_target = await _damage_by_target(request, code, numbered, f'all {len(numbered)} pulls tonight')
-        if isinstance(by_target, web.Response):  # ?focus_load=1: the cast bar's request
-            return by_target
         report_rows = analyzer.player_report(_insight_pulls(numbered), tags)
         body = (_night_header(request, report, code, pulls, selected, view='players')
                 + players.players_view(report_rows, guide_for,
-                                       lambda player: players.player_url(code, player, selected))
-                + by_target)
+                                       lambda player: players.player_url(code, player, selected)))
         return _page(f"Players · {name}", session, body)
+
+    by_target = await _damage_by_target(request, code, numbered, f'all {len(numbered)} pulls tonight')
+    if isinstance(by_target, web.Response):  # ?focus_load=1: the cast bar's request
+        return by_target
 
     enrage_ids = _enrage_ids(encounter_id, guide_for)
     insight_pulls = _insight_pulls(numbered, enrage_ids)
@@ -897,6 +897,7 @@ async def handle_night(request):
         {_mechanics_table(merged, tags, sources, guide_for, _roster_names(merged), encounter_id, difficulty, here,
                           per_pull=insight_pulls, pull_href=lambda p: f'/admin/raids/report/{code}/{p["fight_id"]}')}
     </div>
+    {by_target}
     <div class="card">
         {section_head('👥', 'Players', "Tonight's scores on this boss. Click a player for their full page: "
                       "score breakdown, feedback, pull by pull and the comparison with top players.",
@@ -932,15 +933,15 @@ async def handle_pull(request):
 
     if request.query.get('view') == 'players':
         selected = (encounter_id, difficulty)
-        by_target = await _damage_by_target(request, code, [(number, pull)], f'pull #{number}')
-        if isinstance(by_target, web.Response):
-            return by_target
         report_rows = analyzer.player_report(_insight_pulls([(number, pull)]), tags)
         body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
                 + players.players_view(report_rows, guide_for,
-                                       lambda player: players.player_url(code, player, selected, fight_id))
-                + by_target)
+                                       lambda player: players.player_url(code, player, selected, fight_id)))
         return _page(f"Players · {pull['encounter_name']} pull {number}", session, body)
+
+    by_target = await _damage_by_target(request, code, [(number, pull)], f'pull #{number}')
+    if isinstance(by_target, web.Response):  # ?focus_load=1: the cast bar's request
+        return by_target
 
     death_rows = ''.join(
         f'<tr{"" if d.get("early") else " class=muted"}><td class="num">{fmt_duration(d["t"])}</td>'
@@ -987,6 +988,7 @@ async def handle_pull(request):
                           timeline=(pull['end_ms'] - pull['start_ms'],
                                     [p['start'] for p in (pull.get('phases') or [])[1:]]))}
     </div>
+    {by_target}
     <div class="card">
         {section_head('👥', 'Players', 'Scores for this pull. Click a player for their page for this pull.')}
         {players.compact_table(analyzer.player_report(pull_insights, tags),
