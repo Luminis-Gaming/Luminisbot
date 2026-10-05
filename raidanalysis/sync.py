@@ -395,9 +395,11 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
         except Exception:
             logger.exception("[RAIDS] Mythic Trap scan failed")
         try:
-            removed = db.prune_reports()
+            removed, archived = db.prune_reports()
             if removed:
-                logger.info(f"[RAIDS] Removed {len(removed)} old raid log(s): {', '.join(removed)}")
+                logger.info(f"[RAIDS] Removed {len(removed)} old log(s): {', '.join(removed)}")
+            if archived:
+                logger.info(f"[RAIDS] Archived {len(archived)} old raid night(s): {', '.join(archived)}")
         except Exception:
             logger.exception("[RAIDS] Pruning old raid logs failed")
         try:

@@ -196,7 +196,11 @@ def upsert_report(report, phase_names, source='guild'):
             -- imported by hand first, then seen in the guild's own list: it's a guild log (kept by prune_reports)
             source = CASE WHEN EXCLUDED.source = 'guild' THEN 'guild' ELSE raid_reports.source END,
             zone_id = EXCLUDED.zone_id, zone_name = EXCLUDED.zone_name,
-            phase_names = EXCLUDED.phase_names, synced_at = NOW()
+            phase_names = EXCLUDED.phase_names, synced_at = NOW(),
+            -- an archived night fetched again (import, Discord recap): kept in full for a week, like an import
+            created_at = CASE WHEN EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = raid_reports.code
+                                                AND p.analysis ? 'archived')
+                              THEN NOW() ELSE raid_reports.created_at END
     """, (report['code'], report.get('title') or report['code'], (report.get('owner') or {}).get('name'),
           (report.get('zone') or {}).get('id'), (report.get('zone') or {}).get('name'),
           report['startTime'], report['endTime'], Json(phase_names), source))
@@ -230,6 +234,7 @@ def analyzed_fight_ids(code, version):
     rows = _run("""
         SELECT fight_id FROM raid_pulls
         WHERE report_code = %s AND (analysis->>'version')::int >= %s
+          AND NOT analysis ? 'archived'  -- fetched again: analyzed in full again
     """, (code, version), fetch='all')
     return {r['fight_id'] for r in rows}
 
@@ -238,7 +243,7 @@ def fight_ids_missing_extras(code, version):
     """Pulls of a report whose throughput / uptime (analysis->'extras', throughput.py) is missing or older."""
     rows = _run("""
         SELECT fight_id FROM raid_pulls
-        WHERE report_code = %s AND analysis IS NOT NULL
+        WHERE report_code = %s AND analysis IS NOT NULL AND NOT analysis ? 'archived'
           AND COALESCE((analysis->'extras'->>'v')::int, 0) < %s
     """, (code, version), fetch='all')
     return {r['fight_id'] for r in rows}
@@ -275,33 +280,61 @@ def set_pull_extras(code, fight_id, extras):
     """, (Json(extras), code, fight_id))
 
 
-KEEP_LATEST_LOGS = 10   # the guild's latest raid logs are kept...
+KEEP_LATEST_LOGS = 10   # the guild's latest raid logs are kept in full...
 KEEP_IMPORTED_DAYS = 7  # ...plus anything imported (or re-fetched for a Discord recap) this week
 KEEP_EMPTY_DAYS = 30    # logs without raid pulls (M+, trash) are remembered this long so they're checked once
+# What an archived pull drops: the per-player timelines and throughput behind a night's pull, focus and
+# comparison pages - most of its size. The rest (roster, deaths, mechanics, interrupts, consumables)
+# stays for the boss pages, night-by-night and player trends.
+ARCHIVE_DROP = ('casts', 'cooldowns', 'boss_casts', 'extras', 'cast_ids', 'casts_seen')
+
+_PAST_KEEP = """
+    WITH raid AS (
+        SELECT r.code, r.source, r.start_time, r.created_at,
+               EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = r.code) AS has_pulls
+        FROM raid_reports r
+    ), latest AS (
+        SELECT code FROM raid WHERE has_pulls AND source <> 'manual' ORDER BY start_time DESC LIMIT %s
+    ), old AS (
+        SELECT * FROM raid
+        WHERE code NOT IN (SELECT code FROM latest)
+          AND COALESCE(created_at, NOW()) < NOW() - make_interval(days => %s)
+    )
+"""
 
 
 def prune_reports():
     """
-    Drop raid nights we no longer keep (the analyses are big): everything but the KEEP_LATEST_LOGS latest
-    guild / raid-event logs and what came in during the last KEEP_IMPORTED_DAYS. Returns the codes removed.
-    An older night can always be imported again by pasting its link.
+    Past the KEEP_LATEST_LOGS latest guild / raid-event logs (and KEEP_IMPORTED_DAYS after a log came in):
+    a guild night is archived - its pulls stay for the boss pages and player trends, minus ARCHIVE_DROP -
+    and an import is deleted (it may be anyone's raid). Logs without raid pulls go after KEEP_EMPTY_DAYS.
+    Fetching a night again (import its link) brings it back in full. Returns (deleted, archived) codes.
     """
-    rows = _run("""
-        WITH raid AS (
-            SELECT r.code, r.source, r.start_time, r.created_at,
-                   EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = r.code) AS has_pulls
-            FROM raid_reports r
-        ), latest AS (
-            SELECT code FROM raid WHERE has_pulls AND source <> 'manual' ORDER BY start_time DESC LIMIT %s
-        )
-        DELETE FROM raid_reports r USING raid
-        WHERE r.code = raid.code
-          AND raid.code NOT IN (SELECT code FROM latest)
-          AND COALESCE(raid.created_at, NOW()) < NOW() - make_interval(days => %s)
-          AND (raid.has_pulls OR COALESCE(raid.created_at, NOW()) < NOW() - make_interval(days => %s))
+    deleted = _run(_PAST_KEEP + """
+        DELETE FROM raid_reports r USING old
+        WHERE r.code = old.code
+          AND CASE WHEN old.has_pulls THEN old.source = 'manual'
+                   ELSE COALESCE(old.created_at, NOW()) < NOW() - make_interval(days => %s) END
         RETURNING r.code
     """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, KEEP_EMPTY_DAYS), fetch='all')
-    return [r['code'] for r in rows or []]
+    archived = _run(_PAST_KEEP + """
+        UPDATE raid_pulls p SET analysis = (p.analysis - %s::text[]) || jsonb_build_object('archived', NOW())
+        FROM old
+        WHERE p.report_code = old.code AND old.source <> 'manual'
+          AND p.analysis IS NOT NULL AND NOT p.analysis ? 'archived'
+        RETURNING p.report_code
+    """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, list(ARCHIVE_DROP)), fetch='all')
+    archived = sorted({r['report_code'] for r in archived or []})
+    if archived:
+        _run("DELETE FROM raid_focus WHERE report_code = ANY(%s)", (archived,))
+    return [r['code'] for r in deleted or []], archived
+
+
+def report_archived(code):
+    """Whether a night's pulls were archived (prune_reports): no timelines or comparisons until fetched again."""
+    row = _run("SELECT 1 FROM raid_pulls WHERE report_code = %s AND analysis ? 'archived' LIMIT 1",
+               (code,), fetch='one')
+    return bool(row)
 
 
 def delete_report(code):
@@ -685,8 +718,10 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                    MAX(x->>'role') AS role, MAX(r.start_time + p.start_ms) AS last_played
             FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code,
                  jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
+            -- imports by source, not created_at alone: the column was added with every older night
+            -- getting the migration's time
             WHERE (r.code IN (SELECT code FROM latest)
-                   OR COALESCE(r.created_at, NOW()) >= NOW() - make_interval(days => %s))
+                   OR (r.source = 'manual' AND COALESCE(r.created_at, NOW()) >= NOW() - make_interval(days => %s)))
               AND p.difficulty = ANY(%s) AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
             GROUP BY 1, 2, 3, 4
         ) c

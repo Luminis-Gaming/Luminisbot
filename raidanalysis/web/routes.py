@@ -387,8 +387,9 @@ async def handle_overview(request):
             {_full_budget_box()}
         </form>
         <p class="small muted">The guild's logs come in by themselves every {SYNC_INTERVAL_MINUTES} minutes and
-           the {db.KEEP_LATEST_LOGS} latest raid nights are kept. Import any other log (an older night, another
-           guild's kill) to analyze it now - imports are kept for {db.KEEP_IMPORTED_DAYS} days.</p>
+           the {db.KEEP_LATEST_LOGS} latest raid nights are kept in full; older ones keep their summary for the boss
+           pages and player trends. Import any other log (an older night, another guild's kill) to analyze it in
+           full now - imports are kept for {db.KEEP_IMPORTED_DAYS} days.</p>
         {_benchmarks_line(st['running']) if session is not PUBLIC_SESSION else ''}
     </div>
     <div class="card">{filter_bar}</div>
@@ -601,11 +602,17 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
 
     event = (f' · 📅 <a href="/admin/events">{esc(report["event_title"])}</a>'
              if report.get('event_title') else '')
+    archived = ('<p class="warn-text small">🗄️ <strong>Archived night</strong> - older than the '
+                f'{db.KEEP_LATEST_LOGS} latest, so only the summary is kept (pulls, deaths, mechanics, consumables: '
+                'what the boss pages and player trends use). Cast timelines, cooldowns, throughput and top-player '
+                'comparisons are gone - press <strong>Re-analyze</strong> to fetch them again (kept for '
+                f'{db.KEEP_IMPORTED_DAYS} days).</p>' if db.report_archived(code) else '')
     return f"""
     <div class="card">
         <p><a href="/admin/raids">← All raid nights</a></p>
         <h1>{esc(report['title'])}</h1>
         {_flash(request)}
+        {archived}
         <p class="muted">{ts(report['start_time'])} · {esc(report['zone_name'] or '')} ·
            logged by {esc(report['owner'] or '?')}{event} ·
            <a href="https://www.warcraftlogs.com/reports/{esc(code)}" target="_blank">Warcraft Logs ↗</a></p>
