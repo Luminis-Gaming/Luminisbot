@@ -390,6 +390,75 @@ def _sources_filter(names):
     return f'type = "damage" and ({who})'
 
 
+def priority_targets(code, pulls):
+    """
+    The kinds of add that were a priority in any of these pulls - from the raid samples focus views stored
+    (no WCL request; a pull nobody opened the focus view of says nothing).
+    """
+    from . import db
+    out = set()
+    for pull in pulls:
+        raid = db.get_focus(code, pull['fight_id'], RAID_KEY)
+        if not raid or raid.get('v') != FOCUS_VERSION:
+            continue
+        n = max(1, -(-(pull['end_ms'] - pull['start_ms']) // BIN_MS))
+        targets = ((pull.get('analysis') or {}).get('extras') or {}).get('targets') or []
+        data = build({}, raid, n, targets, you_in_sample=True)
+        out |= {k['target'] for k in add_types(windows(data)) if k['priority']}
+    return out
+
+
+# Everyone's damage per target (the Players view's damage by target, a player's opened row): WCL's plain
+# DamageDone table lists only each player's top 5 targets, so per pull one request with a table per target
+# (~12 WCL points), fetched when first looked at and kept in raid_focus.
+TARGETS_KEY = '*targets*'
+TARGETS_VERSION = 1
+TARGET_MIN_SHARE = 0.003  # of the raid's damage in the pull: less isn't worth a table
+TARGETS_PULLS_PER_LOAD = 20
+
+
+def by_target_cached(code, fight_id):
+    """{target: {player: damage}} stored for a pull, or None."""
+    from . import db
+    data = db.get_focus(code, fight_id, TARGETS_KEY)
+    return data['targets'] if data and data.get('v') == TARGETS_VERSION else None
+
+
+async def load_by_target(code, pulls):
+    """
+    Fetch and store everyone's damage per target for these pulls (up to TARGETS_PULLS_PER_LOAD of the ones
+    not stored yet). Returns (ok, why-not message or None).
+    """
+    import aiohttp
+    from . import db, sync, wcl
+    missing = [p for p in pulls if by_target_cached(code, p['fight_id']) is None][:TARGETS_PULLS_PER_LOAD]
+    if not missing:
+        return True, None
+    if sync._paused() or wcl.v2_blocked():
+        return False, "Warcraft Logs' hourly budget is used up - everyone's damage loads once it resets."
+    try:
+        async with aiohttp.ClientSession() as session:
+            actors = await wcl.get_report_actors(session, code)
+            for pull in missing:
+                targets = ((pull.get('analysis') or {}).get('extras') or {}).get('targets') or []
+                total = sum(t.get('total') or 0 for t in targets) or 1
+                wanted = {t['name'] for t in targets if (t.get('total') or 0) >= TARGET_MIN_SHARE * total}
+                ids = {a['id']: a['name'] for a in actors if a.get('type') == 'NPC' and a['name'] in wanted}
+                tables = await wcl.get_damage_by_target(session, code, pull['fight_id'], list(ids))
+                out = {}
+                for aid, entries in tables.items():
+                    row = out.setdefault(ids[aid], {})
+                    for e in entries:
+                        if e.get('type') not in ('NPC', 'Pet') and e.get('total'):
+                            row[e['name']] = row.get(e['name'], 0) + e['total']
+                db.save_focus(code, pull['fight_id'], TARGETS_KEY,
+                              {'v': TARGETS_VERSION, 'targets': {t: r for t, r in out.items() if r}})
+    except wcl.WCLError as e:
+        logger.warning(f'[RAIDS] Damage by target for {code} failed: {e}')
+        return False, "Couldn't load everyone's damage from Warcraft Logs right now - try again in a bit."
+    return True, None
+
+
 def cached(code, fight_id, name):
     """The stored focus data for one player in one pull, or None when it still has to come from WCL."""
     from . import db

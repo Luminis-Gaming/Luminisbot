@@ -550,10 +550,11 @@ LOADER_LINES = (
 )
 
 
-def loader(number):
+def loader(number=None, text=None):
     """
-    The cast bar shown while pull #number's focus data loads (PAGE_JS: it asks the page for ?focus_load=1,
-    then reloads with everything in place - or shows the cast as interrupted, with why).
+    The cast bar shown while data comes from Warcraft Logs - pull #number's focus data, or what `text` says
+    (PAGE_JS: it asks the page for ?focus_load=1, then reloads with everything in place - or shows the cast
+    as interrupted, with why).
     """
     import json
     return f"""
@@ -561,7 +562,7 @@ def loader(number):
             <div class="castbar">
                 <img class="cb-icon" src="{LOADER_ICON}" alt="">
                 <div class="cb-bar"><i class="cb-fill"></i>
-                    <span class="cb-name">Summoning pull #{number} from Warcraft Logs</span>
+                    <span class="cb-name">{esc(text or f'Summoning pull #{number} from Warcraft Logs')}</span>
                     <span class="cb-time">0.0</span></div>
             </div>
             <p class="cb-flavor">{LOADER_LINES[0]}</p>

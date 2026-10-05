@@ -115,8 +115,10 @@ def _focus(numbered, name, role, pull_focus=None):
     Where your damage went, as a damage meter (WCL-style): a bar per target in its timeline color with the
     timeline's pull (your damage and share inside it, how long it was up, your DPS while up - small bars to
     compare at a glance), and all these pulls: your share with the raid's typical one as a tick, and how many
-    points you're above or below it.
+    points you're above or below it. A row opens into everyone's damage on that target (targets.ranking),
+    you highlighted - in the timeline's pull and over all these pulls.
     """
+    from . import targets as dtargets
     rows = throughput.focus(numbered, name, role)
     pull_rows = (pull_focus or {}).get('rows') or {}
     colors = (pull_focus or {}).get('colors') or {}
@@ -135,6 +137,11 @@ def _focus(numbered, name, role, pull_focus=None):
     most = max((p['damage'] for p in pull_rows.values()), default=0) or 1
     longest = max((p['up_s'] for p in pull_rows.values()), default=0) or 1
     fastest = max((p['dps'] for p in pull_rows.values()), default=0) or 1
+    stored = (pull_focus or {}).get('stored') or {}
+    ranked_all = {t['name']: t for t in throughput.target_ranking(numbered, stored)}
+    the_pull = (pull_focus or {}).get('pull')
+    ranked_pull = {t['name']: t for t in throughput.target_ranking([(number, the_pull)], stored)} if the_pull else {}
+    columns = 1 + (3 if pull_focus else 0) + 2
     out = []
     for i, target in enumerate(names):
         r, p = overall.get(target), pull_rows.get(target)
@@ -142,7 +149,8 @@ def _focus(numbered, name, role, pull_focus=None):
         boss = (r or {}).get('type') == 'Boss' or (p or {}).get('type') == 'Boss'
         portrait = boss_portrait(encounter, 'sm') if target == main and encounter else ''
         kind = ' <span class="pill pill-muted">boss</span>' if boss else ''
-        name_cell = f'<td><div class="dname" style="--c:{color}">{portrait}<span>{esc(target)}</span>{kind}</div></td>'
+        name_cell = (f'<td><div class="dname" style="--c:{color}"><span class="dt-caret">▸</span>{portrait}'
+                     f'<span>{esc(target)}</span>{kind}</div></td>')
         if pull_focus and p:
             pull_cells = f"""
                 <td data-v="{p['damage']}"><div class="dbar" style="--c:{color};--w:{100 * p['damage'] / most:.1f}%">
@@ -168,20 +176,36 @@ def _focus(numbered, name, role, pull_focus=None):
                 <td data-v="{delta if delta is not None else 0:.1f}">{chip}</td>"""
         else:
             all_cells = '<td class="muted small">—</td><td></td>'
-        out.append(f'<tr>{name_cell}{pull_cells}{all_cells}</tr>')
+        blocks = []
+        for label, ranked in ((f'Pull #{number}', ranked_pull), (f'All {len(numbered)} pulls', ranked_all)):
+            t = ranked.get(target)
+            if t and (label.startswith('All') or ranked_pull):
+                rank = dtargets.your_rank(t, name)
+                partial = ('' if t['complete'] else ' <span class="muted" title="Some of these pulls only have each '
+                           'player\'s top 5 targets so far - the night\'s Players view loads everyone">(partial)</span>')
+                blocks.append(f'<div><h5>{label}{" · you " + rank if rank else ""}{partial}</h5>'
+                              f'{dtargets.ranking(t, name)}</div>')
+        if blocks:
+            out.append(f'<tr class="dt-click" tabindex="0" title="Everyone\'s damage on {esc(target)}">'
+                       f'{name_cell}{pull_cells}{all_cells}</tr>'
+                       f'<tr class="dt-detail" hidden><td colspan="{columns}"><div class="dt-split">{"".join(blocks)}</div>'
+                       f'</td></tr>')
+        else:
+            out.append(f'<tr>{name_cell}{pull_cells}{all_cells}</tr>')
     pull_head = (f'<th colspan="3" class="col-pull">Pull #{number} (the timeline above)</th>' if pull_focus else '')
-    pull_cols = ('<th data-sort class="col-pull">Your damage</th>'
-                 '<th data-sort class="num" title="Bosses: the whole pull. Adds: while the raid was hitting them">Up</th>'
-                 '<th data-sort class="num" title="Your damage on it over the time it was up">DPS while up</th>'
+    pull_cols = ('<th class="col-pull">Your damage</th>'
+                 '<th class="num" title="Bosses: the whole pull. Adds: while the raid was hitting them">Up</th>'
+                 '<th class="num" title="Your damage on it over the time it was up">DPS while up</th>'
                  if pull_focus else '')
     return f"""
         <p class="muted small">{f'Pull #{number} on the left; ' if pull_focus else ''}all {len(numbered)} pull(s) of
            this boss on the right: your share of your damage against the raid's {peers} (their typical share is the
-           tick), and how many points you're above (green) or clearly below (red) them.</p>
+           tick), and how many points you're above (green) or clearly below (red) them. Click a target to see
+           everyone's damage on it.</p>
         <div class="table-wrapper"><table class="compact focus-table dtable">
             <tr class="group-head"><th></th>{pull_head}<th colspan="2" class="col-all">All these pulls</th></tr>
-            <tr><th data-sort>Target</th>{pull_cols}
-                <th data-sort class="col-all">Your share</th><th data-sort>vs raid</th></tr>
+            <tr><th>Target</th>{pull_cols}
+                <th class="col-all">Your share</th><th>vs raid</th></tr>
             {''.join(out)}</table></div>"""
 
 

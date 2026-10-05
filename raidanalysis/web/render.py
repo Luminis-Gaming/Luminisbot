@@ -400,6 +400,44 @@ tr.muted-row td { opacity: 0.7; }
 .focus-table .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
     border-bottom: 1px solid var(--border); }
 .focus-table .col-pull, .focus-table .col-all { border-left: 1px solid var(--border); }
+/* Mechanics tab's players table: execution (ours) and output (Warcraft Logs) labelled apart */
+.players-compact .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
+    border-bottom: 1px solid var(--border); }
+.players-compact .grp-output { border-left: 1px solid var(--border); }
+.players-compact th.grp-output, .players-compact .group-head .grp-output { color: #ff8000; }
+.parse-big .parse { font-size: 16px; font-weight: 800; }
+.score-legend { color: var(--muted); margin: 0 0 10px; line-height: 1.8; }
+.score-legend .score-badge { font-size: 11px; padding: 1px 7px; }
+/* Damage by target (targets.py): ranked players per target, class-colored bars, a gold star for the top */
+.dt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 12px; }
+.dt-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.dt-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 10px; }
+.dt-head b { font-size: 15px; }
+.dt-head .muted { margin-left: auto; }
+.dt-rows { display: grid; gap: 3px; }
+.dt-row { display: grid; grid-template-columns: 22px minmax(90px, 150px) 1fr; gap: 8px; align-items: center;
+    padding: 2px 4px; border-radius: 6px; font-size: 12px; }
+.dt-row.you { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.dt-wrap:not(.heal) .dt-row.heal { display: none; }
+.dt-star { text-align: center; font-size: 16px; line-height: 1; color: #ffd100; text-shadow: 0 0 6px rgba(255,209,0,0.65); }
+.dt-rank { text-align: center; color: var(--faint); font-variant-numeric: tabular-nums; }
+.dt-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt-bar { position: relative; height: 20px; border-radius: 4px; background: var(--surface-3); overflow: hidden;
+    display: flex; justify-content: space-between; align-items: center; }
+.dt-bar::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--w);
+    background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 40%, transparent)); }
+.dt-bar span, .dt-bar b { position: relative; padding: 0 7px; font-size: 11px; color: #fff; font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85), 0 0 2px rgba(0,0,0,0.85); }
+.dt-gap { text-align: center; color: var(--faint); line-height: 10px; }
+.dt-more summary { cursor: pointer; font-size: 12px; color: var(--muted); margin: 4px 0; }
+.dt-more summary:hover { color: var(--text); }
+.dtable tr.dt-click { cursor: pointer; }
+.dtable tr.dt-click:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dt-caret { display: inline-block; width: 10px; color: var(--faint); transition: transform 0.15s; }
+.dtable tr.dt-click.open .dt-caret { transform: rotate(90deg); color: var(--text); }
+.dtable tr.dt-detail > td { background: rgba(0,0,0,0.2); padding: 14px 16px; }
+.dt-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
+.dt-split h5 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 /* Focus loading: a WoW cast bar (gold, a spark at the edge; green when done, red when interrupted) */
 .castbar-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 36px 0 30px; }
 .castbar { display: flex; align-items: center; gap: 10px; width: min(460px, 100%); }
@@ -855,6 +893,19 @@ document.querySelectorAll('[data-focus-load]').forEach(box => {
     })
     .catch(() => fail());
 });
+// Damage by target: a row of "Where your damage went" opens everyone's damage on it; healers on request.
+document.querySelectorAll('.dtable tr.dt-click').forEach(tr => {
+  const toggle = () => {
+    const detail = tr.nextElementSibling;
+    if (!detail || !detail.classList.contains('dt-detail')) return;
+    detail.hidden = !detail.hidden;
+    tr.classList.toggle('open', !detail.hidden);
+  };
+  tr.addEventListener('click', e => { if (!e.target.closest('a, button, input, summary')) toggle(); });
+  tr.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+});
+document.querySelectorAll('.dt-wrap .dt-heal-toggle').forEach(box =>
+  box.addEventListener('change', () => box.closest('.dt-wrap').classList.toggle('heal', box.checked)));
 // Focus cards: Overall / per-spawn tabs.
 document.querySelectorAll('.fcard .ftabs').forEach(bar => bar.querySelectorAll('[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => {

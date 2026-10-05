@@ -309,6 +309,20 @@ async def get_fight_extras(session, code, fight_id):
             'rankings': report.get('rankings'), 'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
 
 
+async def get_damage_by_target(session, code, fight_id, target_ids):
+    """
+    Everyone's damage on each of these enemies in one pull - the DamageDone table filtered to the target, so
+    every player (the plain table lists only each player's top 5 targets): {target id: [table entries]}.
+    """
+    if not target_ids:
+        return {}
+    parts = '\n'.join(f't{int(i)}: table(fightIDs: $fights, dataType: DamageDone, targetID: {int(i)})' for i in target_ids)
+    data = await query(session, 'query($code: String!, $fights: [Int]!) { reportData { report(code: $code) { %s } } }'
+                       % parts, {'code': code, 'fights': [fight_id]})
+    report = (data.get('reportData') or {}).get('report') or {}
+    return {int(i): (_unwrap(report.get(f't{int(i)}')) or {}).get('entries') or [] for i in target_ids}
+
+
 def _unwrap(table):
     return (table or {}).get('data', table) if isinstance(table, dict) else table
 

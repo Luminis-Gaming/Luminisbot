@@ -19,7 +19,8 @@ EXTRAS_VERSION = 1
 MAX_BANDS = 60            # stored up/down stretches per aura (for the uptime strip)
 MIN_STORED_UPTIME = 0.1   # auras up less than this share of the pull aren't stored
 ALWAYS_UP = 0.97          # ...and ones up more than this get no up / down stretches
-TOP_TARGETS = 8           # targets stored per player
+TOP_TARGETS = 8           # targets stored per player (WCL's table lists at most 5 anyway - everyone's
+                          # damage per target comes from focus.load_by_target)
 SKIP_AURA_WORDS = ('flask', 'phial', 'well fed', 'potion', 'food', 'augment rune', 'drink')
 KEY_AURAS = {'Bone Shield'}
 
@@ -314,6 +315,49 @@ def top_auras(tables, start, duration):
 # ============================================================================
 # Comparing (render time)
 # ============================================================================
+
+def target_ranking(numbered, stored=None):
+    """
+    Everyone's damage by target over these pulls: [{'name', 'type', 'total', 'main' (the pulls' biggest
+    target), 'complete', 'players': [{'name', 'class', 'role', 'damage', 'share' (of the target's total),
+    'pulls' (how many of these pulls they hit it in)}]}] - targets by total, players by damage.
+    stored: {fight id: {target: {player: damage}}} (focus.by_target_cached - every player); a pull without
+    it falls back to its DamageDone table, which lists only each player's top 5 targets ('complete' False).
+    """
+    targets, mains, complete = {}, {}, True
+    for _, pull in numbered:
+        analysis = pull.get('analysis') or {}
+        extras = analysis.get('extras') or {}
+        roster = {p['name']: p for p in analysis.get('players') or []}
+        biggest = next(iter(extras.get('targets') or []), None)
+        if biggest:
+            mains[biggest['name']] = mains.get(biggest['name'], 0) + 1
+        full = (stored or {}).get(pull.get('fight_id'))
+        if full is not None:
+            kinds = {t['name']: t.get('type') or '' for t in extras.get('targets') or []}
+            hits = [(name, target, damage, kinds.get(target, ''))
+                    for target, players in full.items() for name, damage in players.items()]
+        else:
+            complete = False
+            hits = [(name, target, damage, kind) for name, row in (extras.get('players') or {}).items()
+                    for target, damage, kind in row.get('targets') or []]
+        for name, target, damage, kind in hits:
+            t = targets.setdefault(target, {'name': target, 'type': kind, 'total': 0, 'players': {}})
+            t['total'] += damage
+            who = roster.get(name) or {}
+            p = t['players'].setdefault(name, {'name': name, 'class': who.get('class') or '',
+                                               'role': who.get('role') or 'dps', 'damage': 0, 'pulls': 0})
+            p['damage'] += damage
+            p['pulls'] += 1
+    main = max(mains, key=mains.get) if mains else None
+    out = []
+    for t in targets.values():
+        players = sorted(t['players'].values(), key=lambda p: -p['damage'])
+        for p in players:
+            p['share'] = p['damage'] / t['total'] if t['total'] else 0
+        out.append(dict(t, players=players, main=t['name'] == main, complete=complete))
+    return sorted(out, key=lambda t: -t['total'])
+
 
 def player_pulls(numbered, name):
     """[(number, pull, extras player row, extras)] for the pulls with extras that this character was in."""

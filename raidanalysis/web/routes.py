@@ -819,10 +819,14 @@ async def handle_night(request):
     name = boss_pulls[0]['encounter_name']
 
     if request.query.get('view') == 'players':
+        by_target = await _damage_by_target(request, code, numbered, f'all {len(numbered)} pulls tonight')
+        if isinstance(by_target, web.Response):  # ?focus_load=1: the cast bar's request
+            return by_target
         report_rows = analyzer.player_report(_insight_pulls(numbered), tags)
         body = (_night_header(request, report, code, pulls, selected, view='players')
                 + players.players_view(report_rows, guide_for,
-                                       lambda player: players.player_url(code, player, selected)))
+                                       lambda player: players.player_url(code, player, selected))
+                + by_target)
         return _page(f"Players · {name}", session, body)
 
     enrage_ids = _enrage_ids(encounter_id, guide_for)
@@ -898,7 +902,7 @@ async def handle_night(request):
                       "score breakdown, feedback, pull by pull and the comparison with top players.",
                       f'<a class="btn btn-secondary btn-sm" href="{_players_view_href(code, selected)}">All player cards →</a>')}
         {players.compact_table(analyzer.player_report(insight_pulls, tags),
-                               lambda n: players.player_url(code, n, selected))}
+                               lambda n: players.player_url(code, n, selected), numbered)}
     </div>"""
     return _page(f"{name} · {report['title']}", session, body)
 
@@ -928,10 +932,14 @@ async def handle_pull(request):
 
     if request.query.get('view') == 'players':
         selected = (encounter_id, difficulty)
+        by_target = await _damage_by_target(request, code, [(number, pull)], f'pull #{number}')
+        if isinstance(by_target, web.Response):
+            return by_target
         report_rows = analyzer.player_report(_insight_pulls([(number, pull)]), tags)
         body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
                 + players.players_view(report_rows, guide_for,
-                                       lambda player: players.player_url(code, player, selected, fight_id)))
+                                       lambda player: players.player_url(code, player, selected, fight_id))
+                + by_target)
         return _page(f"Players · {pull['encounter_name']} pull {number}", session, body)
 
     death_rows = ''.join(
@@ -982,7 +990,8 @@ async def handle_pull(request):
     <div class="card">
         {section_head('👥', 'Players', 'Scores for this pull. Click a player for their page for this pull.')}
         {players.compact_table(analyzer.player_report(pull_insights, tags),
-                               lambda n: players.player_url(code, n, (encounter_id, difficulty), fight_id))}
+                               lambda n: players.player_url(code, n, (encounter_id, difficulty), fight_id),
+                               [(number, pull)])}
     </div>"""
     return _page(f"{pull['encounter_name']} pull {number}", session, body)
 
@@ -1070,6 +1079,27 @@ async def handle_player(request):
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
 
 
+async def _damage_by_target(request, code, numbered, scope):
+    """
+    The Players view's damage-by-target card. Everyone's damage per target is fetched from WCL the first
+    time (focus.load_by_target): until then a cast bar asks for ?focus_load=1 - answered here with {'ok',
+    'why'} as a response - and the cards show what the pulls' tables have (each player's top 5 targets).
+    """
+    from .. import focus, throughput
+    from . import focusview, targets as dtargets
+    pulls = [p for _, p in numbered]
+    if request.query.get('focus_load'):
+        ok, why = await focus.load_by_target(code, pulls)
+        return web.json_response({'ok': ok, 'why': why}, headers=SECURITY_HEADERS)
+    stored = {p['fight_id']: focus.by_target_cached(code, p['fight_id']) for p in pulls}
+    stored = {k: v for k, v in stored.items() if v is not None}
+    missing = len(pulls) - len(stored)
+    loading = focusview.loader(text=f"Summoning everyone's damage ({missing} pull{'s' if missing != 1 else ''})") \
+        if missing else ''
+    return dtargets.section(throughput.target_ranking(numbered, stored), focus.priority_targets(code, pulls), scope,
+                            loading)
+
+
 async def _focus_section(request, code, numbered, whole_night, name, damage_href):
     """
     The Focus timeline for one pull (?fp=fight id; default the kill, else the furthest wipe), with its pull
@@ -1104,9 +1134,11 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
                  if benchmarks.category(sid, info.get(sid)) in (benchmarks.THROUGHPUT, benchmarks.TRINKET, 'personal')]
     if request.query.get('focus_load'):
         data, why = await focus.load(code, pull, name, analysis.get('extras') or {}, {c[2] for c in cooldowns if c[2]})
+        if data:  # and everyone's damage per target in it, for the opened rows of "Where your damage went"
+            ok, why = await focus.load_by_target(code, [pull])
         return web.json_response({'ok': bool(data), 'why': why}, headers=SECURITY_HEADERS), None
     data = focus.cached(code, pull['fight_id'], name)
-    if not data:
+    if not data or focus.by_target_cached(code, pull['fight_id']) is None:
         return picker + focusview.loader(number), None
     order, color_of = focusview.colors(data)
     potions = [u for u in analysis.get('consumables') or [] if u['name'] == name and u.get('kind') == 'potion']
@@ -1120,7 +1152,9 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     mine_total = sum(sum(r['b']) for r in data['you'].values()) or 1
     my_share = {t: sum(r['b']) / mine_total for t, r in data['you'].items()}
     label = compare_data.get('label') or 'players'
-    pull_focus = {'number': number, 'colors': color_of, 'main': data.get('main'),
+    stored = {p['fight_id']: focus.by_target_cached(code, p['fight_id']) for _, p in whole_night}
+    pull_focus = {'number': number, 'colors': color_of, 'main': data.get('main'), 'pull': pull,
+                  'stored': {k: v for k, v in stored.items() if v is not None},
                   'rows': {r['target']: r for r in focus.target_rows(data)}}
     switches = max(0, len(focus.your_targets(data, order)) - 1)
     return f"""{picker}

@@ -1107,3 +1107,71 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('Off target', cards)
         self.assertIn('died 2:45', cards)
         self.assertIn('never hit', cards)
+
+
+class TestDamageByTarget(unittest.TestCase):
+    """Everyone's damage per target over the boss's pulls: ranked, a star for the top, you highlighted."""
+
+    @staticmethod
+    def pull(players):
+        roster = [{'name': n, 'class': c, 'role': r} for n, c, r, _ in players]
+        return {'analysis': {'players': roster, 'extras': {
+            'targets': [{'name': "Ula'tek", 'total': 1, 'type': 'Boss'}],
+            'players': {n: {'targets': t} for n, _, _, t in players}}}}
+
+    def test_ranking_and_view(self):
+        from raidanalysis import throughput
+        from raidanalysis.web import targets
+        a = self.pull([('Boops', 'Monk', 'dps', [["Ula'tek", 100, 'Boss'], ['Venomous Heart', 50, 'NPC']]),
+                       ('Futhark', 'Hunter', 'dps', [["Ula'tek", 80, 'Boss'], ['Venomous Heart', 90, 'NPC']]),
+                       ('Holy', 'Priest', 'healer', [['Venomous Heart', 5, 'NPC']])])
+        b = self.pull([('Futhark', 'Hunter', 'dps', [['Venomous Heart', 30, 'NPC']])])
+        ranked = {t['name']: t for t in throughput.target_ranking([(1, a), (2, b)])}
+        heart = ranked['Venomous Heart']
+        self.assertEqual([(p['name'], p['damage'], p['pulls']) for p in heart['players']],
+                         [('Futhark', 120, 2), ('Boops', 50, 1), ('Holy', 5, 1)])
+        self.assertAlmostEqual(heart['players'][0]['share'], 120 / 175)
+        self.assertTrue(ranked["Ula'tek"]['main'])
+        self.assertEqual(targets.your_rank(heart, 'Boops'), '#2 of 3')
+        html = targets.ranking(heart, 'Boops')
+        self.assertIn('dt-star', html)                                              # Futhark: the most
+        self.assertIn('dt-row you', html)
+        card = targets.section(list(ranked.values()), {'Venomous Heart'}, 'all 2 pulls tonight')
+        self.assertLess(card.index('Venomous Heart'), card.index("Ula&#x27;tek"))   # priority first
+        self.assertIn('dt-row heal', card)                                          # healers: behind the toggle
+
+    def test_stored_full_lists_win(self):
+        """WCL's plain table has only each player's top 5 targets: the stored per-target tables have everyone."""
+        from raidanalysis import throughput
+        a = dict(self.pull([('Boops', 'Monk', 'dps', [["Ula'tek", 100, 'Boss']])]), fight_id=1)
+        b = dict(self.pull([('Boops', 'Monk', 'dps', [["Ula'tek", 70, 'Boss']])]), fight_id=2)
+        stored = {1: {"Ula'tek": {'Boops': 100}, 'Blightscale Clutch': {'Boops': 9, 'Futhark': 12}}}
+        ranked = {t['name']: t for t in throughput.target_ranking([(1, a), (2, b)], stored)}
+        self.assertEqual([p['name'] for p in ranked['Blightscale Clutch']['players']], ['Futhark', 'Boops'])
+        self.assertEqual(ranked["Ula'tek"]['players'][0]['damage'], 170)            # pull 2 from its table
+        self.assertFalse(ranked["Ula'tek"]['complete'])                             # ...so: partial
+        self.assertTrue(throughput.target_ranking([(1, a)], stored)[0]['complete'])
+
+
+class TestPlayersCompactOutput(unittest.TestCase):
+    """The Mechanics tab's players table: execution (our score) and output (WCL) labelled apart."""
+
+    def test_output_columns(self):
+        from raidanalysis.web import players
+        roster = [{'name': 'Futhark', 'class': 'Hunter', 'role': 'dps'}, {'name': 'Boops', 'class': 'Monk', 'role': 'dps'}]
+        def pull(n, futhark_parse):
+            return (n, {'fight_id': n, 'start_ms': 0, 'end_ms': 100000, 'analysis': {'players': roster, 'extras': {
+                'duration': 100000, 'players': {
+                    'Futhark': {'damage': 30e6, 'active_ms': 95000, 'parse': {'rank': futhark_parse}},
+                    'Boops': {'damage': 20e6, 'active_ms': 60000, 'parse': None}}}}})
+        report = [{'name': n['name'], 'class': n['class'], 'role': 'dps', 'spec': '', 'score': 80,
+                   'scores': {k: 70 for k, _, _ in players.SUBSCORES}, 'deaths': 0, 'avoidable_hits': 0,
+                   'interrupts': 0, 'dispels': 0, 'feedback': []} for n in roster]
+        html = players.compact_table(report, lambda n: '#', [pull(1, 60), pull(2, 90)])
+        self.assertIn('Execution · our mechanics grade', html)
+        self.assertIn('It says nothing about your damage', html)
+        self.assertIn('class="parse p75">90<', html)                                # best parse, WCL colors
+        self.assertIn('avg 75 · 2 parses', html)
+        self.assertIn('300k', html)                                                  # 30M over 100 s
+        self.assertIn('#1 of 2', html)
+        self.assertIn('class="num bad" data-v="0.600"', html)                       # Boops: 60% active
