@@ -1,8 +1,12 @@
 """
-The Focus timeline for one pull (data from focus.py), as horizontal lanes: the boss's abilities, who you
-were hitting at every moment (switches show as a change of color), one lane per target - when it was up
-and when you were on it - and your potion and major cooldowns; then a card per add window that says
-whether you were on it.
+The Focus timeline for one pull (data from focus.py), as horizontal lanes: the boss's phases, its adds
+(one lane per kind, a bar per spawn) and abilities, who you were hitting at every moment (switches show as
+a change of color), one lane per target - when it was up and when you were on it - and your potion and
+major cooldowns. Chips above it show / hide each target (priority adds and the boss on by default).
+
+Under it, one card per kind of add: the priorities (the top DPS pile into them) with an Overall tab and a
+tab per spawn - share, reaction, potion timing, cooldowns, drawn rather than written - the rest as one
+compact card each.
 
 Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from data-tip / data-spell).
 """
@@ -13,6 +17,8 @@ from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, s
 COLORS = ('#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#8f6ce0')
 OTHER_COLOR = '#5b6178'
 VERDICTS = {'good': ('pill-kill', 'On it'), 'ok': ('pill', 'Partly'), 'off': ('pill-wipe', 'Off target')}
+REACTION_GOOD_MS, REACTION_OK_MS = 1500, 3000  # first hit on a priority add after it appeared
+POTION_WINDOW_MS = 30000                         # a potion this close to a priority spawn (its nearest) is for it
 
 
 def colors(data):
@@ -43,6 +49,39 @@ def _span(start, end, duration):
     return f'left:{_at(start, duration)};width:{100 * max(0, min(end, duration) - start) / duration:.3f}%'
 
 
+def potion_lead(potions, w, wins=None):
+    """
+    (potion, seconds it was pressed before the add appeared - negative: after) for a priority spawn, or None.
+    A potion belongs to one spawn: the priority spawn nearest to it (wins: all of the pull's), within
+    POTION_WINDOW_MS.
+    """
+    pot = min(potions, key=lambda p: abs(p['t'] - w['start']), default=None) if w['priority'] else None
+    if not pot or abs(pot['t'] - w['start']) > POTION_WINDOW_MS:
+        return None
+    nearest = min((x for x in wins or [w] if x['priority']), key=lambda x: abs(pot['t'] - x['start']), default=w)
+    if nearest is not w and abs(pot['t'] - nearest['start']) < abs(pot['t'] - w['start']):
+        return None
+    return pot, (w['start'] - pot['t']) / 1000
+
+
+def _lead_text(lead):
+    return (f'{lead:.1f} s before it appeared' if lead >= 0.05 else
+            f'{-lead:.1f} s after it appeared' if lead <= -0.05 else 'as it appeared')
+
+
+def _ends(w):
+    """(ms it ended, 'died' / 'gone')."""
+    return (w['died_at'], 'died') if w['died_at'] is not None else (w['end'], 'gone')
+
+
+def _react_band(ms):
+    return 'none' if ms is None else 'good' if ms <= REACTION_GOOD_MS else 'ok' if ms <= REACTION_OK_MS else 'bad'
+
+
+# ============================================================================
+# Timeline
+# ============================================================================
+
 def _ribbon(data, order, color_of, duration):
     """Who you were hitting at every moment (focus.your_targets): one colored stretch per target, switches in between."""
     out = []
@@ -57,8 +96,8 @@ def _ribbon(data, order, color_of, duration):
 def _target_lane(target, mine, raid_row, wins, color, step, duration, peak, always_up):
     """
     One target, two tracks: on top what the raid did (light: the add was up and the raid was hitting it -
-    outlined while it was the raid's priority; the whole pull for a boss), underneath what you did (solid: a
-    bar for every stretch you were hitting it, brighter the harder you hit).
+    outlined for a priority; the whole pull for a boss), underneath what you did (solid: a bar for every
+    stretch you were hitting it, brighter the harder you hit; dashed: from it appearing to your first hit).
     """
     if always_up:
         raid = (f'<i class="fraid" style="{_span(0, duration, duration)}" '
@@ -71,14 +110,14 @@ def _target_lane(target, mine, raid_row, wins, color, step, duration, peak, alwa
             tip = f'{esc(target)} up {fmt_duration(start)}–{fmt_duration(end)}'
             if w:
                 tip += (f' · the top DPS put {_pct(w["raid_share"])} of their damage into it'
-                        f'{" - a priority" if w["priority"] else ""}, you {_pct(w["you_share"])} of yours')
+                        f'{" (a priority)" if w["priority"] else ""}, you {_pct(w["you_share"])} of yours')
             raid += (f'<i class="fraid{" prio" if w and w["priority"] else ""}" style="{_span(start, end, duration)}" '
                      f'data-tip="{tip}"></i>')
     you = []
-    for w in wins:  # from the add appearing to your first hit on it
+    for w in wins:
         if w['first_hit'] is None:
             you.append(f'<i class="freact never" style="{_span(w["start"], w["end"], duration)}" '
-                       f'data-tip="You never hit {esc(target)} while it was up ({fmt_duration(w["start"])}–'
+                       f'data-tip="You never hit {esc(target)} while it was up ({_clock(w["start"])}–'
                        f'{fmt_duration(w["end"])})"></i>')
         elif w['first_hit'] >= step:
             you.append(f'<i class="freact" style="{_span(w["start"], w["start"] + w["first_hit"], duration)}" '
@@ -95,10 +134,56 @@ def _target_lane(target, mine, raid_row, wins, color, step, duration, peak, alwa
     return f'<div class="flane" style="--c:{color}">{raid}{"".join(you)}</div>'
 
 
-def _group(title, hint=''):
-    """A group header in the label column (and an empty row beside it)."""
+def _icon(icon):
+    """An <img> for a WCL icon file name or a full (Wowhead) icon URL."""
+    src = safe_icon(icon if not icon or icon.startswith('http') else ICON_BASE + icon)
+    return f'<img class="ability-icon" src="{esc(src)}" alt="" loading="lazy">' if src else ''
+
+
+def _bands(row, cls, duration, tip):
+    return ''.join(f'<i class="fbuff {cls}" style="{_span(a, b, duration)}" data-spell="{row["id"]}" '
+                   f'data-tip="{tip} · {_clock(a)}–{_clock(b)} ({(b - a) / 1000:.0f} s)"></i>' for a, b in row['bands'])
+
+
+def _cooldown_lanes(cooldowns, auras, duration):
+    """
+    Your major cooldowns: a lane per ability (first pressed first) with a marker per press and, where the
+    ability leaves a buff on you, a bar for how long it lasted.
+    """
+    mine = {a['name']: a for a in auras if a['mine']}
+    by_name = {}
+    for t, sid, name, icon in sorted(cooldowns):
+        by_name.setdefault(name, {'sid': sid, 'icon': icon, 'casts': []})['casts'].append(t)
+    for name, aura in mine.items():  # a buff of yours with no press logged (or under another name)
+        by_name.setdefault(name, {'sid': aura['id'], 'icon': aura['icon'], 'casts': []})
+    lanes = []
+    for name, cd in by_name.items():
+        aura = mine.get(name)
+        bars = _bands(aura, 'mine', duration, esc(name)) if aura else ''
+        marks = ''.join(f'<i class="m cd" style="left:{_at(t, duration)}'
+                        f'{";background-image:url(" + safe_icon(cd["icon"]) + ")" if cd["icon"] and safe_icon(cd["icon"]) else ""}" '
+                        f'data-spell="{cd["sid"]}" data-tip="{esc(name)} pressed · {_clock(t)}"></i>' for t in cd['casts'])
+        presses = f'{len(cd["casts"])}× this pull' if cd['casts'] else 'its buff'
+        lanes.append((f'<div class="tl-lab f-cd" data-spell="{cd["sid"]}" data-tip="{esc(name)} · {presses}">'
+                      f'{_icon(cd["icon"])}<span>{esc(name)}</span></div>', 'f-cd', bars + marks, 'cds'))
+    return lanes
+
+
+def _external_lanes(auras, duration):
+    """Buffs others put on you (Power Infusion, lust, Pain Suppression...): a lane per buff, a bar per time."""
+    lanes = []
+    for aura in (a for a in auras if not a['mine']):
+        who = ', '.join(aura['from'])
+        lanes.append((f'<div class="tl-lab f-cd" data-spell="{aura["id"]}" data-tip="{esc(aura["name"])} from {esc(who)}">'
+                      f'{_icon(aura["icon"])}<span>{esc(aura["name"])}</span></div>', 'f-cd',
+                      _bands(aura, 'ext', duration, f'{esc(aura["name"])} from {esc(who)}'), 'ext'))
+    return lanes
+
+
+def _group(title, hint='', key=None):
+    """A group header in the label column (and an empty row beside it); key: the chip that hides it too."""
     hint_html = f'<small>{hint}</small>' if hint else ''
-    return (f'<div class="tl-lab fgrp"><b>{title}</b>{hint_html}</div>', 'fgrp', '')
+    return (f'<div class="tl-lab fgrp"><b>{title}</b>{hint_html}</div>', 'fgrp', '', key)
 
 
 def _phase_lane(phases, names, duration):
@@ -114,38 +199,17 @@ def _phase_lane(phases, names, duration):
     return ''.join(out)
 
 
-def potion_lead(potions, w):
-    """(potion, seconds it was pressed before the add appeared - negative: after) for a priority window, or None."""
-    pot = min(potions, key=lambda p: abs(p['t'] - w['start']), default=None) if w['priority'] else None
-    if not pot or abs(pot['t'] - w['start']) > 60000:
-        return None
-    return pot, (w['start'] - pot['t']) / 1000
-
-
-def _lead_text(lead):
-    return (f'{lead:.1f} s before it appeared' if lead >= 0.05 else
-            f'{-lead:.1f} s after it appeared' if lead <= -0.05 else 'as it appeared')
-
-
-def _adds_lane(wins, color_of, duration, potions=()):
-    """Each add window: a marker where it appeared (the raid's first hit) and where it died or went away."""
+def _spawn_lane(kind, color, duration, potions, wins):
+    """One kind of add: a bar per spawn, from appearing (the raid's first hit) to dying (solid end) or going away."""
     out = []
-    for w in wins:
-        color = color_of.get(w['target'], OTHER_COLOR)
-        name = esc(w['target'])
-        react = ('you never hit it' if w['first_hit'] is None else
-                 f'you hit it {w["first_hit"] / 1000:.1f} s later')
-        label = f'<span>{name}</span>' if w['priority'] else ''
-        pot = potion_lead(potions, w)
-        pot_tip = f' · your potion {_lead_text(pot[1])}' if pot else ''
-        out.append(f'<i class="fev in{" prio" if w["priority"] else ""}" style="left:{_at(w["start"], duration)};'
-                   f'--c:{color}" data-tip="{name} appeared · {_clock(w["start"])} · {react}{pot_tip}">▲{label}</i>')
-        died = w['died_at'] is not None
-        end = w['died_at'] if died else w['end']
-        what = 'died' if died else 'gone (the raid stopped hitting it)'
-        out.append(f'<i class="fev {"died" if died else "out"}" style="left:{_at(end, duration)};--c:{color}" '
-                   f'data-tip="{name} {what} · {fmt_duration(end)} · up {(end - w["start"]) / 1000:.0f} s">'
-                   f'{"✖" if died else "▼"}</i>')
+    for k, w in enumerate(kind['spawns'], 1):
+        end, how = _ends(w)
+        react = ('you never hit it' if w['first_hit'] is None else f'you hit it {w["first_hit"] / 1000:.1f} s later')
+        pot = potion_lead(potions, w, wins)
+        tip = (f'{esc(kind["target"])} #{k} · appeared {_clock(w["start"])}, {how} {fmt_duration(end)} '
+               f'({(end - w["start"]) / 1000:.0f} s) · {react}' + (f' · your potion {_lead_text(pot[1])}' if pot else ''))
+        out.append(f'<i class="fspawn {how}" style="{_span(w["start"], end, duration)};--c:{color}" data-tip="{tip}">'
+                   f'<span>#{k}</span></i>')
     return ''.join(out)
 
 
@@ -165,14 +229,14 @@ def _boss_lanes(analysis, duration):
                         f'data-tip="{esc(name)} · {fmt_duration(t)}"></i>' for t, sid in sorted(casts))
         lanes.append((f'<div class="tl-lab boss f-boss" data-spell="{first}" '
                       f'data-tip="Cast {len(casts)}× this pull">{img}<span>{esc(name)}</span></div>',
-                      'boss f-boss', ticks))
+                      'boss f-boss', ticks, 'abilities'))
     return lanes, meta
 
 
 def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, phase_names=None):
     """
-    Horizontal lanes over the pull: the boss's abilities, who you were hitting at every moment, one lane per
-    target (when it was up, when you were on it), your potion and major cooldowns.
+    Horizontal lanes over the pull: the boss's phases, adds and abilities, who you were hitting at every
+    moment, one lane per target (when it was up, when you were on it), your potion and major cooldowns.
     cooldowns: [(t, spell id, name, icon url)] your major cooldowns this pull; potions: [{'t', 'end', 'ability'}];
     phases: [{'id', 'start'}]; phase_names: the report's ({encounter id: {phase id: {'name', 'intermission'}}}).
     """
@@ -180,24 +244,37 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     step = data.get('bin_ms') or focus.BIN_MS
     boss_lanes, boss_meta = _boss_lanes(pull.get('analysis') or {}, duration)
     wins = focus.windows(data)
-    lanes = [_group('👹 Boss', 'phases, adds appearing (▲) and dying (✖) or going away (▼), every cast')]
-    if len(phases) > 1:
-        names = (phase_names or {}).get(str(pull.get('encounter_id'))) or {}
-        lanes.append(('<div class="tl-lab f-phase">Phases</div>', 'f-phase', _phase_lane(phases, names, duration)))
-    if wins:
-        lanes.append(('<div class="tl-lab f-adds">Adds</div>', 'f-adds', _adds_lane(wins, color_of, duration, potions)))
-    lanes += boss_lanes
-    lanes += [_group('🎯 Who you were hitting', 'a change of color is a target switch'),
-              ('<div class="tl-lab f-ribbon">Your target</div>', 'f-ribbon', _ribbon(data, order, color_of, duration))]
+    kinds = focus.add_types(wins)
     mine = focus.folded(data.get('you'), order)
     raid_rows = focus.folded(data.get('raid'), order)
+    shown = [t for t in order + [focus.OTHER] if t in mine or t in raid_rows]
+    # One toggle per target / kind of add (the lane in Targets and its spawns in Boss share it)
+    keys, on = {}, set()
+    for target in shown + [k['target'] for k in kinds]:
+        keys.setdefault(target, f'g{len(keys)}')
+    priority = {k['target'] for k in kinds if k['priority']}
+    add_kinds = {k['target'] for k in kinds}
+    for target, key in keys.items():
+        if target == data.get('main') or target in priority or (target not in add_kinds and target != focus.OTHER):
+            on.add(key)
+
+    lanes = [_group('👹 Boss', 'phases · adds: a bar per spawn, white end = died')]
+    if len(phases) > 1:
+        names = (phase_names or {}).get(str(pull.get('encounter_id'))) or {}
+        lanes.append(('<div class="tl-lab f-phase">Phases</div>', 'f-phase', _phase_lane(phases, names, duration), None))
+    for kind in kinds:
+        color = color_of.get(kind['target'], OTHER_COLOR)
+        prio = '<span class="pill pill-kill">priority</span>' if kind['priority'] else ''
+        lanes.append((f'<div class="tl-lab f-spawns" title="{esc(kind["target"])}"><span class="flab">{_swatch(color)}'
+                      f'<span>{esc(kind["target"])}</span></span><small>×{len(kind["spawns"])}</small>{prio}</div>',
+                      'f-spawns', _spawn_lane(kind, color, duration, potions, wins), keys[kind['target']]))
+    lanes += boss_lanes
+    lanes += [_group('🎯 Who you were hitting', 'a change of color is a target switch'),
+              ('<div class="tl-lab f-ribbon">Your target</div>', 'f-ribbon', _ribbon(data, order, color_of, duration), None)]
     peak = max((sum(b[a:z + 1]) / ((z - a + 1) * step / 1000) for b in mine.values() for a, z in focus.runs(b)),
                default=0)
-    lanes.append(_group('⚔️ Targets', 'light = raid on it (add up) · solid = you on it · dashed = your reaction'))
-    n = 0
-    for target in order + [focus.OTHER]:
-        if target not in mine and target not in raid_rows:
-            continue
+    lanes.append(_group('⚔️ Targets', 'light: raid on it · solid: you · dashed: reaction'))
+    for n, target in enumerate(shown):
         color = color_of.get(target, OTHER_COLOR)
         main = target == data.get('main')
         always_up = main or (target in (data.get('raid') or {})
@@ -209,27 +286,37 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                       f'f-target{" alt" if n % 2 else ""}',
                       _target_lane(target, mine.get(target) or [], None if main else raid_rows.get(target),
                                    [w for w in wins if w['target'] == target], color, step, duration, peak,
-                                   always_up)))
-        n += 1
+                                   always_up), keys[target]))
     pots = ''.join(
         f'<i class="fpot" style="left:{_at(p["t"], duration)};width:{100 * max(1000, (p.get("end") or p["t"] + 30000) - p["t"]) / duration:.3f}%" '
-        f'data-tip="{esc(p.get("ability") or "Potion")} · {fmt_duration(p["t"])}–{fmt_duration(p.get("end") or p["t"] + 30000)}">'
+        f'data-tip="{esc(p.get("ability") or "Potion")} · {_clock(p["t"])}–{fmt_duration(p.get("end") or p["t"] + 30000)}">'
         f'<span>🧪</span></i>' for p in potions)
     for w in wins:
-        pot = potion_lead(potions, w)
+        pot = potion_lead(potions, w, wins)
         if pot:
             a, b = sorted((pot[0]['t'], w['start']))
             pots += (f'<i class="flead" style="{_span(a, b, duration)};--c:{color_of.get(w["target"], OTHER_COLOR)}" '
                      f'data-tip="{esc(pot[0].get("ability") or "Potion")} at {_clock(pot[0]["t"])} - '
                      f'{_lead_text(pot[1])} ({esc(w["target"])}, {_clock(w["start"])})">'
                      f'<span>{abs(pot[1]):.1f} s</span></i>')
-    cds = []
-    for t, sid, name, icon in cooldowns:
-        bg = f';background-image:url({safe_icon(icon)})' if safe_icon(icon) else ''
-        cds.append(f'<i class="m cd" style="left:{_at(t, duration)}{bg}" data-spell="{sid}" '
-                   f'data-tip="{esc(name)} · {fmt_duration(t)}"></i>')
-    lanes += [_group('🧪 Your potion & cooldowns'),
-              ('<div class="tl-lab f-cds">You</div>', 'f-cds', pots + ''.join(cds))]
+    auras = data.get('auras') or []
+    cd_lanes, ext_lanes = _cooldown_lanes(cooldowns, auras, duration), _external_lanes(auras, duration)
+    if cd_lanes:
+        lanes += [_group('⚔️ Your cooldowns', 'a marker per press · bar: its buff on you', 'cds')] + cd_lanes
+    if ext_lanes:
+        lanes += [_group('🤝 Buffs from others', 'externals and lust on you · hover: who', 'ext')] + ext_lanes
+    lanes += [_group('🧪 Your potion', 'bracket: potion → priority add appearing'),
+              ('<div class="tl-lab f-cds">Potion</div>', 'f-cds', pots, None)]
+
+    extra = [(key, label) for key, label, lanes_ in (('cds', '⚔️ Your cooldowns', cd_lanes),
+                                                     ('ext', '🤝 Buffs from others', ext_lanes)) if lanes_]
+    on |= {key for key, _ in extra}
+    chips = ''.join(f'<button type="button" class="tl-chip" data-g="{key}" aria-pressed="true">{label}</button>'
+                    for key, label in extra) + ''.join(
+        f'<button type="button" class="tl-chip" data-g="{key}" aria-pressed="{"true" if key in on else "false"}" '
+        f'style="--c:{color_of.get(target, OTHER_COLOR)}"><i></i>{esc(target)}'
+        f'{" ×" + str(len(next(k["spawns"] for k in kinds if k["target"] == target))) if target in add_kinds else ""}'
+        f'</button>' for target, key in keys.items())
     phase_lines = ''.join(f'<i class="tl-phase al" style="left:{_at(p["start"], duration)}"></i>'
                           for p in phases[1:] if p.get('start'))
     every = 30000 if duration <= 240000 else 60000
@@ -238,9 +325,13 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                     for t in range(0, duration + 1, every))
     spell_json = {a['id']: {'name': a.get('name') or '', 'icon': f'{ICON_BASE}{a["icon"]}' if a.get('icon') else '',
                             'meta': '', 'desc': ''} for a in boss_meta.values() if safe_icon(a.get('icon'))}
-    labels = ''.join(label for label, _, _ in lanes)
-    tracks = ''.join(f'<div class="tl-row {cls}">{body}</div>' for _, cls, body in lanes)
+
+    def attrs(key):
+        return f' data-g="{key}"' + (' hidden' if key not in on else '') if key and key != 'abilities' else ''
+    labels = ''.join(label.replace('<div ', f'<div{attrs(key)} ', 1) for label, _, _, key in lanes)
+    tracks = ''.join(f'<div class="tl-row {cls}"{attrs(key)}>{body}</div>' for _, cls, body, key in lanes)
     return f"""<div class="tl focus-tl" data-duration="{duration}">
+        <div class="tl-chips"><span class="chips-label">Show</span>{chips}</div>
         <div class="tl-tools">
             <span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom · hover anything</span>
             <button type="button" data-zoom="out" title="Zoom out">−</button>
@@ -260,47 +351,160 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     </div>"""
 
 
+# ============================================================================
+# Cards (one per kind of add)
+# ============================================================================
+
 def _overlap(a0, a1, b0, b1):
     return max(0, min(a1, b1) - max(a0, b0))
 
 
+def _share_bar(you, raid, color):
+    """Your share of your damage as a bar, the top DPS's as a tick on it."""
+    return (f'<div class="fshare" style="--c:{color}" title="You {_pct(you)} · top DPS {_pct(raid)}">'
+            f'<b style="width:{min(100, 100 * you):.1f}%"></b><i style="left:{min(100, 100 * raid):.1f}%"></i></div>')
+
+
+def _react_chip(ms):
+    if ms is None:
+        return '<span class="fchip bad">never hit</span>'
+    return f'<span class="fchip {_react_band(ms)}" title="Your first hit after it appeared">{ms / 1000:.1f} s</span>'
+
+
+def _pot_chip(found):
+    if not found:
+        return '<span class="fchip none">no potion</span>'
+    return (f'<span class="fchip pot" title="{esc(found[0].get("ability") or "Potion")} at {_clock(found[0]["t"])}">'
+            f'🧪 {found[1]:+.1f} s</span>')
+
+
+def _potion_strip(w, found):
+    """The spawn's window with the potion's buff over it: when you pressed it against when the add appeared."""
+    end, _ = _ends(w)
+    if not found:
+        return ''
+    pot = found[0]
+    buff_end = pot.get('end') or pot['t'] + 30000
+    lo, hi = min(pot['t'], w['start']) - 2000, max(end, buff_end) + 1000
+    span = max(1, hi - lo)
+
+    def x(t):
+        return f'{100 * (t - lo) / span:.2f}%'
+    covered = _overlap(pot['t'], buff_end, w['start'], end) / max(1, end - w['start'])
+    return f"""
+        <div class="fpstrip" title="Potion buff {_clock(pot['t'])}–{_clock(buff_end)} · add up {_clock(w['start'])}–{fmt_duration(end)}">
+            <i class="fp-add" style="left:{x(w['start'])};width:calc({x(end)} - {x(w['start'])})"></i>
+            <i class="fp-buff" style="left:{x(pot['t'])};width:calc({x(buff_end)} - {x(pot['t'])})"></i>
+            <i class="fp-press" style="left:{x(pot['t'])}"></i><i class="fp-appear" style="left:{x(w['start'])}"></i>
+        </div>
+        <div class="fp-legend"><span><i class="fp-buff"></i>potion buff</span><span><i class="fp-add"></i>add up</span>
+            <span>pressed <b>{_lead_text(found[1])}</b> · buff covered <b>{_pct(covered)}</b> of it</span></div>"""
+
+
+def _spawn_pane(w, k, color, potions, cooldowns, wins):
+    """One spawn of a priority add, drawn: share, DPS, reaction, the potion against it, cooldowns pressed."""
+    end, how = _ends(w)
+    found = potion_lead(potions, w, wins)
+    peak = max(w['you_dps'], w['raid_dps']) or 1
+    during = [(t, sid, name, icon) for t, sid, name, icon in cooldowns if w['start'] - 5000 <= t <= end]
+    icons = ''.join(f'<img class="ability-icon" src="{esc(safe_icon(icon))}" alt="" data-spell="{sid}" '
+                    f'data-tip="{esc(name)} · {_clock(t)} ({(t - w["start"]) / 1000:+.1f} s)">'
+                    for t, sid, name, icon in during if safe_icon(icon))
+    return f"""
+        <p class="muted small">#{k}: appeared <b>{_clock(w['start'])}</b>, {how} {fmt_duration(end)}
+           ({(end - w['start']) / 1000:.0f} s up)</p>
+        <div class="fstats">
+            <div><span>Reaction</span>{_react_chip(w['first_hit'])}</div>
+            <div><span>Potion</span>{_pot_chip(found)}</div>
+        </div>
+        <div class="fmetric"><span>Share of your damage</span>{_share_bar(w['you_share'], w['raid_share'], color)}
+            <em>you {_pct(w['you_share'])} · top DPS {_pct(w['raid_share'])}</em></div>
+        <div class="fmetric"><span>DPS on it</span>
+            <div class="fdps"><b style="width:{100 * w['you_dps'] / peak:.1f}%;--c:{color}"></b>
+                <i style="width:{100 * w['raid_dps'] / peak:.1f}%"></i></div>
+            <em>you {fmt_amount(w['you_dps'])} · top DPS {fmt_amount(w['raid_dps'])} each</em></div>
+        {_potion_strip(w, found)}
+        {f'<div class="fmetric"><span>Cooldowns during it</span><div class="fcds">{icons}</div></div>' if icons else ''}"""
+
+
+def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, idx, wins):
+    cls, text = VERDICTS.get(kind['verdict'], ('pill-muted', '—'))
+    spawns = kind['spawns']
+    rows = ''.join(
+        f'<div class="fsrow"><span class="fs-when">#{k} {_clock(w["start"])}</span>'
+        f'{_share_bar(w["you_share"], w["raid_share"], color)}{_react_chip(w["first_hit"])}'
+        f'{_pot_chip(potion_lead(potions, w, wins))}</div>' for k, w in enumerate(spawns, 1))
+    leads = [f for f in (potion_lead(potions, w, wins) for w in spawns) if f]
+    whole = (f'<p class="muted small">Over their whole kill the top {esc(label)} put '
+             f'{_pct(top_share[kind["target"]])} of their damage into {esc(kind["target"])} - you '
+             f'{_pct(my_share.get(kind["target"], 0))} of this pull.</p>' if top_share.get(kind['target']) is not None else '')
+    overall = f"""
+        <div class="fstats">
+            <div><span>Your share</span><b>{_pct(kind['you_share'])}</b><small>top DPS {_pct(kind['raid_share'])}</small></div>
+            <div><span>Reaction</span><b>{f"{kind['reaction'] / 1000:.1f} s" if kind['reaction'] is not None else '—'}</b>
+                <small>median{f" · missed {kind['missed']}" if kind['missed'] else ''}</small></div>
+            <div><span>Potion</span><b>{f"{leads[0][1]:+.1f} s" if leads else '—'}</b>
+                <small>{'before the spawn it was for' if leads else 'none near a spawn'}</small></div>
+        </div>
+        <div class="fsrows"><div class="fsrow head"><span>Spawn</span><span>Your share (tick: top DPS)</span>
+            <span>Reaction</span><span>Potion</span></div>{rows}</div>
+        {whole}"""
+    tabs = [('o', 'Overall', overall)] + [
+        (str(k), f'#{k} {fmt_duration(w["start"])}', _spawn_pane(w, k, color, potions, cooldowns, wins))
+        for k, w in enumerate(spawns, 1)]
+    buttons = ''.join(f'<button type="button" role="tab" data-tab="{t}" aria-selected="{"true" if not i else "false"}">'
+                      f'{esc(name)}</button>' for i, (t, name, _) in enumerate(tabs))
+    panes = ''.join(f'<div class="fpane" data-pane="{t}"{"" if not i else " hidden"}>{body}</div>'
+                    for i, (t, _, body) in enumerate(tabs))
+    return f"""
+        <div class="fcard prio" style="--c:{color}" id="fcard-{idx}">
+            <div class="fcard-head">{_swatch(color)}<b>{esc(kind['target'])}</b>
+                <span class="muted small">{len(spawns)} spawn{'s' if len(spawns) != 1 else ''}</span>
+                <span class="pill {cls}">{text}</span></div>
+            <div class="ftabs" role="tablist">{buttons}</div>
+            {panes}
+        </div>"""
+
+
+def _compact_card(kind, color):
+    """A kind of add that isn't a priority: your share against the top DPS's, a square per spawn."""
+    def square(k, w):
+        band = ('bad' if w['first_hit'] is None else
+                'good' if w['you_share'] >= focus.GOOD_FOCUS * w['raid_share'] else 'ok')
+        hit = 'never hit it' if w['first_hit'] is None else f'first hit {w["first_hit"] / 1000:.1f} s'
+        return (f'<i class="fsq {band}" data-tip="#{k} {_clock(w["start"])} · you {_pct(w["you_share"])}, '
+                f'top DPS {_pct(w["raid_share"])} · {hit}"></i>')
+    squares = ''.join(square(k, w) for k, w in enumerate(kind['spawns'], 1))
+    return f"""
+        <div class="fcard compact" style="--c:{color}">
+            <div class="fcard-head">{_swatch(color)}<b>{esc(kind['target'])}</b>
+                <span class="muted small">×{len(kind['spawns'])}</span></div>
+            {_share_bar(kind['you_share'], kind['raid_share'], color)}
+            <div class="fcompact-meta"><span>you {_pct(kind['you_share'])} · top DPS {_pct(kind['raid_share'])}</span>
+                <span>{f"reaction {kind['reaction'] / 1000:.1f} s" if kind['reaction'] is not None else ''}
+                {f" · missed {kind['missed']}" if kind['missed'] else ''}</span></div>
+            <div class="fsqs">{squares}</div>
+        </div>"""
+
+
 def cards(data, color_of, potions, cooldowns, top_share, my_share, label):
     """
-    One card per add window, priorities first: your share of damage vs the raid's, DPS on it, the potion's
-    timing and coverage, cooldowns pressed during it - and the top players' share into it over their kill.
-    top_share / my_share: {target: share of all damage over the pull / their kill}.
+    One card per kind of add: priorities (Overall + a tab per spawn) first, then the rest compactly.
+    top_share / my_share: {target: share of all damage over the top players' kill / this pull}.
     """
-    out = []
-    for w in sorted(focus.windows(data), key=lambda w: (not w['priority'], w['start'])):
-        length = w['end'] - w['start']
-        cls, text = VERDICTS.get(w['verdict'], ('pill-muted', 'Not a priority'))
-        react = ('<b class="bad-text">You never hit it</b>' if w['first_hit'] is None else
-                 f'You first hit it <b>{w["first_hit"] / 1000:.1f} s</b> after it appeared')
-        ended = (f'died at {fmt_duration(w["died_at"])}' if w['died_at'] is not None else
-                 f'gone at {fmt_duration(w["end"])}')
-        lines = [f'⏱ Appeared at {_clock(w["start"])}, {ended} - {react}',
-                 f'You put <b>{_pct(w["you_share"])}</b> of your damage into it - the raid\'s top DPS <b>{_pct(w["raid_share"])}</b>',
-                 f'Your DPS on it <b>{fmt_amount(w["you_dps"])}</b> · the top DPS averaged {fmt_amount(w["raid_dps"])} each']
-        found = potion_lead(potions, w)
-        if found:
-            pot, lead = found
-            end = pot.get('end') or pot['t'] + 30000
-            lines.append(f'🧪 {esc(pot.get("ability") or "Potion")} pressed at {_clock(pot["t"])}, '
-                         f'<b>{_lead_text(lead)}</b> - its buff covered '
-                         f'<b>{_pct(_overlap(pot["t"], end, w["start"], w["end"]) / length)}</b> of the window')
-        elif w['priority']:
-            lines.append('🧪 No potion near this window')
-        during = [name for t, _, name, _ in cooldowns if w['start'] - 5000 <= t <= w['end']]
-        if during:
-            lines.append('⚔️ Cooldowns during it: ' + esc(', '.join(dict.fromkeys(during))))
-        if top_share.get(w['target']) is not None:
-            lines.append(f'Top {esc(label)} put {_pct(top_share[w["target"]])} of their whole kill into '
-                         f'{esc(w["target"])} - you {_pct(my_share.get(w["target"], 0))} of this pull')
-        out.append(f"""
-            <div class="fcard{" prio" if w['priority'] else ""}" style="--c:{color_of.get(w['target'], OTHER_COLOR)}">
-                <div class="fcard-head">{_swatch(color_of.get(w['target'], OTHER_COLOR))}<b>{esc(w['target'])}</b>
-                    <span class="muted small">{fmt_duration(w['start'])}–{fmt_duration(w['end'])} · {length / 1000:.0f} s</span>
-                    <span class="pill {cls}">{text}</span></div>
-                <ul>{''.join(f'<li>{line}</li>' for line in lines)}</ul>
-            </div>""")
-    return f'<div class="fcards">{"".join(out)}</div>' if out else ''
+    wins = focus.windows(data)
+    kinds = focus.add_types(wins)
+    prio = [k for k in kinds if k['priority']]
+    rest = [k for k in kinds if not k['priority']]
+    out = ''
+    if prio:
+        out += ('<h4>Priority adds</h4><p class="muted small">The ones the top DPS pile into. Overall first; a tab per '
+                'spawn for its reaction, potion timing and cooldowns.</p><div class="fcards prio">'
+                + ''.join(_priority_card(k, color_of.get(k['target'], OTHER_COLOR), potions, cooldowns, top_share,
+                                         my_share, label, i, wins) for i, k in enumerate(prio)) + '</div>')
+    if rest:
+        out += ('<h4>Other adds</h4><p class="muted small">Your share of your damage while they were up (the tick: the '
+                'top DPS\'s), and a square per spawn - green on it, amber partly, red never hit.</p>'
+                '<div class="fcards compact">' + ''.join(_compact_card(k, color_of.get(k['target'], OTHER_COLOR))
+                                                         for k in rest) + '</div>')
+    return out

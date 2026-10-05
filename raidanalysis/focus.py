@@ -20,7 +20,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 BIN_MS = 1000
-FOCUS_VERSION = 5
+FOCUS_VERSION = 6
 RAID_KEY = '*raid*'          # raid_focus row (as the player name) holding the raid sample's damage and deaths
 RAID_SAMPLE = 5              # the pull's top DPS whose damage stands for the raid's
 RAID_MAX_EVENTS = 250000      # their events on a long pull: ~10k a minute (each page of 10k costs about a WCL point)
@@ -30,7 +30,8 @@ GAP_BINS = 3                 # no damage on a target for up to this long: still 
 WINDOW_MIN_BINS = 3          # an add the raid hit for less than this isn't a window
 WINDOW_MIN_SHARE = 0.01      # an add taking less of the raid's damage over the pull isn't worth a window
 ALWAYS_UP = 0.9              # a target the raid hit for this much of the pull is up all fight (a second boss)
-PRIORITY_SHARE = 0.4         # the raid put this much of its usual damage into the add while it was up: a priority
+PRIORITY_SHARE = 0.6         # the top DPS typically (median over its spawns) put this much of their damage into
+                             # an add while it was up: that kind of add is a priority
 LOW_FOCUS = 0.6              # ...and you put less than this × the raid's share into it: off target
 GOOD_FOCUS = 0.85
 SMOOTH_BINS = 3              # "your target" at a moment: who got most of your damage over this many seconds
@@ -138,12 +139,17 @@ def always_up(row, n):
 
 
 def palette_order(data):
-    """Targets in color order: most of your damage first, then the adds the raid hit - MAX_TARGETS of them."""
+    """
+    Targets in color order, MAX_TARGETS of them: the main boss and the priority adds first (they must never
+    fold into "Other"), then most of your damage, then the adds the raid hit.
+    """
     totals = {t: sum(r['b']) for t, r in (data.get('you') or {}).items()}
     order = [t for t, v in sorted(totals.items(), key=lambda kv: -kv[1]) if v]
     adds = sorted(((t, sum(r['b'])) for t, r in (data.get('raid') or {}).items() if t not in totals),
                   key=lambda kv: -kv[1])
-    return (order + [t for t, _ in adds])[:MAX_TARGETS]
+    first = [data['main']] if data.get('main') in totals else []
+    first += [a['target'] for a in add_types(windows(data)) if a['priority'] and a['target'] not in first]
+    return (first + [t for t in order + [t for t, _ in adds] if t not in first])[:MAX_TARGETS]
 
 
 def folded(side, order):
@@ -226,11 +232,6 @@ def windows(data):
             you_on, you_all = sum(mine[i] for i in span), sum(you_per_bin[i] for i in span)
             raid_share = raid_on / raid_all if raid_all else 0
             you_share = you_on / you_all if you_all else 0
-            priority = raid_share >= PRIORITY_SHARE
-            verdict = None
-            if priority and you_all:
-                verdict = ('good' if you_share >= GOOD_FOCUS * raid_share else
-                           'off' if you_share < LOW_FOCUS * raid_share else 'ok')
             end = (last + 1) * step
             # To the ms: the first hit on it in this window's first second (else the bin's start)
             start = next((t for t in (data.get('appear') or {}).get(target) or []
@@ -244,9 +245,46 @@ def windows(data):
             out.append({'target': target, 'type': row['type'], 'start': start, 'end': end,
                         'died_at': died, 'first_hit': yours - start if yours is not None else None,
                         'raid_share': raid_share, 'you_share': you_share, 'you_dps': you_on / seconds,
-                        'raid_dps': raid_on / seconds / sampled, 'priority': priority,
-                        'verdict': verdict})
+                        'raid_dps': raid_on / seconds / sampled, 'active': bool(you_all)})
+    # A priority is a kind of add, not one spawn: the top DPS typically pile into it
+    shares = {}
+    for w in out:
+        shares.setdefault(w['target'], []).append(w['raid_share'])
+    for w in out:
+        w['priority'] = _median(shares[w['target']]) >= PRIORITY_SHARE
+        w['verdict'] = _verdict(w['you_share'], w['raid_share']) if w['priority'] and w['active'] else None
     return sorted(out, key=lambda w: w['start'])
+
+
+def _median(values):
+    values = sorted(values)
+    return values[len(values) // 2] if values else 0
+
+
+def _verdict(you_share, raid_share):
+    return ('good' if you_share >= GOOD_FOCUS * raid_share else
+            'off' if you_share < LOW_FOCUS * raid_share else 'ok')
+
+
+def add_types(wins):
+    """
+    The windows by kind of add, priorities first, then by first appearance: [{'target', 'priority', 'spawns'
+    (its windows), 'raid_share' / 'you_share' (means over the spawns), 'reaction' (median ms, None if you
+    never hit one), 'missed' (spawns you never hit), 'verdict' (priorities: your share against the top DPS's)}].
+    """
+    groups = {}
+    for w in wins:
+        groups.setdefault(w['target'], []).append(w)
+    out = []
+    for target, spawns in groups.items():
+        raid = sum(w['raid_share'] for w in spawns) / len(spawns)
+        you = sum(w['you_share'] for w in spawns) / len(spawns)
+        hits = [w['first_hit'] for w in spawns if w['first_hit'] is not None]
+        priority = spawns[0]['priority']
+        out.append({'target': target, 'priority': priority, 'spawns': spawns, 'raid_share': raid, 'you_share': you,
+                    'reaction': _median(hits) if hits else None, 'missed': len(spawns) - len(hits),
+                    'verdict': _verdict(you, raid) if priority and any(w['active'] for w in spawns) else None})
+    return sorted(out, key=lambda a: (not a['priority'], a['spawns'][0]['start']))
 
 
 def up_ms(data, target):
@@ -273,6 +311,67 @@ def target_rows(data):
 
 
 # ============================================================================
+# Buffs on you: your own major cooldowns, and what others gave you
+# ============================================================================
+
+# Buffs worth seeing when someone else puts them on you (plus the externals and raid cooldowns in
+# cooldowns.py): throughput externals and lust. Matched by name, like cooldowns.py.
+THROUGHPUT_EXTERNALS = (
+    'Power Infusion', 'Bloodlust', 'Heroism', 'Time Warp', 'Primal Rage', 'Fury of the Aspects', 'Ancient Hysteria',
+    'Ebon Might', 'Prescience', 'Shifting Sands', 'Source of Magic', 'Innervate', 'Symbol of Hope', 'Blistering Scales',
+    'Blessing of Summer', 'Blessing of Autumn', 'Blessing of Winter', 'Blessing of Spring',
+)
+WHOLE_PULL = 0.9  # a buff up this much of the pull (a raid buff) says nothing about timing
+MERGE_GAP_MS = 1500  # refreshed / re-applied this soon (Ebon Might, two Rallying Crys): one stretch
+
+
+def external_buff_names():
+    from .cooldowns import _BY_CATEGORY
+    return sorted(set(THROUGHPUT_EXTERNALS) | set(_BY_CATEGORY['external']) | set(_BY_CATEGORY['raid']))
+
+
+def aura_bands(events, fight_start, duration, me_id, actor_names, abilities):
+    """
+    Buff events on you -> [{'id', 'name', 'icon', 'mine' (you gave it yourself), 'from' (who), 'bands':
+    [[start, end] ms]}]: one entry per buff and giver side, applybuff to removebuff (up from the pull's start
+    when it only ends, until its end when it never does). Buffs up nearly all pull are left out.
+    """
+    open_, out = {}, {}
+    for e in sorted(events or [], key=lambda e: e['timestamp']):
+        kind, key = e.get('type'), (e.get('abilityGameID'), e.get('sourceID'))
+        t = max(0, min(duration, e['timestamp'] - fight_start))
+        if kind == 'applybuff':
+            open_.setdefault(key, t)
+        elif kind == 'removebuff':
+            _add_band(out, key, open_.pop(key, 0), t, me_id, actor_names, abilities)
+    for key, start in open_.items():
+        _add_band(out, key, start, duration, me_id, actor_names, abilities)
+    rows = []
+    for row in out.values():
+        merged = []
+        for a, b in sorted(row['bands']):
+            if merged and a - merged[-1][1] <= MERGE_GAP_MS:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        row['bands'], row['from'] = merged, sorted(row['from'])
+        if sum(b - a for a, b in merged) < WHOLE_PULL * duration:
+            rows.append(row)
+    return sorted(rows, key=lambda r: r['bands'][0][0])
+
+
+def _add_band(out, key, start, end, me_id, actor_names, abilities):
+    aid, source = key
+    if end <= start or not aid:
+        return
+    name, icon = abilities.get(aid) or (f'Spell {aid}', '')
+    mine = source == me_id
+    row = out.setdefault((aid, mine), {'id': aid, 'name': name, 'icon': icon, 'mine': mine, 'from': set(), 'bands': []})
+    row['from'].add(actor_names.get(source) or '?')
+    row['bands'].append([start, end])
+
+
+# ============================================================================
 # Loading (on demand, cached)
 # ============================================================================
 
@@ -291,10 +390,11 @@ def _sources_filter(names):
     return f'type = "damage" and ({who})'
 
 
-async def load(code, pull, name, extras):
+async def load(code, pull, name, extras, cooldown_names=()):
     """
     The focus data for one player in one pull: cached in raid_focus, else fetched from WCL now (the player's
-    damage events; the raid sample's and the enemies' deaths once per pull). Returns (data or None, why-not
+    damage events and the buffs on them - cooldown_names, their own major cooldowns, and what others gave
+    them; the raid sample's damage and the enemies' deaths once per pull). Returns (data or None, why-not
     message or None).
     """
     import aiohttp
@@ -315,6 +415,11 @@ async def load(code, pull, name, extras):
                 return None, f"{name} isn't in this log's player list."
             enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
             mine = await wcl.get_events(session, code, fight_id, 'DamageDone', _sources_filter([name]))
+            wanted = sorted(set(cooldown_names) | set(external_buff_names()))
+            quoted = name.replace('"', '')
+            buffs = await wcl.get_events(session, code, fight_id, 'Buffs', f'target.name = "{quoted}" and ability.name in ('
+                                         + ', '.join('"' + w.replace('"', '') + '"' for w in wanted) + ')')
+            abilities = await wcl.get_report_abilities(session, code) if buffs else {}
             raid = db.get_focus(code, fight_id, RAID_KEY)
             if not raid or raid.get('v') != FOCUS_VERSION:
                 sample = raid_sample(pull, extras)
@@ -330,6 +435,8 @@ async def load(code, pull, name, extras):
         return None, "Couldn't load the timeline from Warcraft Logs right now - try again in a bit."
     data = build(bin_damage(mine, start, n, enemies), raid, n, targets, name in (raid.get('sample') or []),
                  first_hits(mine, start, enemies))
+    data['auras'] = aura_bands(buffs, start, pull['end_ms'] - start, me['id'],
+                               {a['id']: a['name'] for a in actors}, abilities)
     if not data['you']:
         # Which step lost it: no events at all, events on actors we don't know as enemies, or outside the pull
         hits = [e for e in mine or [] if e.get('type') == 'damage']

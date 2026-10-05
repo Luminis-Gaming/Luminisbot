@@ -1090,14 +1090,17 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
         for n, p in have)
     picker = f'<div class="pull-chips" id="focus"><span class="chips-label">Pull</span>{chips}</div>'
     analysis = pull.get('analysis') or {}
-    data, why = await focus.load(code, pull, name, analysis.get('extras') or {})
-    if not data:
-        return picker + f'<p class="muted">{esc(why)}</p>', None
-    order, color_of = focusview.colors(data)
+    # Your major cooldowns this pull (damage / healing, on-use items, personal defensives): drawn in their
+    # own lanes, and their buffs fetched with the focus data
     casts = (analysis.get('casts') or {}).get(name) or []
     info = db.get_spells({sid for _, sid in casts}) if casts else {}
     cooldowns = [(t, sid, info[sid].get('name') or '', spells.icon_url(info[sid].get('icon')))
-                 for t, sid in casts if benchmarks.category(sid, info.get(sid)) in (benchmarks.THROUGHPUT, benchmarks.TRINKET)]
+                 for t, sid in casts
+                 if benchmarks.category(sid, info.get(sid)) in (benchmarks.THROUGHPUT, benchmarks.TRINKET, 'personal')]
+    data, why = await focus.load(code, pull, name, analysis.get('extras') or {}, {c[2] for c in cooldowns if c[2]})
+    if not data:
+        return picker + f'<p class="muted">{esc(why)}</p>', None
+    order, color_of = focusview.colors(data)
     potions = [u for u in analysis.get('consumables') or [] if u['name'] == name and u.get('kind') == 'potion']
     compare_data = benchmarks.for_player(whole_night, name) or {}
     top_share = {}
@@ -1109,7 +1112,8 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     mine_total = sum(sum(r['b']) for r in data['you'].values()) or 1
     my_share = {t: sum(r['b']) / mine_total for t, r in data['you'].items()}
     label = compare_data.get('label') or 'players'
-    pull_focus = {'number': number, 'colors': color_of, 'rows': {r['target']: r for r in focus.target_rows(data)}}
+    pull_focus = {'number': number, 'colors': color_of, 'main': data.get('main'),
+                  'rows': {r['target']: r for r in focus.target_rows(data)}}
     switches = max(0, len(focus.your_targets(data, order)) - 1)
     return f"""{picker}
         <p class="muted small">Pull #{number}, second by second: the boss's phases, adds appearing and dying, its

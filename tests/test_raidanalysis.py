@@ -1056,6 +1056,31 @@ class TestFocusTimeline(unittest.TestCase):
                                                            'amount': 10}, {'type': 'heal', 'timestamp': 1500, 'targetID': 1}]
         self.assertEqual(sum(focus.bin_damage(events, 1000, 10, self.NAMES)["Ula'tek"]), 10)
 
+    def test_buffs_on_you(self):
+        """Your Trueshot (one band), Power Infusion from a priest, lust re-applied (merged), Mark of the Wild (left out)."""
+        from raidanalysis import focus
+        from raidanalysis.web import focusview
+        ev = [{'type': t, 'timestamp': 1000 + ms, 'sourceID': src, 'abilityGameID': aid} for t, ms, src, aid in [
+            ('applybuff', 0, 9, 1126), ('applybuff', 5000, 5, 288613), ('removebuff', 20000, 5, 288613),
+            ('applybuff', 60000, 7, 10060), ('removebuff', 80000, 7, 10060),
+            ('applybuff', 100000, 8, 2825), ('removebuff', 110000, 8, 2825), ('applybuff', 110500, 8, 2825),
+            ('removebuff', 140000, 8, 2825)]]
+        abilities = {1126: ('Mark of the Wild', ''), 288613: ('Trueshot', 'ability_trueshot.jpg'),
+                     10060: ('Power Infusion', 'spell_holy_powerinfusion.jpg'), 2825: ('Bloodlust', '')}
+        auras = {a['name']: a for a in focus.aura_bands(ev, 1000, 300000, 5, {7: 'Priestly', 8: 'Shammy', 9: 'Druid'},
+                                                         abilities)}
+        self.assertNotIn('Mark of the Wild', auras)                                 # up all pull
+        self.assertEqual((auras['Trueshot']['mine'], auras['Trueshot']['bands']), (True, [[5000, 20000]]))
+        self.assertEqual((auras['Power Infusion']['mine'], auras['Power Infusion']['from']), (False, ['Priestly']))
+        self.assertEqual(auras['Bloodlust']['bands'], [[100000, 140000]])           # re-applied: one stretch
+        d = dict(self.data(my_heart=True), auras=list(auras.values()))
+        order, color_of = focusview.colors(d)
+        pull = {'fight_id': 1, 'start_ms': 1000, 'end_ms': 301000, 'analysis': {'boss_casts': [], 'boss_abilities': []}}
+        html = focusview.timeline(d, pull, 'Boops', color_of, order, [(5000, 288613, 'Trueshot', None)], [], [])
+        self.assertIn('Your cooldowns', html)
+        self.assertIn('Power Infusion from Priestly', html)
+        self.assertIn('Trueshot pressed · 0:05.0', html)
+
     def test_view_renders_potion_timing(self):
         from raidanalysis.web import focusview
         d = self.data(my_heart=False)
@@ -1065,9 +1090,9 @@ class TestFocusTimeline(unittest.TestCase):
         html = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [])
         self.assertIn('fraid prio', html)
         self.assertIn('Your target', html)
-        self.assertIn('Venomous Heart appeared · 2:20.0', html)
+        self.assertIn('Venomous Heart #1 · appeared 2:20.0, died 2:45', html)        # a bar per spawn
+        self.assertIn('class="fspawn died"', html)
         self.assertIn('<span>10.0 s</span>', html)                                  # potion -> add bracket
-        self.assertIn('Venomous Heart died · 2:45', html)
         self.assertIn('freact never', html)                                         # never hit it
         phased = focusview.timeline(d, dict(pull, encounter_id=7), 'Boops', color_of, order, [], [],
                                     [{'id': 1, 'start': 0}, {'id': 2, 'start': 120000}],
@@ -1075,8 +1100,10 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('<span>Stage Two</span>', phased)
         self.assertIn('<span>Phase 1</span>', phased)
         cards = focusview.cards(d, color_of, potions, [], {}, {}, 'Havoc Demon Hunters')
-        self.assertIn('pressed at 2:10.0, <b>10.0 s before it appeared</b>', cards)
-        self.assertIn('covered <b>80%</b>', cards)                                 # 20 of the 25 s
+        self.assertIn('pressed <b>10.0 s before it appeared</b>', cards)            # the spawn's tab
+        self.assertIn('data-tab="1"', cards)
+        self.assertIn('🧪 +10.0 s', cards)                                          # overall: potion chip
+        self.assertIn('covered <b>78%</b>', cards)                                 # 20 of the 25.5 s until it died
         self.assertIn('Off target', cards)
-        self.assertIn('died at 2:45', cards)
-        self.assertIn('You never hit it', cards)
+        self.assertIn('died 2:45', cards)
+        self.assertIn('never hit', cards)

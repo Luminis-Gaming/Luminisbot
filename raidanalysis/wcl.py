@@ -251,6 +251,22 @@ async def get_actor_ids(session, code):
     return _actors[code]
 
 
+_abilities = {}  # report code -> {game id: (name, icon)} (focus.py: buff events carry only the id)
+
+
+async def get_report_abilities(session, code):
+    """Every ability in a report: {game id: (name, icon file)}."""
+    if code not in _abilities:
+        if len(_abilities) > 200:
+            _abilities.clear()
+        data = await query(session, """
+            query($code: String!) { reportData { report(code: $code) { masterData { abilities { gameID name icon } } } } }
+        """, {'code': code})
+        rows = ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {}).get('abilities')) or []
+        _abilities[code] = {a['gameID']: (a.get('name') or '', a.get('icon') or '') for a in rows if a.get('gameID')}
+    return _abilities[code]
+
+
 _all_actors = {}  # report code -> every actor (focus.py: enemies by id, a player's pets)
 
 
