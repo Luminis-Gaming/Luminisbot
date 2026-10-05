@@ -8,6 +8,7 @@ Table and event payloads are the same JSON the v1 API returned; v2 just wraps
 tables in {"data": {...}}. Tables cap per-target breakdowns at the top 5, so
 anything that needs every player (avoidable hits, potions) goes through events.
 """
+import functools
 import logging
 import time
 
@@ -33,6 +34,56 @@ class WCLRateLimited(WCLError):
     def __init__(self, message, retry_after=None):
         super().__init__(message)
         self.retry_after = retry_after
+
+
+# ============================================================================
+# v1 fallback (wcl_v1.py): v1 has its own rate limit, so what it can answer goes there while v2 is
+# rate limited (blocked) or the sync has used its share of v2's hour (prefer_v1, set by sync.py).
+# ============================================================================
+
+V2_BLOCK_FALLBACK_SECONDS = 15 * 60  # after a 429 without a Retry-After
+prefer_v1 = False
+_v2_blocked_until = 0.0
+known_guild = None  # {'name', 'server', 'region'} of our guild, from a v2 report (v1 lists reports by name)
+
+
+def v2_blocked():
+    return time.time() < _v2_blocked_until
+
+
+def block_v2(seconds=None):
+    global _v2_blocked_until
+    _v2_blocked_until = max(_v2_blocked_until, time.time() + (seconds or V2_BLOCK_FALLBACK_SECONDS))
+
+
+def on_v1():
+    """Whether calls that v1 can answer go there right now."""
+    from . import wcl_v1
+    return wcl_v1.available() and (prefer_v1 or v2_blocked())
+
+
+def _v1_fallback(fn):
+    """Run fn on v1 (wcl_v1's function of the same name) while on_v1(), or when v2 answers 429."""
+    @functools.wraps(fn)
+    async def wrapper(session, *args, **kwargs):
+        from . import wcl_v1
+        v1 = getattr(wcl_v1, fn.__name__)
+        if on_v1():
+            try:
+                return await v1(session, *args, **kwargs)
+            except WCLRateLimited:
+                if v2_blocked():
+                    raise  # both are out: the sync pauses
+                # v1 is out for now (wcl_v1 noted it): v2 it is
+        try:
+            return await fn(session, *args, **kwargs)
+        except WCLRateLimited as e:
+            block_v2(e.retry_after)
+            if not wcl_v1.available():
+                raise
+            logger.info(f"[RAIDS] WCL v2 rate limited - {fn.__name__} on v1 instead")
+            return await v1(session, *args, **kwargs)
+    return wrapper
 
 
 async def _get_token(session):
@@ -79,6 +130,7 @@ async def get_rate_limit(session):
     return data.get('rateLimitData') or {}
 
 
+@_v1_fallback
 async def list_guild_reports(session, guild_id, limit=10):
     data = await query(session, """
         query($guildID: Int!, $limit: Int!) {
@@ -92,6 +144,7 @@ async def list_guild_reports(session, guild_id, limit=10):
     return ((data.get('reportData') or {}).get('reports') or {}).get('data') or []
 
 
+@_v1_fallback
 async def get_report_overview(session, code):
     """Report metadata, raid encounter pulls, phase names and the player roster."""
     data = await query(session, """
@@ -124,9 +177,21 @@ async def get_report_overview(session, code):
     report = (data.get('reportData') or {}).get('report')
     if not report:
         raise WCLError(f"Report {code} not found (private or deleted?)")
+    _remember_guild(report.get('guild'))
     return report
 
 
+def _remember_guild(guild):
+    """Our guild's name / server / region, for listing its reports on v1 (which has no guild ids)."""
+    global known_guild
+    from wcl_api import WCL_GUILD_ID
+    server = (guild or {}).get('server') or {}
+    if guild and guild.get('id') == WCL_GUILD_ID and server.get('slug'):
+        known_guild = {'name': guild.get('name'), 'server': server['slug'],
+                       'region': ((server.get('region') or {}).get('slug') or '').upper()}
+
+
+@_v1_fallback
 async def get_fight_tables(session, code, fight_id):
     """Every aggregate table the analyzer needs for one pull, in a single request."""
     data = await query(session, """
@@ -153,6 +218,92 @@ async def get_fight_tables(session, code, fight_id):
             for key, value in report.items()}
 
 
+@_v1_fallback
+async def get_fight_extras(session, code, fight_id):
+    """
+    Throughput for one pull: the DamageDone / Healing tables (totals, active time and damage by target
+    per player), WCL's parses (kills only - wipes are scraped, see sync.py) and the pull's bosses for
+    debuff uptime: {'damageDone', 'healing', 'rankings', 'boss_ids'}.
+    """
+    data = await query(session, """
+        query($code: String!, $fights: [Int]!) {
+          reportData {
+            report(code: $code) {
+              damageDone: table(fightIDs: $fights, dataType: DamageDone)
+              healing: table(fightIDs: $fights, dataType: Healing)
+              enemyDamage: table(fightIDs: $fights, dataType: DamageTaken, hostilityType: Enemies)
+              rankings(fightIDs: $fights)
+            }
+          }
+        }
+    """, {'code': code, 'fights': [fight_id]})
+    report = (data.get('reportData') or {}).get('report') or {}
+    return {'damageDone': _unwrap(report.get('damageDone')), 'healing': _unwrap(report.get('healing')),
+            'rankings': report.get('rankings'), 'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
+
+
+def _unwrap(table):
+    return (table or {}).get('data', table) if isinstance(table, dict) else table
+
+
+MAX_BOSSES = 3
+MIN_BOSS_SHARE = 0.2  # of the most-damaged boss's damage taken: less is an add WCL also calls a boss
+
+
+def boss_ids(enemy_damage_taken):
+    """
+    The pull's bosses, most damaged first, from the enemies' DamageTaken table - every one that took a
+    real share, so councils (several bosses that all have to die) count each of them; a short-lived add
+    that WCL also marks as a boss (Echo of Jawae) doesn't.
+    """
+    bosses = sorted((e for e in (enemy_damage_taken or {}).get('entries') or []
+                     if e.get('type') == 'Boss' and e.get('id') is not None), key=lambda e: -(e.get('total') or 0))
+    if not bosses:
+        return []
+    most = bosses[0].get('total') or 0
+    return [e['id'] for e in bosses if (e.get('total') or 0) >= MIN_BOSS_SHARE * most][:MAX_BOSSES]
+
+
+PLAYER_TABLES_PER_REQUEST = 5
+
+
+@_v1_fallback
+async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False):
+    """
+    Per player: the buffs they gave themselves, their debuffs on each boss, and with casts=True their
+    Casts table (names + counts) - a few players per request:
+    {actor id: {'buffs', 'debuffs': [one table per boss], 'casts'}} (v1-shaped tables, None when not asked).
+    """
+    if not actor_ids:
+        return {}
+    if len(actor_ids) > PLAYER_TABLES_PER_REQUEST:  # keep each query small: a raid is a handful of requests
+        out = {}
+        for i in range(0, len(actor_ids), PLAYER_TABLES_PER_REQUEST):
+            out.update(await get_player_tables(session, code, fight_id, actor_ids[i:i + PLAYER_TABLES_PER_REQUEST],
+                                               bosses, casts))
+        return out
+    parts = []
+    for aid in actor_ids:
+        aid = int(aid)
+        parts.append(f'b{aid}: table(fightIDs: $fights, dataType: Buffs, sourceID: {aid}, targetID: {aid})')
+        for k, boss in enumerate(bosses):
+            parts.append(f'd{aid}_{k}: table(fightIDs: $fights, dataType: Debuffs, hostilityType: Enemies, '
+                         f'sourceID: {aid}, targetID: {int(boss)})')
+        if casts:
+            parts.append(f'c{aid}: table(fightIDs: $fights, dataType: Casts, sourceID: {aid})')
+    data = await query(session, """
+        query($code: String!, $fights: [Int]!) {
+          reportData { report(code: $code) { %s } }
+        }
+    """ % '\n'.join(parts), {'code': code, 'fights': [fight_id]})
+    report = (data.get('reportData') or {}).get('report') or {}
+    return {int(aid): {'buffs': _unwrap(report.get(f'b{int(aid)}')),
+                       'debuffs': [_unwrap(report.get(f'd{int(aid)}_{k}')) for k in range(len(bosses))],
+                       'casts': _unwrap(report.get(f'c{int(aid)}'))}
+            for aid in actor_ids}
+
+
+@_v1_fallback
 async def get_events(session, code, fight_id, data_type, filter_expression, max_events=20000,
                      hostility='Friendlies'):
     """All events matching filter_expression in one pull, following pagination."""
@@ -188,6 +339,7 @@ async def get_events(session, code, fight_id, data_type, filter_expression, max_
             return events
 
 
+@_v1_fallback
 async def get_character_rankings(session, encounter_id, difficulty, class_name, spec_name, metric='dps'):
     """
     The best parses of one spec on one boss (WCL's global character rankings, page 1), best first:
@@ -207,6 +359,7 @@ async def get_character_rankings(session, encounter_id, difficulty, class_name, 
     return rankings.get('rankings') or []
 
 
+@_v1_fallback
 async def get_player_fight(session, code, fight_id, name):
     """
     One player's casts in someone else's logged kill, plus that fight's timing and the spec they
@@ -220,6 +373,7 @@ async def get_player_fight(session, code, fight_id, name):
               fights(fightIDs: $fights) { id startTime endTime phaseTransitions { id startTime } }
               events(fightIDs: $fights, dataType: Casts, filterExpression: $filter, limit: 10000) { data }
               playerDetails(fightIDs: $fights)
+              enemyDamage: table(fightIDs: $fights, dataType: DamageTaken, hostilityType: Enemies)
             }
           }
         }
@@ -229,10 +383,22 @@ async def get_player_fight(session, code, fight_id, name):
     if not fight:
         raise WCLError(f"Fight {code}#{fight_id} not found")
     start = fight['startTime']
+    entry = _details_entry(report.get('playerDetails'), name) or {}
     return {'start': start, 'end': fight['endTime'],
             'phases': [{'id': p['id'], 'start': p['startTime'] - start} for p in fight.get('phaseTransitions') or []],
             'casts': ((report.get('events') or {}).get('data')) or [],
-            'spec': _spec_in_details(report.get('playerDetails'), name)}
+            'spec': _spec_in_details(report.get('playerDetails'), name),
+            'actor_id': entry.get('id'), 'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
+
+
+def _details_entry(player_details, name):
+    details = (player_details or {}).get('data', player_details) or {}
+    details = details.get('playerDetails', details) or {}
+    for role in ('tanks', 'healers', 'dps'):
+        for entry in details.get(role) or []:
+            if entry.get('name') == name:
+                return entry
+    return None
 
 
 def _spec_in_details(player_details, name):

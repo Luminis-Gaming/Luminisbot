@@ -12,6 +12,13 @@ TOP_RARE_LIMIT times a kill that Wowhead says has a 30 s+ cooldown - minus movem
 crowd control, taunts and dispels (NOT_MAJOR) - plus tracked cooldowns (cooldowns.py) and combat
 potions.
 
+Not every 30 s+ button is a cooldown you time, though: Immolation Aura or a Blood DK's Death and Decay
+are pressed on cooldown (or on procs), so their timing says nothing. Each damage / healing ability is
+sorted into a *major* cooldown (judged on timing against the top players) or a *rotational* one
+(judged only on how often it's pressed, with the top players as the bar) - see ability_kind(). The
+rule decides most of them; ROTATIONAL_NAMES and officers' per-spec overrides (raid_spec_abilities)
+fix the rest.
+
 Timing: phases start at different times for everyone (they're health-based), so casts are
 compared as "time into phase segment n" (the n-th phase change). A *window* is a moment where
 at least 3 of the top 5 pressed the same ability within 20 s of each other; a player hits it
@@ -31,7 +38,7 @@ logger = logging.getLogger(__name__)
 TOP_N = 5
 REFRESH_DAYS = 7
 SPECS_PER_RUN = 3
-TOP_RARE_LIMIT = 25          # a top player's ability cast more often than this per kill is rotational
+TOP_RARE_LIMIT = 60          # a top player's ability cast more often than this per kill is rotational filler
 MAJOR_COOLDOWN_MS = 30000
 WINDOW_MS = 20000            # top players' casts this close together are one moment
 # Margin for "in line" with a moment (see tolerance()).
@@ -43,14 +50,29 @@ MIN_AGREE = 3
 MIN_PULL_MS = 60000          # shorter pulls say nothing about cooldown usage
 DIFFICULTIES = (3, 4, 5)
 
-THROUGHPUT, POTION, TRINKET = 'throughput', 'potion', 'trinket'
+THROUGHPUT, POTION, TRINKET, ROTATIONAL = 'throughput', 'potion', 'trinket', 'rotational'
 CATEGORY_LABELS = {THROUGHPUT: 'Damage / healing cooldowns', POTION: 'Combat potions', TRINKET: 'Trinkets & items',
-                   **cooldowns.CATEGORY_LABELS}
-CATEGORY_ORDER = (THROUGHPUT, POTION, 'personal', TRINKET, 'external', 'raid', 'utility')
+                   ROTATIONAL: 'Keep on cooldown', **cooldowns.CATEGORY_LABELS}
+CATEGORY_ORDER = (THROUGHPUT, POTION, 'personal', TRINKET, 'external', 'raid', 'utility', ROTATIONAL)
 POTION_GROUP = 'Combat potion'  # any combat potion counts - which one is a stat choice
 VERDICT_RANK = ['off', 'ok', 'mostly', 'good']  # worst first
 # Verdicts only for what a player controls alone; externals and raid cooldowns depend on the raid's plan.
-JUDGED = (THROUGHPUT, POTION, 'personal', TRINKET)
+JUDGED = (THROUGHPUT, POTION, 'personal', TRINKET, ROTATIONAL)
+
+# Major or rotational (ability_kind): a damage / healing ability is rotational when the top players
+# cast it more often than its cooldown allows (procs and resets: Crimson Scourge, charges), or when
+# fewer than half their casts fall on a moment most of them agree on (pressed whenever it's ready).
+# A 90 s+ cooldown is always major - even pressed on cooldown, it lines up with the fight.
+MAJOR, HIDE = 'major', 'hide'
+SPEC_KINDS = (MAJOR, ROTATIONAL, HIDE)
+ALWAYS_MAJOR_MS = 90000
+OVER_COOLDOWN_USAGE = 1.15
+MIN_AGREED_SHARE = 0.5
+MIN_CASTS_TO_SORT = 6        # fewer top-player casts than this: too little to tell, stays major
+# Rotational whatever the numbers say, for every spec (officers can still override per spec).
+ROTATIONAL_NAMES = {'Immolation Aura', 'Consuming Fire', 'Death and Decay'}
+# Rotational verdicts: your casts per minute as a share of the top players'.
+ROTATIONAL_GOOD, ROTATIONAL_OK = 0.85, 0.65
 
 # Long cooldowns that aren't throughput: movement, interrupts, crowd control, taunts, dispels.
 NOT_MAJOR = {
@@ -188,14 +210,48 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
                  if counts[analyzer._event_ability(e)] <= TOP_RARE_LIMIT]
         if not casts:
             continue
+        duration = fight['end'] - fight['start']
+        auras, cast_names, resources, procs = await _top_auras(session, r, fight, duration)
         players.append({'rank': len(players) + 1, 'name': r['name'], 'spec': spec, 'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
-                        'code': r['code'], 'fight_id': r['fight_id'], 'duration': fight['end'] - fight['start'],
-                        'phases': fight['phases'], 'casts': casts})
+                        'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
+                        'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
+                        'resources': resources, 'procs': procs})
     if wrong_spec:
         logger.warning(f"[RAIDS] Top {spec} {class_name} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
                        f"parse(s) of another spec")
     return players
+
+
+async def _top_auras(session, ranking, fight, duration):
+    """
+    A top player's self-buffs, debuffs on the bosses, casts per ability, resources and wasted procs
+    (throughput.py): (auras, cast names, resources, procs) - empty ones when WCL won't say.
+    """
+    from . import gamedata, throughput, wcl
+    aid = fight.get('actor_id')
+    if not aid:
+        return [], {}, None, None
+    code, fight_id, name = ranking['code'], ranking['fight_id'], ranking['name'].replace('"', '')
+    try:
+        tables = (await wcl.get_player_tables(session, code, fight_id, [aid], fight.get('boss_ids') or [],
+                                              casts=True)).get(int(aid)) or {}
+        auras, cast_names = throughput.top_auras(tables, fight['start'], duration)
+        events = await wcl.get_events(session, code, fight_id, 'Resources',
+                                      f'type = "resourcechange" and target.name = "{name}"')
+        resources = throughput.resources(events, {int(aid): ranking['name']}, fight['end']).get(ranking['name'])
+        tracked = gamedata.tracked_ids()
+        procs = throughput.proc_candidates({aid: tables}, tracked)
+        proc_events = await wcl.get_events(
+            session, code, fight_id, 'Buffs',
+            f"source.id = target.id and ability.id in ({','.join(map(str, procs))})") if procs else []
+        return (auras, cast_names, resources or {'gains': {}, 'mana_end': None},
+                throughput.proc_waste(proc_events, {int(aid): ranking['name']}).get(ranking['name']) or {})
+    except wcl.WCLRateLimited:
+        raise
+    except wcl.WCLError as e:
+        logger.info(f"[RAIDS] No auras for top parse {code}#{fight_id}: {e}")
+        return [], {}, None, None
 
 
 def _slug(name):
@@ -297,21 +353,11 @@ def windows(top, spell_ids):
     return sorted(out, key=lambda w: (w['segment'][0], w['at']))
 
 
-def compare(pulls, top, spell_info):
+def top_groups(top, spell_info):
     """
-    How one player's pulls line up with the top players, per major ability.
-
-    pulls: [{'number', 'duration', 'phases': [{'id', 'start'}], 'casts': [[t, id]], 'cast_ids': set or None}]
-    top: benchmark players. spell_info: {id: {'name', 'meta', ...}} (Wowhead).
-    -> [{'name', 'ids', 'icon_id', 'category', 'top_users', 'top_per_min', 'ours_per_min', 'ours_casts',
-         'windows', 'hits', 'considered', 'verdict', 'known'}], most important first.
+    The top players' major-ability casts, grouped by name - the same ability can have several spell
+    IDs (e.g. Alter Time cast / return): {name: {'ids', 'users', 'category', 'counts': {player: casts}}}.
     """
-    pulls = [p for p in pulls if p['duration'] >= MIN_PULL_MS]
-    if not top or not pulls:
-        return []
-    need = min(MIN_AGREE, len(top))
-    ref = reference_starts(top)
-    # Same ability, several spell IDs (e.g. Alter Time cast / return): group by name.
     groups = {}
     for i, player in enumerate(top):
         for _, sid in player['casts']:
@@ -326,6 +372,76 @@ def compare(pulls, top, spell_info):
             g['ids'].add(sid)
             g['users'].add(i)
             g['counts'][i] += 1
+    return groups
+
+
+def agreed_share(top, ids, wins):
+    """Share of the top players' casts of `ids` that fall on one of the moments (windows) most of them agree on."""
+    moments = {}
+    for w in wins:
+        moments.setdefault(w['segment'], []).append(w['at'])
+    total = agreed = 0
+    for player in top:
+        for t, sid in player['casts']:
+            if sid not in ids:
+                continue
+            key, into = segment_of(t, player.get('phases'))
+            total += 1
+            agreed += any(abs(into - at) <= WINDOW_MS / 2 for at in moments.get(key, ()))
+    return agreed / total if total else 0.0
+
+
+def ability_kind(name, group, top, wins, cooldown, override=None):
+    """
+    MAJOR (judged on timing) or ROTATIONAL (judged on how often) - or HIDE when an officer said so.
+    Only damage / healing cooldowns are sorted by the rule; potions, trinkets and defensives stay major.
+    """
+    if override in SPEC_KINDS:
+        return override
+    if group['category'] != THROUGHPUT:
+        return MAJOR
+    if name in ROTATIONAL_NAMES:
+        return ROTATIONAL
+    if not cooldown or cooldown >= ALWAYS_MAJOR_MS:
+        return MAJOR
+    users = [i for i in group['users'] if top[i].get('duration')]
+    if sum(group['counts'][i] for i in users) < MIN_CASTS_TO_SORT:
+        return MAJOR
+    # How many casts the cooldown allows in each top player's fight (+1: it starts ready).
+    usage = sorted(group['counts'][i] / (top[i]['duration'] / cooldown + 1) for i in users)
+    if usage[len(usage) // 2] > OVER_COOLDOWN_USAGE:
+        return ROTATIONAL  # more casts than the cooldown allows: procs / resets
+    if agreed_share(top, group['ids'], wins) < MIN_AGREED_SHARE:
+        return ROTATIONAL  # no moment they agree on: pressed whenever it's ready
+    return MAJOR
+
+
+def _texts(ids, spell_info):
+    """(effect duration, cooldown) of an ability from Wowhead's text, None when unknown."""
+    texts = [spell_info.get(sid) or {} for sid in sorted(ids)]
+    effect = next((d for d in (duration_ms(t.get('description')) for t in texts) if d), None)
+    cooldown = next((c for c in (cooldown_ms(t.get('meta')) for t in texts) if c), None)
+    return effect, cooldown
+
+
+def compare(pulls, top, spell_info, overrides=None):
+    """
+    How one player's pulls line up with the top players, per major ability.
+
+    pulls: [{'number', 'duration', 'phases': [{'id', 'start'}], 'casts': [[t, id]], 'cast_ids': set or None}]
+    top: benchmark players. spell_info: {id: {'name', 'meta', ...}} (Wowhead).
+    overrides: {ability name: MAJOR / ROTATIONAL / HIDE} - officers' calls for this spec.
+    -> [{'name', 'ids', 'icon_id', 'category', 'top_users', 'top_per_min', 'ours_per_min', 'ours_casts',
+         'windows', 'hits', 'considered', 'verdict', 'known', 'kind', 'auto_kind'}], most important first.
+       Rotational abilities have category ROTATIONAL, no windows, and a verdict on how often alone.
+    """
+    pulls = [p for p in pulls if p['duration'] >= MIN_PULL_MS]
+    if not top or not pulls:
+        return []
+    overrides = overrides or {}
+    need = min(MIN_AGREE, len(top))
+    ref = reference_starts(top)
+    groups = top_groups(top, spell_info)
     rows = []
     minutes = sum(p['duration'] for p in pulls) / 60000
     # Every potion we drank counts for the potion group, not just the ones the top players picked -
@@ -357,10 +473,15 @@ def compare(pulls, top, spell_info):
         ours = [[t for t, sid in p['casts'] if sid in ids] for p in pulls]
         ours_casts = sum(len(c) for c in ours)
         # The effect's duration and the cooldown, from Wowhead, cap each moment's margin.
-        texts = [spell_info.get(sid) or {} for sid in sorted(ids)]
-        effect = next((d for d in (duration_ms(t.get('description')) for t in texts) if d), None)
-        cooldown = next((c for c in (cooldown_ms(t.get('meta')) for t in texts) if c), None)
+        effect, cooldown = _texts(ids, spell_info)
         wins = windows(top, ids)
+        auto_kind = ability_kind(name, g, top, wins, cooldown)
+        kind = ability_kind(name, g, top, wins, cooldown, overrides.get(name))
+        if kind == HIDE:
+            continue
+        cat = ROTATIONAL if kind == ROTATIONAL else g['category']
+        if kind == ROTATIONAL:
+            wins = []  # pressed whenever it's ready: there are no moments to line up with
         for w in wins:
             w['tolerance'] = tolerance(w['spread'], effect, cooldown)
             w.update(considered=0, hits=0, deltas=[], skipped=0)
@@ -396,7 +517,10 @@ def compare(pulls, top, spell_info):
             verdict = None
         elif not ours_casts:
             # A trinket you never used all night is one you don't have on - not a missed cast.
-            verdict = 'not_equipped' if g['category'] == TRINKET else 'missing'
+            verdict = 'not_equipped' if cat == TRINKET else 'missing'
+        elif cat == ROTATIONAL:
+            ratio = ours_per_min / top_per_min if top_per_min else 1
+            verdict = 'good' if ratio >= ROTATIONAL_GOOD else 'ok' if ratio >= ROTATIONAL_OK else 'off'
         else:
             verdicts = []
             if timing:
@@ -409,12 +533,13 @@ def compare(pulls, top, spell_info):
             verdict = min(verdicts, key=VERDICT_RANK.index) if verdicts else None
         offset = sorted(offsets)[len(offsets) // 2] if offsets else None  # shown from one moment on
         weak = weak_moments(wins, ref) if considered and ours_casts else []  # nothing to work on if never used
-        rows.append({'name': name, 'ids': sorted(ids), 'icon_id': min(ids), 'category': g['category'],
+        rows.append({'name': name, 'ids': sorted(ids), 'icon_id': min(ids), 'category': cat,
                      'top_users': len(g['users']), 'top_per_min': top_per_min, 'ours_per_min': ours_per_min,
                      'ours_casts': ours_casts, 'windows': [dict(w, ref_at=ref.get(w['segment'], 0) + w['at'])
                                                            for w in wins],
                      'hits': hits, 'considered': considered, 'verdict': verdict, 'known': bool(known),
-                     'offset': offset, 'effect_ms': effect, 'weak': weak})
+                     'offset': offset, 'effect_ms': effect, 'weak': weak, 'cooldown_ms': cooldown,
+                     'kind': kind, 'auto_kind': auto_kind, 'overridden': name in overrides})
     order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
     return sorted(rows, key=lambda r: (order.get(r['category'], 9), -r['top_users'], r['name']))
 
@@ -464,16 +589,26 @@ def _clock(ms):
 
 
 def notes(rows, spec_label, limit=3):
-    """Feedback lines from compare(): [{'tone': 'good'|'bad', 'text'}] - misses first, a couple of wins."""
+    """
+    Feedback lines from compare(): [{'tone': 'good'|'bad'|'info', 'text'}] - misses first, a couple of
+    wins. A trinket you don't have is loot luck, not a mistake: it's a tip about what's worth getting.
+    """
     bad, good, info = [], [], []
     for r in rows:
         if r['category'] not in JUDGED or not r['verdict']:
             continue
         moments = ', '.join(_clock(w['ref_at']) for w in r['windows'][:4])
         if r['verdict'] == 'not_equipped':
-            info.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use this trinket - you didn't have "
-                        f"it equipped (or never used it) tonight")
-        elif r['verdict'] == 'missing':
+            info.append(trinket_tip(r, spec_label))
+        elif r['category'] == ROTATIONAL:
+            if r['verdict'] == 'missing':
+                bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} keep it rolling - you never "
+                           f"pressed it (not talented?)")
+            elif r['verdict'] in ('off', 'ok'):
+                bad.append(f"{r['name']}: {r['ours_per_min']:.1f}× per minute - the top {spec_label} manage "
+                           f"{r['top_per_min']:.1f}×. No set moment for it: press it whenever it's ready")
+            continue
+        if r['verdict'] == 'missing':
             bad.append(f"{r['name']}: {r['top_users']} of the top {spec_label} use it - you never pressed it "
                        f"(not talented, or a missed cooldown?)")
         elif r['verdict'] in ('mostly', 'ok', 'off') and r.get('weak'):
@@ -495,6 +630,12 @@ def notes(rows, spec_label, limit=3):
     return ([{'tone': 'bad', 'text': t} for t in bad[:limit]]
             + [{'tone': 'good', 'text': t} for t in good[:max(1, limit - len(bad))]]
             + [{'tone': 'info', 'text': t} for t in info[:1]])
+
+
+def trinket_tip(row, spec_label):
+    """'Soulcoiler Ritual Vessel: 4 of the top 5 Havoc Demon Hunters use this trinket - worth getting if it drops'."""
+    return (f"{row['name']}: {row['top_users']} of the top {spec_label} use this trinket - "
+            f"worth getting if it drops")
 
 
 def our_pulls(pulls, name, spec=None):
@@ -568,16 +709,20 @@ def spec_majors(encounter_id, difficulty, spell_lookup):
     rows = db.get_benchmarks(encounter_id, difficulty)
     ids = {sid for r in rows for p in r['players'] or [] for _, sid in p['casts']}
     info = spell_lookup(list(ids)) if spell_lookup and ids else {}
+    all_overrides = db.get_spec_overrides()
     out = {}
     for r in rows:
         top = r['players'] or []
-        users = {}
-        for i, p in enumerate(top):
-            for _, sid in p['casts']:
-                if category(sid, info.get(sid)) in (THROUGHPUT, TRINKET):
-                    users.setdefault(info[sid]['name'], set()).add(i)
         need = min(MIN_AGREE, len(top))
-        out[(r['class'], r['spec'])] = {name for name, who in users.items() if len(who) >= need}
+        overrides = all_overrides.get((r['class'], r['spec']), {})
+        majors = set()
+        for name, g in top_groups(top, info).items():
+            if g['category'] not in (THROUGHPUT, TRINKET) or len(g['users']) < need:
+                continue
+            kind = ability_kind(name, g, top, windows(top, g['ids']), _texts(g['ids'], info)[1], overrides.get(name))
+            if kind == MAJOR:
+                majors.add(name)
+        out[(r['class'], r['spec'])] = majors
     return out
 
 
@@ -617,5 +762,6 @@ def for_player(numbered, name):
     pulls = our_pulls(numbered, name, spec=player['spec'])
     ids = {sid for p in top for _, sid in p['casts']} | {sid for p in pulls for _, sid in p['casts']}
     spells = db.get_spells(ids) if ids else {}
+    overrides = db.get_spec_overrides().get((player['class'], player['spec']), {})
     return {'player': player, 'benchmark': benchmark, 'top': top, 'pulls': pulls,
-            'rows': compare(pulls, top, spells), 'spells': spells, 'label': spec_label(player)}
+            'rows': compare(pulls, top, spells, overrides), 'spells': spells, 'label': spec_label(player)}

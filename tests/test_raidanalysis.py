@@ -422,7 +422,7 @@ class TestTopPlayerComparison(unittest.TestCase):
         self.assertTrue(any('Essence Break' in n['text'] and n['tone'] == 'bad' for n in notes))
         trinket = [n for n in notes if 'Cursed Trinket' in n['text']]
         self.assertEqual([n['tone'] for n in trinket], ['info'])  # not a missed cast
-        self.assertIn("didn't have it equipped", trinket[0]['text'])
+        self.assertIn('worth getting', trinket[0]['text'])  # loot luck: a tip, not a reproach
 
     def test_off_timing_and_unreached_phases(self):
         from raidanalysis import benchmarks
@@ -753,6 +753,47 @@ class TestNeverCastVsNotFetched(unittest.TestCase):
         self.assertEqual((shiv(not_fetched)['known'], shiv(not_fetched)['verdict']), (False, None))
 
 
+class TestMajorVsRotational(unittest.TestCase):
+    """Immolation Aura / Death and Decay are pressed on cooldown or on procs: judged on how often, not when."""
+    SPELLS = {20: {'name': 'Death and Decay', 'meta': 'Instant · 30 sec cooldown'},
+              21: {'name': 'Fel Barrage', 'meta': 'Instant · 30 sec cooldown'},
+              22: {'name': 'Eye Beam', 'meta': 'Channeled · 1 min cooldown'},
+              23: {'name': 'Celestial Conduit', 'meta': 'Channeled · 1.5 min cooldown'}}
+
+    def test_procs_drift_and_overrides(self):
+        from raidanalysis import benchmarks
+        top = []
+        for p in range(5):
+            casts = [[t, 21] for t in range(4000 * p, 300000, 18000)]           # more than a 30 s cd allows
+            casts += [[t + 12000 * p, 22] for t in range(0, 240000, 60000)]     # on cooldown, everyone out of step
+            casts += [[60000, 23], [200000, 23]]                                # rare and agreed
+            top.append({'duration': 300000, 'phases': [], 'casts': casts})
+        ours = {'number': 1, 'duration': 300000, 'phases': [], 'cast_ids': {21, 22, 23},
+                'casts': [[t, 21] for t in range(0, 300000, 40000)] + [[t, 22] for t in range(5000, 240000, 60000)]
+                         + [[61000, 23], [201000, 23]]}
+        rows = {r['name']: r for r in benchmarks.compare([ours], top, self.SPELLS)}
+        self.assertEqual(rows['Fel Barrage']['category'], 'rotational')    # procs / resets
+        self.assertEqual(rows['Eye Beam']['category'], 'rotational')       # no agreed moment
+        self.assertEqual(rows['Celestial Conduit']['category'], 'throughput')
+        self.assertEqual(rows['Fel Barrage']['windows'], [])
+        self.assertEqual(rows['Fel Barrage']['verdict'], 'off')            # 1.6 / min vs ~3.3
+        self.assertEqual(rows['Eye Beam']['verdict'], 'good')              # same count, timing doesn't matter
+        notes = benchmarks.notes(list(rows.values()), 'Havoc Demon Hunters')
+        self.assertTrue(any('Fel Barrage' in n['text'] and 'whenever' in n['text'] for n in notes))
+        # An officer's call wins, and the automatic one is kept for the dropdown.
+        rows = {r['name']: r for r in benchmarks.compare([ours], top, self.SPELLS,
+                                                         {'Eye Beam': 'major', 'Celestial Conduit': 'hide'})}
+        self.assertEqual((rows['Eye Beam']['category'], rows['Eye Beam']['auto_kind']), ('throughput', 'rotational'))
+        self.assertNotIn('Celestial Conduit', rows)
+
+    def test_named_rotational(self):
+        from raidanalysis import benchmarks
+        top = [{'duration': 300000, 'phases': [], 'casts': [[30000, 20]]} for _ in range(5)]
+        ours = {'number': 1, 'duration': 300000, 'phases': [], 'cast_ids': {20}, 'casts': [[90000, 20]]}
+        row = benchmarks.compare([ours], top, self.SPELLS)[0]
+        self.assertEqual((row['category'], row['verdict']), ('rotational', 'good'))
+
+
 class TestTrinketWithSeveralIds(unittest.TestCase):
     def test_item_id_makes_the_whole_ability_a_trinket(self):
         from raidanalysis import benchmarks
@@ -777,3 +818,137 @@ class TestNestedCastVariants(unittest.TestCase):
         ids = {e['guid'] for e in analyzer.cast_entries(table)}
         self.assertTrue({456640, 452487, 427917} <= ids)
         self.assertEqual(analyzer.rare_cast_ids(table), [258920, 427917, 452487, 456640])
+
+
+class TestThroughputAndUptime(unittest.TestCase):
+    """analysis['extras']: parses, damage by target, uptime and casts per minute, next to raid and top players."""
+
+    def pull(self, number, kill, heart_share, uptime_share, casts):
+        """Two DPS: Boops (whose numbers vary) and Other (always 30% into the Heart)."""
+        from raidanalysis import throughput
+        fight = {'id': number, 'startTime': 0, 'endTime': 300000, 'kill': kill}
+        roster = [{'name': 'Boops', 'role': 'dps'}, {'name': 'Other', 'role': 'dps'}]
+        def targets(share):  # the DamageDone table lists each player's damage by target
+            return [{'name': "Ula'tek", 'type': 'Boss', 'total': 3_000_000 * (1 - share)},
+                    {'name': "Heart of Ula'tek", 'type': 'NPC', 'total': 3_000_000 * share}]
+        tables = {
+            'damageDone': {'entries': [
+                {'name': 'Boops', 'total': 3_000_000, 'activeTime': 285000, 'targets': targets(heart_share)},
+                {'name': 'Other', 'total': 3_000_000, 'activeTime': 270000, 'targets': targets(0.3)}]},
+            'healing': {'entries': []},
+        }
+
+        def player(share, buff_share, cast_count):
+            return {'debuffs': [],
+                    'buffs': {'auras': [{'guid': 258920, 'name': 'Immolation Aura', 'totalUptime': 300000 * buff_share,
+                                         'bands': [{'startTime': 0, 'endTime': 6000}]},
+                                        {'guid': 1, 'name': 'Flask of Power', 'totalUptime': 300000}]},
+                    'casts': {'entries': [{'name': 'Chaos Strike', 'total': cast_count},
+                                          {'name': 'Immolation Aura', 'total': 10}]}}
+        per_player = {1: player(heart_share, uptime_share, casts), 2: player(0.3, 0.9, 100)}
+        parses = throughput.parses_from_rankings({'data': [{'roles': {'dps': {'characters': [
+            {'name': 'Boops', 'rankPercent': 82, 'bracketPercent': 90, 'amount': 10000}]}}}]}) if kill else {}
+        extras = throughput.build_extras(fight, roster, {1: 'Boops', 2: 'Other'}, tables, per_player, parses)
+        analysis = {'players': roster, 'extras': extras}
+        return number, {'fight_id': number, 'kill': kill, 'start_ms': 0, 'end_ms': 300000, 'analysis': analysis}
+
+    def test_focus_uptime_and_cpm(self):
+        from raidanalysis import throughput
+        numbered = [self.pull(1, False, 0.1, 0.6, 50), self.pull(2, True, 0.1, 0.6, 50)]
+        me = numbered[1][1]['analysis']['extras']['players']['Boops']
+        self.assertEqual([a['name'] for a in me['auras']], ['Immolation Aura'])   # no flask
+        self.assertEqual(me['auras'][0]['bands'], [[0, 6]])                       # seconds
+        rows = throughput.per_pull(numbered, 'Boops', 'dps')
+        self.assertEqual([r['parse'] for r in rows], [None, 82])
+        self.assertAlmostEqual(rows[0]['amount'], 10000)
+        heart = next(r for r in throughput.focus(numbered, 'Boops', 'dps') if r['name'] == "Heart of Ula'tek")
+        self.assertAlmostEqual(heart['mine_share'], 0.1)
+        self.assertAlmostEqual(heart['raid_share'], 0.3)
+        self.assertTrue(heart['low'])
+        top = [{'duration': 300000, 'auras': [{'id': 258920, 'name': 'Immolation Aura', 'kind': 'buff',
+                                               'uptime': 270000}],
+                'cast_names': {'Chaos Strike': 100, 'Immolation Aura': 11, 'Felblade': 20}} for _ in range(5)]
+        up = throughput.uptime(numbered, 'Boops', top)
+        self.assertEqual([(u['name'], round(u['ours'], 2), round(u['top'], 2), u['verdict']) for u in up],
+                         [('Immolation Aura', 0.6, 0.9, 'off')])
+        cpm = throughput.cpm(numbered, 'Boops', top)
+        by_name = {a['name']: a for a in cpm['abilities']}
+        self.assertEqual(set(by_name), {'Chaos Strike', 'Immolation Aura', 'Felblade'})  # every cast, either side
+        self.assertEqual(by_name['Chaos Strike']['verdict'], 'off')    # 10 / min vs 20
+        self.assertEqual(by_name['Felblade']['ours'], 0)
+        self.assertAlmostEqual(cpm['ours'], 12.0)
+        active, raid = throughput.active_time(numbered, 'Boops', 'dps')
+        self.assertAlmostEqual(active, 0.95)
+        self.assertAlmostEqual(raid, 0.9)
+
+    def test_tabs_render(self):
+        from raidanalysis.web import performance
+        numbered = [self.pull(1, True, 0.1, 0.6, 50)]
+        player = {'name': 'Boops', 'role': 'dps'}
+        html = performance.damage_tab(numbered, player, lambda n: f'/p/{n}')
+        self.assertIn("Heart of Ula", html)
+        self.assertIn('parse p75', html)
+        html = performance.rotation_tab(numbered, player, None)
+        self.assertIn('Active time', html)
+        empty = performance.damage_tab([(1, {'fight_id': 1, 'analysis': {}})], player, lambda n: '')
+        self.assertIn('Not fetched', empty)
+
+
+class TestWclV1Fallback(unittest.TestCase):
+    """v1 answers what it can while v2 is rate limited or the sync spares v2's hour."""
+
+    def setUp(self):
+        from raidanalysis import wcl, wcl_v1
+        self.wcl, self.v1 = wcl, wcl_v1
+        self.saved = (wcl.prefer_v1, wcl._v2_blocked_until, wcl_v1._blocked_until)
+        wcl.prefer_v1, wcl._v2_blocked_until, wcl_v1._blocked_until = False, 0.0, 0.0
+
+    def tearDown(self):
+        self.wcl.prefer_v1, self.wcl._v2_blocked_until, self.v1._blocked_until = self.saved
+
+    def run_events(self, v2, v1):
+        import asyncio
+        from unittest import mock
+        with mock.patch.dict('os.environ', {'WCL_V1_API_KEY': 'key'}), \
+                mock.patch.object(self.wcl, 'query', v2), mock.patch.object(self.v1, 'get_events', v1):
+            return asyncio.run(self.wcl.get_events(None, 'code', 1, 'Casts', "type = 'cast'"))
+
+    def test_switching(self):
+        from unittest import mock
+
+        async def v2_ok(*a, **k):
+            return {'reportData': {'report': {'events': {'data': ['v2'], 'nextPageTimestamp': None}}}}
+
+        async def v2_limited(*a, **k):
+            raise self.wcl.WCLRateLimited('429', 120)
+        v1 = mock.AsyncMock(return_value=['v1'])
+        self.assertEqual(self.run_events(v2_ok, v1), ['v2'])
+        self.assertEqual(self.run_events(v2_limited, v1), ['v1'])     # 429 -> same call on v1
+        self.assertTrue(self.wcl.v2_blocked())
+        self.wcl._v2_blocked_until = 0.0
+        self.wcl.prefer_v1 = True                                     # the sync used its share of v2
+        self.assertEqual(self.run_events(v2_ok, v1), ['v1'])
+
+        async def v1_limited(*a, **k):
+            self.v1.block(60)
+            raise self.wcl.WCLRateLimited('v1 429', 60)
+        self.assertEqual(self.run_events(v2_ok, v1_limited), ['v2'])  # v1 out: back to v2
+
+    def test_overview_shape(self):
+        report = {'title': 'Raid', 'start': 1, 'end': 2, 'owner': 'me',
+                  'phases': [{'boss': 7, 'phases': ['One', 'Break', 'Two'], 'intermissions': [2]}],
+                  'friendlies': [{'id': 5, 'name': 'Boops', 'type': 'Monk', 'fights': [{'id': 3}]},
+                                 {'id': 6, 'name': 'Ritual Drummer', 'type': 'NPC', 'fights': [{'id': 3}]}],
+                  'fights': [{'id': 1, 'boss': 0, 'start_time': 0, 'end_time': 5},
+                             {'id': 3, 'boss': 7, 'name': 'Boss', 'difficulty': 5, 'kill': False, 'size': 20,
+                              'start_time': 100, 'end_time': 900, 'fightPercentage': 8313, 'bossPercentage': 7633,
+                              'lastPhaseForPercentageDisplay': 2, 'phases': [{'id': 2, 'startTime': 400}],
+                              'zoneID': 9, 'zoneName': 'Abyss'}]}
+        o = self.v1.overview(report, 'code')
+        f = o['fights'][0]
+        self.assertEqual(len(o['fights']), 1)                                 # trash left out
+        self.assertEqual((f['fightPercentage'], f['bossPercentage']), (83.13, 76.33))
+        self.assertTrue(f['lastPhaseIsIntermission'])
+        self.assertEqual(f['friendlyPlayers'], [5])                           # no NPC allies
+        self.assertEqual(o['phases'][0]['phases'][1], {'id': 2, 'name': 'Break', 'isIntermission': True})
+        self.assertEqual(o['masterData']['actors'][0]['subType'], 'Monk')

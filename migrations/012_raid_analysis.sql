@@ -105,3 +105,27 @@ CREATE TABLE IF NOT EXISTS raid_benchmarks (
     fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     PRIMARY KEY (encounter_id, difficulty, class, spec)
 );
+
+-- Officers' calls on a spec's abilities for the top-player comparison (benchmarks.ability_kind):
+-- 'major' (timed), 'rotational' (pressed on cooldown, judged on casts / min) or 'hide'.
+CREATE TABLE IF NOT EXISTS raid_spec_abilities (
+    class TEXT NOT NULL,                         -- WCL class name, e.g. 'DeathKnight'
+    spec TEXT NOT NULL,                          -- WCL spec name, e.g. 'Blood'
+    ability_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    updated_by TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (class, spec, ability_name)
+);
+
+-- Buffs the game's Cooldown Manager tracks (raidanalysis/gamedata.py, from wago.tools, refreshed weekly):
+-- the auras the Rotation tab judges for uptime and wasted procs.
+CREATE TABLE IF NOT EXISTS raid_tracked_spells (
+    spell_id BIGINT NOT NULL,
+    kind TEXT NOT NULL,                          -- 'tracked'
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (spell_id, kind)
+);
+
+-- When a report first came in: the 10 latest raid nights are kept, imports for 7 days (db.prune_reports).
+ALTER TABLE raid_reports ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();

@@ -147,8 +147,35 @@ def _other_specs(p):
     return f' <span class="muted">(also {esc(text)})</span>'
 
 
+PLAYER_TABS = (('execution', '🧮', 'Execution'), ('damage', '📈', 'Damage & focus'),
+               ('cooldowns', '⚔️', 'Cooldowns'), ('rotation', '🔁', 'Rotation'))
+
+
+def player_hero(p, tab_href, active):
+    """The player page's header - score, sub-scores, contributions - and its section tabs. tab_href(key) -> link."""
+    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" href="{esc(tab_href(key))}">{icon} {label}</a>'
+                   for key, icon, label in PLAYER_TABS)
+    return f"""
+    <div class="card">
+        <div class="player-hero">
+            {score_ring(p['score'], 'lg')}
+            <div>
+                <h2>{player_name(p['name'], p['class'])}</h2>
+                <p class="muted">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(p['class']))} ·
+                   {p['pulls']} pulls · {p['deaths']} early death{'s' if p['deaths'] != 1 else ''} by mistake</p>
+                <div class="subscores wide">{_subscore_bars(p['scores'])}</div>
+                <div class="chips">{_contributions(p)}</div>
+            </div>
+        </div>
+    </div>
+    <nav class="ptabs">{tabs}</nav>"""
+
+
 def player_page(p, guide_for, pull_href):
-    """One player across the selected pulls. pull_href(number) -> link to that pull."""
+    """
+    The Execution section of a player's page: score breakdown, feedback, avoidable hits and the pull-by-pull
+    table (the header with the score is player_hero). pull_href(number) -> link to that pull.
+    """
     rows = []
     for pp in p['per_pull']:
         if pp['died_at'] is not None:
@@ -173,18 +200,6 @@ def player_page(p, guide_for, pull_href):
         for a in sorted(p['avoidable'].values(), key=lambda a: -a['hits']))
     chart = per_pull_columns([(pp['number'], pp['avoidable_hits']) for pp in p['per_pull']], 'Avoidable hits per pull')
     return f"""
-    <div class="card">
-        <div class="player-hero">
-            {score_ring(p['score'], 'lg')}
-            <div>
-                <h2>{player_name(p['name'], p['class'])}</h2>
-                <p class="muted">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(p['class']))} ·
-                   {p['pulls']} pulls · {p['deaths']} early death{'s' if p['deaths'] != 1 else ''} by mistake</p>
-                <div class="subscores wide">{_subscore_bars(p['scores'])}</div>
-                <div class="chips">{_contributions(p)}</div>
-            </div>
-        </div>
-    </div>
     <div class="card">
         <div class="sec-head"><div class="sec-title"><span class="sec-icon">🧮</span><div><h2>Score breakdown</h2></div></div></div>
         <p class="muted small">Every number behind the score. 100 = best; relative components compare with the rest of

@@ -78,7 +78,71 @@ async def _analyze_pull(session, code, fight, actors):
     # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
     # (a talent you don't take), as opposed to one we didn't fetch.
     analysis['casts_seen'] = sorted(used_ids)
+    extras = await _fight_extras(session, code, fight, actors, analysis)
+    if extras:
+        analysis['extras'] = extras
     return analysis
+
+
+PROC_EVENTS_MAX = 60000  # a raid's tracked self-buff events: ~20-30k a pull
+SCRAPE_PAUSE_SECONDS = 1  # between website scrapes (wipe parses), to look less like a bot
+
+
+async def _wipe_parses(session, code, fight, roster):
+    """
+    WCL's API only ranks kills; the website shows parses for wipes too - scraped the same way as for
+    the Discord log posts, when a browser session is configured (WCL_SCRAPE_COOKIES).
+    """
+    from wcl_web_scraper import scrape_configured, scrape_wcl_web_data
+    if not scrape_configured():
+        return {}
+    from . import throughput
+    parses = {}
+    metrics = ['dps'] + (['hps'] if any(p.get('role') == 'healer' for p in roster) else [])
+    for metric in metrics:
+        scraped = await scrape_wcl_web_data(session, code, fight['id'], fight['startTime'], fight['endTime'],
+                                            fight['encounterID'], metric)
+        wanted = {p['name'] for p in roster if (p.get('role') == 'healer') == (metric == 'hps')}
+        parses.update({n: v for n, v in throughput.parses_from_scrape(scraped).items() if n in wanted})
+        await asyncio.sleep(SCRAPE_PAUSE_SECONDS)
+    return parses
+
+
+async def _fight_extras(session, code, fight, actors, analysis):
+    """
+    Throughput, parses, damage by target, uptime, casts, resources and wasted procs per player
+    (throughput.build_extras) - a handful of requests per pull. A failure here never fails the pull:
+    it's retried on a later sync.
+    """
+    from . import gamedata, throughput
+    roster = analysis.get('players') or []
+    names_by_id = {a['id']: a['name'] for a in actors}
+    try:
+        extras = await wcl.get_fight_extras(session, code, fight['id'])
+        in_pull = {p['name'] for p in roster}
+        ids = [aid for aid, name in names_by_id.items() if name in in_pull]
+        per_player = await wcl.get_player_tables(session, code, fight['id'], ids, extras['boss_ids'], casts=True)
+        resource_events = await wcl.get_events(session, code, fight['id'], 'Resources', "type = 'resourcechange'")
+        tracked = gamedata.tracked_ids()
+        procs = throughput.proc_candidates(per_player, tracked)
+        proc_events = []
+        if procs:  # only the self-buffs worth checking: the whole raid's are ~30k events a pull
+            proc_events = await wcl.get_events(session, code, fight['id'], 'Buffs',
+                                               f"source.id = target.id and ability.id in ({','.join(map(str, procs))})",
+                                               max_events=PROC_EVENTS_MAX)
+        parses = throughput.parses_from_rankings(extras.get('rankings'))
+        if not parses and not fight.get('kill'):
+            try:
+                parses = await _wipe_parses(session, code, fight, roster)
+            except Exception as e:  # the website is best effort
+                logger.info(f"[RAIDS] Wipe parses for {code}#{fight['id']} not scraped: {e}")
+        return throughput.build_extras(fight, roster, names_by_id, extras, per_player, parses,
+                                       resource_events, proc_events, tracked)
+    except wcl.WCLRateLimited:
+        raise
+    except wcl.WCLError as e:
+        logger.warning(f"[RAIDS] Throughput / uptime for {code}#{fight['id']} failed: {e}")
+        return None
 
 
 async def sync_report(session, code, source='guild', force=False):
@@ -109,6 +173,18 @@ async def sync_report(session, code, source='guild', force=False):
         analyzed += 1
         logger.info(f"[RAIDS] Analyzed {code}#{fight['id']} {fight['name']} "
                     f"({'kill' if fight.get('kill') else 'wipe'})")
+    # Pulls analyzed before throughput / uptime were fetched: just that part (2 requests a pull).
+    from .throughput import EXTRAS_VERSION
+    missing = db.fight_ids_missing_extras(code, EXTRAS_VERSION) & done
+    for i, fight in enumerate(f for f in pulls if f['id'] in missing):
+        if i and i % BUDGET_CHECK_EVERY == 0 and not await _budget_ok(session):
+            raise wcl.WCLError(_pause_message() if _paused() else _budget_message())
+        status['current'] = f"Fetching throughput & uptime — {report.get('title') or code} ({fight['name']})"
+        pull = db.get_pull(code, fight['id'])
+        extras = await _fight_extras(session, code, fight, actors, (pull or {}).get('analysis') or {})
+        if extras:
+            db.set_pull_extras(code, fight['id'], extras)
+            analyzed += 1
     return analyzed
 
 
@@ -177,18 +253,40 @@ def _rate_limited(error):
     return _pause_message()
 
 
-async def _budget_ok(session):
-    """Refresh status['wcl'] from WCL's own counter; False once we're past our share of the hour."""
-    if _paused():
+def _v1_takes_over(why):
+    """v2 is out (or our share of its hour is used): carry on with WCL v1 if it's set up and has room."""
+    from . import wcl_v1
+    if not wcl_v1.available():
         return False
+    if not wcl.prefer_v1:
+        logger.info(f"[RAIDS] {why} - continuing on WCL v1")
+    wcl.prefer_v1 = True
+    status['api'] = 'v1'
+    return True
+
+
+async def _budget_ok(session):
+    """
+    Refresh status['wcl'] from WCL's own counter; False once we're past our share of the hour - unless
+    WCL v1 can take over (wcl_v1.py: its own rate limit), then the sync goes on there.
+    """
+    if _paused():
+        return _v1_takes_over('WCL v2 is rate limited')
     try:
         limits = await wcl.get_rate_limit(session)
+    except wcl.WCLRateLimited as e:
+        wcl.block_v2(e.retry_after)
+        return _v1_takes_over('WCL v2 is rate limited')
     except wcl.WCLError:
         return True  # can't tell - let the request itself report a rate limit
     spent, cap = limits.get('pointsSpentThisHour') or 0, limits.get('limitPerHour') or 3600
     status['wcl'] = {'spent': spent, 'limit': cap, 'reset_in': limits.get('pointsResetIn'),
                      'checked': time.time()}
-    return spent < _share * cap
+    if spent < _share * cap:
+        wcl.prefer_v1 = False  # the hour reset: back to v2
+        status['api'] = 'v2'
+        return True
+    return _v1_takes_over(f'WCL v2 budget share used ({spent}/{cap})')
 
 
 async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False):
@@ -198,12 +296,16 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
     """
     if _lock.locked():
         return None
-    if _paused():  # WCL said 429 earlier: wait for its budget to reset instead of knocking again
+    from . import wcl_v1
+    if _paused() and not wcl_v1.available():  # WCL said 429 earlier: wait for its budget to reset
         status.update(running=False, current=None, last_result=_pause_message(), last_error=_pause_message())
         return 0
     async with _lock:
         global _share
         _share = FULL_BUDGET_SHARE if full_budget else WCL_BUDGET_SHARE
+        wcl.prefer_v1 = False  # every run starts on v2; _budget_ok moves it to v1 when needed
+        if _paused():
+            wcl.block_v2(status['paused_until'] - time.time())
         status.update(running=True, last_error=None)
         started = time.time()
         total, reports, errors = 0, 0, []
@@ -213,12 +315,24 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                 if not await _budget_ok(session):
                     raise wcl.WCLError(_budget_message())
                 spent_before = status['wcl']['spent'] if status.get('wcl') else None
-                listed = await wcl.list_guild_reports(session, WCL_GUILD_ID, limit=limit)
+                try:
+                    listed = await wcl.list_guild_reports(session, WCL_GUILD_ID, limit=limit)
+                except wcl.WCLRateLimited:
+                    raise
+                except wcl.WCLError as e:  # e.g. v1 without the guild's name: the other logs still sync
+                    logger.warning(f"[RAIDS] Guild report list unavailable: {e}")
+                    errors.append(str(e))
+                    listed = []
                 codes = [(c, 'manual', True) for c in force_codes]
-                codes += [(c, 'guild', False) for c in extra_codes if c not in force_codes]
+                # A log someone asked about (Discord recap): kept for a week like an import, unless it's a
+                # recent guild log anyway (then the guild list below upgrades it).
+                codes += [(c, 'manual', False) for c in extra_codes if c not in force_codes]
+                # Finished nights too, while their pulls lack throughput / uptime (fetched since).
+                from .throughput import EXTRAS_VERSION
                 codes += [(r['code'], 'guild', False) for r in listed
                           if r['code'] not in force_codes and r['code'] not in extra_codes
-                          and not db.report_is_final(r['code'])]
+                          and (not db.report_is_final(r['code'])
+                               or db.fight_ids_missing_extras(r['code'], EXTRAS_VERSION))]
                 queued = {code for code, _, _ in codes}
                 codes += [(c, 'event', False) for c in _event_codes_to_sync(queued)]
                 for i, (code, source, force) in enumerate(codes):
@@ -268,6 +382,18 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
         except Exception:
             logger.exception("[RAIDS] Mythic Trap scan failed")
         try:
+            removed = db.prune_reports()
+            if removed:
+                logger.info(f"[RAIDS] Removed {len(removed)} old raid log(s): {', '.join(removed)}")
+        except Exception:
+            logger.exception("[RAIDS] Pruning old raid logs failed")
+        try:
+            status['current'] = 'Refreshing the Cooldown Manager spell list…'
+            from .gamedata import refresh_if_stale
+            await refresh_if_stale()
+        except Exception as e:
+            logger.warning(f"[RAIDS] Cooldown Manager spells not refreshed: {e}")
+        try:
             status['current'] = 'Looking up spell tooltips on Wowhead…'
             from .spells import fill_missing
             await fill_missing()
@@ -299,6 +425,7 @@ async def fetch_all_benchmarks(full_budget=False):
     async with _lock:
         global _share
         _share = FULL_BUDGET_SHARE if full_budget else WCL_BUDGET_SHARE
+        wcl.prefer_v1 = False
         status.update(running=True, last_error=None, current='Fetching top players…')
         started = time.time()
         done, error = 0, None

@@ -13,7 +13,7 @@ from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, s
 
 VERDICTS = {'good': ('pill-kill', 'In line'), 'mostly': ('pill-mostly', 'Mostly in line'),
             'ok': ('pill', 'Hit & miss'), 'off': ('pill-wipe', 'Off'), 'missing': ('pill-wipe', 'Never used'),
-            'not_equipped': ('pill-muted', 'Not equipped')}
+            'not_equipped': ('pill-muted', '💎 Worth getting')}
 
 
 def _spec_icon_class(spell_id):
@@ -44,11 +44,41 @@ def _weak_line(r):
             f'most important (more top players there) first">⚠ {esc(benchmarks.weak_text(r["weak"]))}</div>')
 
 
-def _not_equipped_line(r):
+ROTATION_VERDICTS = {'good': ('pill-kill', 'Often enough'), 'ok': ('pill', 'A bit low'),
+                     'off': ('pill-wipe', 'Too few'), 'missing': ('pill-wipe', 'Never used')}
+KIND_LABELS = {benchmarks.MAJOR: 'Major cooldown', benchmarks.ROTATIONAL: 'Keep on cooldown', benchmarks.HIDE: 'Hide'}
+
+
+def major_rows(data):
+    """What the cooldown comparison shows: everything that's timed (not the keep-on-cooldown abilities)."""
+    return [r for r in data['rows'] if r['category'] != benchmarks.ROTATIONAL]
+
+
+def _trinket_line(r):
+    """A trinket the top players use and you don't have: loot luck, so a tip rather than a verdict."""
     if r.get('verdict') != 'not_equipped':
         return ''
-    return (f'<div class="muted small" style="margin:3px 0 0 24px">ℹ️ {r["top_users"]} of the top players use it - '
-            f'not equipped (or never used) tonight, so not judged</div>')
+    return (f'<div class="muted small" style="margin:3px 0 0 24px">💎 {r["top_users"]} of the top players use it - '
+            f'worth getting if it drops</div>')
+
+
+def rotational_rows(data):
+    return [r for r in data['rows'] if r['category'] == benchmarks.ROTATIONAL]
+
+
+def kind_form(r, player, back):
+    """Officers: is this a major cooldown, one to keep on cooldown, or not worth showing - for the whole spec."""
+    auto = KIND_LABELS.get(r.get('auto_kind'), '')
+    options = ''.join(f'<option value="{k}"{" selected" if r.get("overridden") and r["kind"] == k else ""}>{label}</option>'
+                      for k, label in KIND_LABELS.items())
+    return (f'<form method="post" action="/admin/raids/spec-ability" class="tag-form">'
+            f'<input type="hidden" name="class" value="{esc(player.get("class") or "")}">'
+            f'<input type="hidden" name="spec" value="{esc(player.get("spec") or "")}">'
+            f'<input type="hidden" name="ability_name" value="{esc(r["name"])}">'
+            f'<input type="hidden" name="back" value="{esc(back)}">'
+            f'<select name="kind" class="kind-select" onchange="this.form.submit()" title="For every {esc(benchmarks.spec_label(player))} '
+            f'(officers only)"><option value=""{"" if r.get("overridden") else " selected"}>Auto ({esc(auto)})</option>'
+            f'{options}</select></form>')
 
 
 def _pull_lined_up(r, pull):
@@ -65,17 +95,21 @@ def _pull_lined_up(r, pull):
     return hits, considered
 
 
-def summary(data):
-    """One row per major ability: top usage, yours, how many top-player moments you hit, verdict."""
+def summary(data, back=None):
+    """
+    One row per major ability: top usage, yours, how many top-player moments you hit, verdict.
+    back: the page to return to after an officer re-sorts an ability (adds the Kind control).
+    """
     rows = []
-    for r in data['rows']:
+    for r in major_rows(data):
         moments = (f'{r["hits"]} / {r["considered"]}' if r['considered'] else
                    '<span class="muted">—</span>')
         top_when = ', '.join(fmt_duration(w['ref_at']) for w in r['windows'][:5]) or '<span class="muted">no shared moment</span>'
         rows.append(f"""
             <tr class="{'' if r['category'] in benchmarks.JUDGED else 'muted-row'}">
-                <td>{_ability(r, data['spells'])}{_weak_line(r)}{_not_equipped_line(r)}</td>
-                <td class="small muted">{esc(benchmarks.CATEGORY_LABELS.get(r['category'], ''))}</td>
+                <td>{_ability(r, data['spells'])}{_weak_line(r)}{_trinket_line(r)}</td>
+                <td class="small muted">{esc(benchmarks.CATEGORY_LABELS.get(r['category'], ''))}
+                    {kind_form(r, data['player'], back) if back and r['category'] in (benchmarks.THROUGHPUT, benchmarks.TRINKET) else ''}</td>
                 <td class="num" data-v="{r['top_per_min']:.3f}">{r['top_per_min'] * 5:.1f}
                     <span class="muted small">({r['top_users']}/{len(data['top'])})</span></td>
                 <td class="num" data-v="{r['ours_per_min']:.3f}">{r['ours_per_min'] * 5:.1f}</td>
@@ -95,13 +129,39 @@ def summary(data):
         {''.join(rows)}</table></div>"""
 
 
+def rotation_tiles(data, back=None):
+    """
+    The keep-on-cooldown abilities as WowAnalyzer-style tiles: casts per minute next to the top players'
+    (their timing doesn't matter, only that it's rolling). back adds the officers' Kind control.
+    """
+    tiles = []
+    for r in rotational_rows(data):
+        share = r['ours_per_min'] / r['top_per_min'] if r['top_per_min'] else 0
+        band = {'good': 'good', 'ok': 'ok'}.get(r['verdict'], 'bad')
+        cls, text = ROTATION_VERDICTS.get(r['verdict'], ('pill-muted', '—'))
+        pill = f'<span class="pill {cls}">{text}</span>' if r['known'] else _verdict_pill(None, False)
+        cooldown = f' · {r["cooldown_ms"] / 1000:.0f} s cooldown' if r.get('cooldown_ms') else ''
+        tiles.append(f"""
+            <div class="rot-tile">
+                <div class="rot-head">{_ability(r, data['spells'])}{pill}</div>
+                <div class="rot-value"><b>{r['ours_per_min']:.1f}</b><span>casts / min</span></div>
+                <div class="subscore-track" title="{100 * share:.0f}% of the top players' rate">
+                    <div class="subscore-fill {band}" style="width:{min(100, 100 * share):.0f}%"></div></div>
+                <div class="muted small">Top {r['top_users']}/{len(data['top'])}: {r['top_per_min']:.1f} / min{cooldown}</div>
+                {kind_form(r, data['player'], back) if back else ''}
+            </div>""")
+    if not tiles:
+        return ''
+    return f'<div class="rot-tiles">{"".join(tiles)}</div>'
+
+
 def timeline(data, pull, boss=None, spell_lookup=None):
     """
     Grouped by ability: a header lane with the shared moments, then You and the top 5 underneath -
     under the boss's abilities from your pull (boss = {'abilities', 'casts'} from its analysis), so
     you can see what a cooldown was lined up against. spell_lookup(ids) -> Wowhead text (spells.lookup).
     """
-    top, rows, spells = data['top'], data['rows'], data['spells']
+    top, rows, spells = data['top'], major_rows(data), data['spells']
     ref = benchmarks.reference_starts(top)
     boss = boss or {}
     boss_meta = {a['id']: a for a in boss.get('abilities') or []}

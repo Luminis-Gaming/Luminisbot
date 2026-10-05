@@ -121,6 +121,29 @@ th[data-sort]:hover { color: var(--text); }
 .stat-tile b { display: block; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
 .stat-tile span { display: block; margin-top: 2px; font-size: 11px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--faint); }
+/* Player page sections (Execution / Damage & focus / Cooldowns / Rotation) */
+.ptabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
+.ptab { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-weight: 600; font-size: 14px; }
+.ptab:hover { color: var(--text); border-color: var(--border-strong); text-decoration: none; }
+.ptab.active { color: #fff; background: var(--accent-soft); border-color: var(--accent); }
+/* WowAnalyzer-style stat tiles: rotation (casts / min) and uptime */
+.rot-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.rot-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.rot-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.rot-head .cmp-ab, .rot-head .ability-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rot-value b { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
+.rot-value span { margin-left: 6px; font-size: 12px; color: var(--faint); }
+.uptime-strip { position: relative; height: 10px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.uptime-strip i { position: absolute; top: 0; bottom: 0; background: var(--accent); opacity: .85; }
+.kind-select { font: inherit; font-size: 11px; padding: 1px 4px; background: var(--surface-3); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 6px; }
+.parse { font-weight: 700; }
+.parse.p100 { color: #e5cc80; } .parse.p99 { color: #e268a8; } .parse.p95 { color: #ff8000; }
+.parse.p75 { color: #a335ee; } .parse.p50 { color: #0070ff; } .parse.p25 { color: #1eff00; } .parse.p0 { color: #9d9d9d; }
+.focus-bar { display: flex; height: 8px; border-radius: 3px; overflow: hidden; background: var(--surface-3); min-width: 120px; }
+.focus-bar i { display: block; height: 100%; }
 @media (max-width: 600px) {
     .sec-head { flex-direction: column; }
     .sec-icon { width: 32px; height: 32px; font-size: 16px; }

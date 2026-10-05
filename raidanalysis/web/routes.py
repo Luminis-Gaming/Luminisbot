@@ -13,8 +13,8 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from .. import analyzer, benchmarks, db, guides, progstats, spells, sync, teams
-from . import compare, consumables, insights, players
+from .. import SYNC_INTERVAL_MINUTES, SYNC_REPORT_LIMIT, analyzer, benchmarks, db, guides, progstats, spells, sync, teams
+from . import compare, consumables, insights, performance, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
                      section_head, stat_tiles, subsection,
                      hit_timeline,
@@ -41,6 +41,7 @@ def register_routes(app):
     app.router.add_get('/admin/raids/report/{code}/compare/{name}', handle_compare)
     app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', handle_boss)
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', handle_tag)
+    app.router.add_post('/admin/raids/spec-ability', handle_spec_ability)
     app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', handle_player_trend)
 
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
@@ -338,8 +339,10 @@ async def handle_overview(request):
         last = f" · last sync used {st['last_points']}" if st.get('last_points') is not None else ''
         sync_state += (f'<p class="small {"bad-text" if share >= 0.7 else "muted"}" title="WCL allows a number of '
                        f'points per hour (bigger queries cost more), shared with the bot\'s other WCL buttons. '
-                       f'The sync pauses at 70% to leave room for them.">WCL API: {budget["spent"]}/{budget["limit"]} '
-                       f'points this hour{resets}{last}</p>')
+                       f'The sync pauses at 70% to leave room for them - or carries on with WCL v1 (its own limit) '
+                       f'when that is set up.">WCL API: {budget["spent"]}/{budget["limit"]} '
+                       f'points this hour{resets}{last}'
+                       f'{" · now on v1" if st.get("api") == "v1" else ""}</p>')
 
     boss_rows = ''.join(f"""
         <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}'" style="cursor:pointer">
@@ -379,12 +382,14 @@ async def handle_overview(request):
            events, analyzed for deaths, mechanics, interrupts, dispels and consumables.</p>
         {sync_state if session is not PUBLIC_SESSION else ''}
         <form method="post" action="/admin/raids/sync" class="inline-form">
-            <label class="small muted">Latest reports</label>
-            <input type="number" name="limit" value="10" min="1" max="50" style="width:80px">
-            <input type="text" name="code" placeholder="…or a WCL report URL / code to import" style="min-width:320px">
-            <button class="btn btn-primary btn-sm" {'disabled' if st['running'] else ''}>🔄 Sync now</button>
+            <input type="text" name="code" required placeholder="Paste a Warcraft Logs report link or code"
+                   style="min-width:360px">
+            <button class="btn btn-primary btn-sm" {'disabled' if st['running'] else ''}>📥 Import &amp; analyze</button>
             {_full_budget_box()}
         </form>
+        <p class="small muted">The guild's logs come in by themselves every {SYNC_INTERVAL_MINUTES} minutes and
+           the {db.KEEP_LATEST_LOGS} latest raid nights are kept. Import any other log (an older night, another
+           guild's kill) to analyze it now - imports are kept for {db.KEEP_IMPORTED_DAYS} days.</p>
         {_benchmarks_line(st['running']) if session is not PUBLIC_SESSION else ''}
     </div>
     <div class="card">{filter_bar}</div>
@@ -414,19 +419,15 @@ async def handle_overview(request):
 # ============================================================================
 
 async def handle_sync(request):
+    """Import (or re-analyze) one report now - the guild's own logs are synced on a timer."""
     _session(request)
     data = await request.post()
-    try:
-        limit = max(1, min(50, int(data.get('limit') or 10)))
-    except ValueError:
-        limit = 10
+    limit = SYNC_REPORT_LIMIT
     codes = []
-    raw = (data.get('code') or '').strip()
-    if raw:
-        match = REPORT_CODE_RE.search(raw)
-        if not match:
-            raise web.HTTPFound('/admin/raids?error=' + quote("That doesn't look like a WCL report URL or code."))
-        codes.append(match.group(1))
+    match = REPORT_CODE_RE.search((data.get('code') or '').strip())
+    if not match:
+        raise web.HTTPFound('/admin/raids?error=' + quote("Paste a Warcraft Logs report link or code to import."))
+    codes.append(match.group(1))
 
     if sync.status['running']:
         raise web.HTTPFound('/admin/raids?error=' + quote('A sync is already running.'))
@@ -1028,13 +1029,28 @@ async def handle_player(request):
         raise web.HTTPFound(f'/admin/raids/report/{quote(code)}?boss={selected[0]}-{selected[1]}&view=players'
                             f'&error=' + quote(f'{name} was not in those pulls.'))
     fights = {number: pull['fight_id'] for number, pull in numbered}
-    await benchmarks.ensure_spells_for(list(enumerate(groups[selected], 1)), name)
+    tab = request.query.get('tab')
+    tab = tab if tab in {key for key, _, _ in players.PLAYER_TABS} else 'execution'
+    page_href = (f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'
+                 + (f'&pull={fight_id}' if fight_id else ''))
+    tab_href = lambda key: page_href + ('' if key == 'execution' else f'&tab={key}')  # noqa: E731
+    pull_href = lambda number: f'/admin/raids/report/{code}/{fights[number]}'  # noqa: E731
+    whole_night = list(enumerate(groups[selected], 1))  # top-player comparisons use every pull of the boss
     body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
-            + players.player_page(player, guide_for,
-                                  lambda number: f'/admin/raids/report/{code}/{fights[number]}')
-            + _compare_card(request, code, selected, name, list(enumerate(groups[selected], 1)),
-                            f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'
-                            + (f'&pull={fight_id}' if fight_id else '')))
+            + players.player_hero(player, tab_href, tab))
+    if tab == 'execution':
+        body += players.player_page(player, guide_for, pull_href)
+    elif tab == 'damage':
+        body += performance.damage_tab(numbered, player, pull_href)
+    elif tab == 'cooldowns':
+        await benchmarks.ensure_spells_for(whole_night, name)
+        body += _compare_card(request, code, selected, name, whole_night, tab_href('cooldowns'))
+    else:
+        await benchmarks.ensure_spells_for(whole_night, name)
+        data = benchmarks.for_player(whole_night, name)
+        from ..gamedata import tracked_ids
+        body += performance.rotation_tab(numbered, player, data, back=None if request.get('public') else tab_href('rotation'),
+                                         tracked=tracked_ids())
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
 
 
@@ -1089,8 +1105,11 @@ def _compare_pull(data, wanted=None):
     return eligible, pull
 
 
-def _compare_sections(code, numbered, data, pull, eligible, chip_href):
-    """(intro, summary, timeline) HTML for the comparison - the compare page and the player page share it."""
+def _compare_sections(code, numbered, data, pull, eligible, chip_href, back=None):
+    """
+    (intro, summary, timeline) HTML for the comparison - the compare page and the player page share it.
+    back: where officers return after re-sorting an ability (None on the public pages).
+    """
     rows_by_fight = {p['fight_id']: p for _, p in numbered}
 
     def chip_label(p):
@@ -1105,7 +1124,9 @@ def _compare_sections(code, numbered, data, pull, eligible, chip_href):
     fetched_text = f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ''
     data['subtitle'] = (f'Major cooldowns, potions and defensives next to the top {len(data["top"])} '
                         f'{esc(data["label"])} parses on Warcraft Logs{fetched_text}. '
-                        '"Major" = anything they press rarely with a 30 s+ cooldown, plus potions and defensives. '
+                        '"Major" = cooldowns of 30 s+ they press at moments they agree on, plus potions and '
+                        'defensives; abilities pressed whenever they\'re ready (Immolation Aura, Death and Decay...) '
+                        'are judged on the Rotation tab instead. '
                         "Verdicts use all of tonight's pulls of 1 min+; the timeline shows one pull.")
     summary = f"""
         <p class="muted small">"Lined up" counts the moments where at least 3 of the top {len(data['top'])} press an
@@ -1113,7 +1134,7 @@ def _compare_sections(code, numbered, data, pull, eligible, chip_href):
            and how many of those you pressed it close enough to: 3-20 s, tighter when the top players agree and
            never more than half the ability's effect (a 15 s buff pressed 12 s early mostly misses). Externals and raid
            cooldowns are shown for reference only - they depend on your raid's plan.</p>
-        {compare.summary(data)}"""
+        {compare.summary(data, back)}"""
     timeline = f"""
         <p class="muted small">Grouped by ability: your pull first, then the top players. Shaded bands are the
            moments most of them agree on; the boss's abilities on top are from your pull.
@@ -1135,7 +1156,8 @@ def _compare_card(request, code, selected, name, numbered, page_href):
     eligible, pull = _compare_pull(data, request.query.get('tl') or request.query.get('pull'))
     joiner = '&' if '?' in page_href else '?'
     intro, summary, timeline = _compare_sections(
-        code, numbered, data, pull, eligible, lambda fight_id: f'{page_href}{joiner}tl={fight_id}#compare')
+        code, numbered, data, pull, eligible, lambda fight_id: f'{page_href}{joiner}tl={fight_id}#compare',
+        back=None if request.get('public') else page_href)
     return f"""
     <div class="card" id="compare">
         {section_head('⚔️', 'Cooldowns vs top players', data['subtitle'])}
@@ -1190,7 +1212,8 @@ async def handle_compare(request):
         return _page(f'{name} vs top players', session, head + f'<p>{why}</p></div>')
     eligible, pull = _compare_pull(data, request.query.get('pull'))
     intro, summary, timeline = _compare_sections(
-        code, numbered, data, pull, eligible, lambda fight_id: compare_url(code, selected, name, fight_id))
+        code, numbered, data, pull, eligible, lambda fight_id: compare_url(code, selected, name, fight_id),
+        back=None if request.get('public') else compare_url(code, selected, name, request.query.get('pull')))
     body = head + f"""
         <p class="small">{data['subtitle']}</p>
         {intro}
@@ -1551,4 +1574,20 @@ async def handle_tag(request):
         raise web.HTTPFound(back)
     db.set_tag(encounter_id, ability_id, data.get('ability_name') or '', data.get('tag') or '',
                session.get('username'))
+    raise web.HTTPFound(back)
+
+
+# ============================================================================
+# POST /admin/raids/spec-ability - major cooldown / keep on cooldown / hide, for a whole spec
+# ============================================================================
+
+async def handle_spec_ability(request):
+    session = _session(request)
+    data = await request.post()
+    back = data.get('back') or '/admin/raids'
+    if not back.startswith('/admin/raids'):
+        back = '/admin/raids'
+    class_name, spec, ability_name = (data.get(k) or '' for k in ('class', 'spec', 'ability_name'))
+    if class_name and spec and ability_name:
+        db.set_spec_override(class_name, spec, ability_name[:200], data.get('kind') or '', session.get('username'))
     raise web.HTTPFound(back)

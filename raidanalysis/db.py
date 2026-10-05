@@ -56,6 +56,8 @@ def ensure_schema(cursor):
             PRIMARY KEY (report_code, fight_id)
         );
     """)
+    # When a report first came in: imported logs are kept for a week (prune_reports)
+    cursor.execute("ALTER TABLE raid_reports ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()")
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_raid_pulls_boss
         ON raid_pulls(encounter_id, difficulty);
@@ -129,6 +131,28 @@ def ensure_guide_schema(cursor):
         );
     """)
     cursor.execute("ALTER TABLE raid_spells ADD COLUMN IF NOT EXISTS parser INTEGER NOT NULL DEFAULT 1")
+    # Spells the game's Cooldown Manager tracks as buffs (gamedata.py), from wago.tools
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_tracked_spells (
+            spell_id BIGINT NOT NULL,
+            kind TEXT NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (spell_id, kind)
+        );
+    """)
+    # Officers' calls on a spec's abilities: a major cooldown (timed), rotational (pressed on cooldown)
+    # or hidden - overriding benchmarks.ability_kind(). Class / spec as WCL names them ('DeathKnight').
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_spec_abilities (
+            class TEXT NOT NULL,
+            spec TEXT NOT NULL,
+            ability_name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            updated_by TEXT,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (class, spec, ability_name)
+        );
+    """)
 
 
 def _run(sql, params=(), fetch=None):
@@ -158,6 +182,8 @@ def upsert_report(report, phase_names, source='guild'):
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (code) DO UPDATE SET
             title = EXCLUDED.title, end_time = EXCLUDED.end_time,
+            -- imported by hand first, then seen in the guild's own list: it's a guild log (kept by prune_reports)
+            source = CASE WHEN EXCLUDED.source = 'guild' THEN 'guild' ELSE raid_reports.source END,
             zone_id = EXCLUDED.zone_id, zone_name = EXCLUDED.zone_name,
             phase_names = EXCLUDED.phase_names, synced_at = NOW()
     """, (report['code'], report.get('title') or report['code'], (report.get('owner') or {}).get('name'),
@@ -195,6 +221,52 @@ def analyzed_fight_ids(code, version):
         WHERE report_code = %s AND (analysis->>'version')::int >= %s
     """, (code, version), fetch='all')
     return {r['fight_id'] for r in rows}
+
+
+def fight_ids_missing_extras(code, version):
+    """Pulls of a report whose throughput / uptime (analysis->'extras', throughput.py) is missing or older."""
+    rows = _run("""
+        SELECT fight_id FROM raid_pulls
+        WHERE report_code = %s AND analysis IS NOT NULL
+          AND COALESCE((analysis->'extras'->>'v')::int, 0) < %s
+    """, (code, version), fetch='all')
+    return {r['fight_id'] for r in rows}
+
+
+def set_pull_extras(code, fight_id, extras):
+    _run("""
+        UPDATE raid_pulls SET analysis = jsonb_set(analysis, '{extras}', %s)
+        WHERE report_code = %s AND fight_id = %s
+    """, (Json(extras), code, fight_id))
+
+
+KEEP_LATEST_LOGS = 10   # the guild's latest raid logs are kept...
+KEEP_IMPORTED_DAYS = 7  # ...plus anything imported (or re-fetched for a Discord recap) this week
+KEEP_EMPTY_DAYS = 30    # logs without raid pulls (M+, trash) are remembered this long so they're checked once
+
+
+def prune_reports():
+    """
+    Drop raid nights we no longer keep (the analyses are big): everything but the KEEP_LATEST_LOGS latest
+    guild / raid-event logs and what came in during the last KEEP_IMPORTED_DAYS. Returns the codes removed.
+    An older night can always be imported again by pasting its link.
+    """
+    rows = _run("""
+        WITH raid AS (
+            SELECT r.code, r.source, r.start_time, r.created_at,
+                   EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = r.code) AS has_pulls
+            FROM raid_reports r
+        ), latest AS (
+            SELECT code FROM raid WHERE has_pulls AND source <> 'manual' ORDER BY start_time DESC LIMIT %s
+        )
+        DELETE FROM raid_reports r USING raid
+        WHERE r.code = raid.code
+          AND raid.code NOT IN (SELECT code FROM latest)
+          AND COALESCE(raid.created_at, NOW()) < NOW() - make_interval(days => %s)
+          AND (raid.has_pulls OR COALESCE(raid.created_at, NOW()) < NOW() - make_interval(days => %s))
+        RETURNING r.code
+    """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, KEEP_EMPTY_DAYS), fetch='all')
+    return [r['code'] for r in rows or []]
 
 
 def delete_report(code):
@@ -582,8 +654,9 @@ def benchmarks_needed(limit, refresh_days, difficulties, recent_days=30):
               AND b.class = c.class AND b.spec = c.spec
               AND b.fetched_at > NOW() - CASE WHEN b.status = 'error' THEN INTERVAL '1 day'
                                               ELSE make_interval(days => %s) END
-              -- fetched before every top parse's spec was checked: fetch again
-              AND (jsonb_array_length(b.players) = 0 OR b.players -> 0 ? 'spec')
+              -- fetched before every top parse's spec was checked, or before their auras and
+              -- casts were kept (uptime / casts per minute): fetch again
+              AND (jsonb_array_length(b.players) = 0 OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras'))
         )
         ORDER BY c.last_played DESC
         LIMIT %s
@@ -625,6 +698,52 @@ def attempted_spell_ids(spell_ids):
           AND (status <> 'error' OR fetched_at > NOW() - INTERVAL '1 hour')
     """, ([int(i) for i in spell_ids], _spell_parser()), fetch='all')
     return {r['spell_id'] for r in rows}
+
+
+def tracked_spells_stale(days):
+    row = _run("SELECT MAX(fetched_at) > NOW() - make_interval(days => %s) AS fresh FROM raid_tracked_spells",
+               (days,), fetch='one')
+    return not (row and row['fresh'])
+
+
+def replace_tracked_spells(kind, spell_ids):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM raid_tracked_spells WHERE kind = %s", (kind,))
+            cur.executemany("INSERT INTO raid_tracked_spells (spell_id, kind) VALUES (%s, %s)",
+                            [(int(i), kind) for i in sorted(spell_ids)])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_tracked_spells(kind):
+    return frozenset(r['spell_id'] for r in _run("SELECT spell_id FROM raid_tracked_spells WHERE kind = %s",
+                                                 (kind,), fetch='all'))
+
+
+def get_spec_overrides():
+    """{(class, spec): {ability name: kind}} - officers' major / rotational / hide calls."""
+    out = {}
+    for r in _run("SELECT class, spec, ability_name, kind FROM raid_spec_abilities", fetch='all'):
+        out.setdefault((r['class'], r['spec']), {})[r['ability_name']] = r['kind']
+    return out
+
+
+def set_spec_override(class_name, spec, ability_name, kind, username):
+    """kind '' (or unknown) removes the override: back to the automatic call."""
+    from .benchmarks import SPEC_KINDS
+    if kind not in SPEC_KINDS:
+        _run("DELETE FROM raid_spec_abilities WHERE class = %s AND spec = %s AND ability_name = %s",
+             (class_name, spec, ability_name))
+        return
+    _run("""
+        INSERT INTO raid_spec_abilities (class, spec, ability_name, kind, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (class, spec, ability_name) DO UPDATE SET kind = EXCLUDED.kind,
+            updated_by = EXCLUDED.updated_by, updated_at = NOW()
+    """, (class_name, spec, ability_name, kind, username))
 
 
 def get_benchmarks(encounter_id, difficulty):
