@@ -148,7 +148,8 @@ def _bands(row, cls, duration, tip):
 def _cooldown_lanes(cooldowns, auras, duration):
     """
     Your major cooldowns: a lane per ability (first pressed first) with a marker per press and, where the
-    ability leaves a buff on you, a bar for how long it lasted.
+    ability leaves a buff on you, a bar for how long it lasted. Returns (lanes, picks [(key, name, icon)]):
+    each lane has its own key, so it can be picked on its own.
     """
     mine = {a['name']: a for a in auras if a['mine']}
     by_name = {}
@@ -156,8 +157,8 @@ def _cooldown_lanes(cooldowns, auras, duration):
         by_name.setdefault(name, {'sid': sid, 'icon': icon, 'casts': []})['casts'].append(t)
     for name, aura in mine.items():  # a buff of yours with no press logged (or under another name)
         by_name.setdefault(name, {'sid': aura['id'], 'icon': aura['icon'], 'casts': []})
-    lanes = []
-    for name, cd in by_name.items():
+    lanes, picks = [], []
+    for i, (name, cd) in enumerate(by_name.items()):
         aura = mine.get(name)
         bars = _bands(aura, 'mine', duration, esc(name)) if aura else ''
         marks = ''.join(f'<i class="m cd" style="left:{_at(t, duration)}'
@@ -165,19 +166,24 @@ def _cooldown_lanes(cooldowns, auras, duration):
                         f'data-spell="{cd["sid"]}" data-tip="{esc(name)} pressed · {_clock(t)}"></i>' for t in cd['casts'])
         presses = f'{len(cd["casts"])}× this pull' if cd['casts'] else 'its buff'
         lanes.append((f'<div class="tl-lab f-cd" data-spell="{cd["sid"]}" data-tip="{esc(name)} · {presses}">'
-                      f'{_icon(cd["icon"])}<span>{esc(name)}</span></div>', 'f-cd', bars + marks, 'cds'))
-    return lanes
+                      f'{_icon(cd["icon"])}<span>{esc(name)}</span></div>', 'f-cd', bars + marks, f'cds{i}'))
+        picks.append((f'cds{i}', name, cd['icon'], len(cd['casts']) or len((aura or {}).get('bands') or [])))
+    return lanes, picks
 
 
 def _external_lanes(auras, duration):
-    """Buffs others put on you (Power Infusion, lust, Pain Suppression...): a lane per buff, a bar per time."""
-    lanes = []
-    for aura in (a for a in auras if not a['mine']):
+    """
+    Buffs others put on you (Power Infusion, lust, Pain Suppression...): a lane per buff, a bar per time.
+    Returns (lanes, picks), like _cooldown_lanes.
+    """
+    lanes, picks = [], []
+    for i, aura in enumerate(a for a in auras if not a['mine']):
         who = ', '.join(aura['from'])
         lanes.append((f'<div class="tl-lab f-cd" data-spell="{aura["id"]}" data-tip="{esc(aura["name"])} from {esc(who)}">'
                       f'{_icon(aura["icon"])}<span>{esc(aura["name"])}</span></div>', 'f-cd',
-                      _bands(aura, 'ext', duration, f'{esc(aura["name"])} from {esc(who)}'), 'ext'))
-    return lanes
+                      _bands(aura, 'ext', duration, f'{esc(aura["name"])} from {esc(who)}'), f'ext{i}'))
+        picks.append((f'ext{i}', aura['name'], aura['icon'], len(aura['bands'])))
+    return lanes, picks
 
 
 def _group(title, hint='', key=None):
@@ -300,7 +306,8 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                      f'{_lead_text(pot[1])} ({esc(w["target"])}, {_clock(w["start"])})">'
                      f'<span>{abs(pot[1]):.1f} s</span></i>')
     auras = data.get('auras') or []
-    cd_lanes, ext_lanes = _cooldown_lanes(cooldowns, auras, duration), _external_lanes(auras, duration)
+    (cd_lanes, cd_picks), (ext_lanes, ext_picks) = _cooldown_lanes(cooldowns, auras, duration), \
+        _external_lanes(auras, duration)
     if cd_lanes:
         lanes += [_group('⚔️ Your cooldowns', 'a marker per press · bar: its buff on you', 'cds')] + cd_lanes
     if ext_lanes:
@@ -308,11 +315,21 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     lanes += [_group('🧪 Your potion', 'bracket: potion → priority add appearing'),
               ('<div class="tl-lab f-cds">Potion</div>', 'f-cds', pots, None)]
 
-    extra = [(key, label) for key, label, lanes_ in (('cds', '⚔️ Your cooldowns', cd_lanes),
-                                                     ('ext', '🤝 Buffs from others', ext_lanes)) if lanes_]
-    on |= {key for key, _ in extra}
-    chips = ''.join(f'<button type="button" class="tl-chip" data-g="{key}" aria-pressed="true">{label}</button>'
-                    for key, label in extra) + ''.join(
+    # Your cooldowns / buffs from others: a chip toggles the group, the picker each ability (PAGE_JS)
+    groups = [(cat, label, picks) for cat, label, picks in (('cds', '⚔️ Your cooldowns', cd_picks),
+                                                           ('ext', '🤝 Buffs from others', ext_picks)) if picks]
+    on |= {cat for cat, _, _ in groups} | {key for _, _, picks in groups for key, *_ in picks}
+    menu = ''.join(
+        f'<div><h5>{label}</h5>' + ''.join(f'<label><input type="checkbox" value="{key}" data-cat="{cat}" checked>'
+                                           f'{_icon(icon)}{esc(name)} <span class="muted">×{count}</span></label>'
+                                           for key, name, icon, count in picks) + '</div>'
+        for cat, label, picks in groups)
+    chips = ''.join(f'<button type="button" class="tl-chip" data-cat="{cat}" aria-pressed="true">{label}</button>'
+                    for cat, label, _ in groups)
+    if groups:
+        chips += (f'<details class="tl-pick"><summary>Pick cooldowns & buffs ▾</summary>'
+                  f'<div class="tl-pick-menu">{menu}</div></details>')
+    chips += ''.join(
         f'<button type="button" class="tl-chip" data-g="{key}" aria-pressed="{"true" if key in on else "false"}" '
         f'style="--c:{color_of.get(target, OTHER_COLOR)}"><i></i>{esc(target)}'
         f'{" ×" + str(len(next(k["spawns"] for k in kinds if k["target"] == target))) if target in add_kinds else ""}'
