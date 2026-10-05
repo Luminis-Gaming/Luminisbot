@@ -1244,3 +1244,17 @@ class TestCoach(unittest.TestCase):
         self.assertIn('Best parse **71**', embed.description)
         urls = [b.url for b in view.children]
         self.assertIn("https://lumi.example/raids/report/abc/player/Futhark?boss=2-5&tab=damage", urls)
+
+    def test_no_rotation_tip_for_a_filler_button(self):
+        """Top players pressing Blackout Kick once in downtime isn't a rotation to work on."""
+        from raidanalysis import coach, throughput
+        pull = (1, {'fight_id': 1, 'start_ms': 0, 'end_ms': 600000, 'analysis': {'players': [], 'extras': {
+            'duration': 600000, 'players': {'Boops': {'casts': {'Vivify': 160, 'Rising Sun Kick': 30, 'Blackout Kick': 1}}}}}})
+        top = [{'duration': 600000, 'cast_names': {'Vivify': 165, 'Rising Sun Kick': 72, 'Blackout Kick': 1}}] * 5
+        rows = {a['name']: a for a in throughput.cpm([pull], 'Boops', top)['abilities']}
+        self.assertIsNone(rows['Blackout Kick']['verdict'])                           # 0.1 a minute: not judged
+        self.assertEqual(rows['Rising Sun Kick']['verdict'], 'off')
+        tips = [i['text'] for i in coach.rotation_insights([pull], 'Boops', 'healer', {'top': top, 'rows': [],
+                                                                                      'label': 'Mistweaver Monks'})]
+        self.assertTrue(any(t.startswith('Rising Sun Kick: 3.0 casts a minute') for t in tips))
+        self.assertFalse(any('Blackout Kick' in t for t in tips))

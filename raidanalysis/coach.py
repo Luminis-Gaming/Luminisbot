@@ -25,6 +25,8 @@ DETAIL_BOSSES = 2          # bosses whose key pull gets the focus data (WCL) - t
 DETAIL_MIN_WEIGHT = 0.5
 EASY_KILL_PULLS = 2        # killed in this few pulls: hardly worth coaching on
 MIN_SCORE = 8              # weighted impact below this isn't worth a line (an easy kill's tips stay out)
+ROTATION_MIN_CPM = 1.0     # a rotation tip: the top players press it at least this often a minute...
+ROTATION_MIN_GAP = 0.5     # ...and you're at least this many casts a minute behind
 
 
 # ============================================================================
@@ -98,7 +100,9 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
         items = {r['name'] for r in data.get('rows') or [] if r['category'] in ('trinket', 'potion')}
         cpm = throughput.cpm(numbered, name, top, items)
         if cpm:
-            low = [a for a in cpm['abilities'] if a['verdict'] == 'off' and a['top']]
+            # A real part of the rotation, and a gap worth a tip - not a button they press now and then
+            low = [a for a in cpm['abilities'] if a['verdict'] == 'off' and a['top'] >= ROTATION_MIN_CPM
+                   and a['top'] - a['ours'] >= ROTATION_MIN_GAP]
             if low:
                 a = min(low, key=lambda a: a['ours'] / a['top'])
                 out.append(_insight('bad', 60 * (1 - a['ours'] / a['top']), 'rotation',

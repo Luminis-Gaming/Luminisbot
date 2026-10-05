@@ -395,7 +395,8 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
     if cpm:
         sections.append(subsection('Casts per minute', f"""
             <p class="muted small">Every ability you or the top {label} cast, most-pressed first. Greyed-out rows
-               aren't judged: most of them don't use it, or you never cast it (a talent or trinket choice).</p>{_cpm_table(cpm, len(top), by_name)}"""))
+               aren't judged: most of them don't use it or barely do (under 0.5 a minute), or you never cast it (a talent or
+               trinket choice).</p>{_cpm_table(cpm, len(top), by_name)}"""))
     if not sections:
         body = NO_EXTRAS if not have_extras else '<p class="muted">Nothing to compare yet - the top players for ' \
                                                  'this spec are fetched over the next syncs.</p>'

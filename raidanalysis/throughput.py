@@ -634,6 +634,7 @@ def proc_rows(numbered, name, top, tracked=frozenset()):
 
 CPM_GOOD, CPM_OK = 0.9, 0.75  # your casts per minute as a share of the top players'
 MIN_CPM = 0.1                 # pressed less than this by you and the top players: left out of the table
+JUDGE_MIN_CPM = 0.5           # the top players press it less than this: downtime filler or situational, not judged
 
 
 def _cpm_verdict(ours, top):
@@ -678,8 +679,9 @@ def cpm(numbered, name, top, items=frozenset()):
         our_rate = ours.get(ability, 0) / minutes
         if our_rate < MIN_CPM and top_rate < MIN_CPM:
             continue
-        # Never cast at all is a talent or a trinket you don't have, not a rate to work on.
-        judged = len(rates) >= need and ours.get(ability)
+        # Never cast at all is a talent or a trinket you don't have, not a rate to work on; one the top
+        # players barely press (a Blackout Kick in downtime) isn't part of the rotation.
+        judged = len(rates) >= need and ours.get(ability) and top_rate >= JUDGE_MIN_CPM
         abilities.append({'name': ability, 'ours': our_rate, 'top': top_rate, 'top_users': len(rates),
                           'casts': ours.get(ability, 0),
                           'verdict': _cpm_verdict(our_rate, top_rate) if judged else None})
