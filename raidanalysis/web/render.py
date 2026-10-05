@@ -493,6 +493,9 @@ table.heatmap td.heat small { color: var(--muted); font-weight: 400; }
 .comp .subscore-track { margin: 4px 0 3px; }
 .comp-detail { font-size: 12px; color: var(--muted); }
 .subscore-fill.neutral { background: var(--faint); }
+.subscore-track.marked { position: relative; }
+.subscore-mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--text);
+                 opacity: 0.75; }
 details.breakdown-toggle > summary { cursor: pointer; font-size: 13px; color: #9aa6ff; list-style: none; }
 details.breakdown-toggle > summary::before { content: '▸ '; }
 details.breakdown-toggle[open] > summary::before { content: '▾ '; }

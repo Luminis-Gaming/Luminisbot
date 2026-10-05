@@ -696,7 +696,12 @@ async def ensure_spells_for(numbered, name):
     first = numbered[0][1]
     bench = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
     ours = {sid for p in our_pulls(numbered, name, spec=player['spec']) for _, sid in p['casts']}
-    return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']} | ours)
+    # Wasted procs: the buffs' events only carry ids, so their names and icons come from Wowhead too
+    from .throughput import detail_pulls
+    procs = {v[2] for _, _, me, _ in detail_pulls(numbered, name) for v in (me.get('procs') or {}).values()}
+    procs |= {v[2] for p in (bench or {}).get('players') or [] for v in (p.get('procs') or {}).values()}
+    return await ensure_spells({sid for p in (bench or {}).get('players') or [] for _, sid in p['casts']}
+                               | ours | procs)
 
 
 # Without top-player data for a spec, the raid timeline only treats long cooldowns as major.
