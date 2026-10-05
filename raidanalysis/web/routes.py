@@ -1053,8 +1053,8 @@ async def handle_player(request):
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)
     elif tab == 'damage':
-        section = await _focus_section(request, code, numbered, whole_night, name, tab_href('damage'))
-        body += performance.damage_tab(numbered, player, pull_href, section)
+        section, pull_focus = await _focus_section(request, code, numbered, whole_night, name, tab_href('damage'))
+        body += performance.damage_tab(numbered, player, pull_href, section, pull_focus)
     elif tab == 'cooldowns':
         await benchmarks.ensure_spells_for(whole_night, name)
         body += _compare_card(request, code, selected, name, whole_night, tab_href('cooldowns'))
@@ -1070,14 +1070,15 @@ async def handle_player(request):
 async def _focus_section(request, code, numbered, whole_night, name, damage_href):
     """
     The Focus timeline for one pull (?fp=fight id; default the kill, else the furthest wipe), with its pull
-    picker. Fetches the pull's damage graphs from WCL the first time someone opens it (focus.load).
+    picker. Fetches the pull's damage events from WCL the first time someone opens it (focus.load).
+    Returns (html, that pull's numbers by target for the damage tab's table, or None).
     """
     from .. import focus
     from . import focusview
     have = [(n, p) for n, p in numbered
             if name in ((p.get('analysis') or {}).get('extras') or {}).get('players', {})]
     if not have:
-        return ''
+        return '', None
     wanted = request.query.get('fp')
     number, pull = next(((n, p) for n, p in have if str(p['fight_id']) == wanted), None) or min(
         have, key=lambda np: (not np[1].get('kill'), np[1].get('fight_pct') or 100, -(np[1]['end_ms'] - np[1]['start_ms'])))
@@ -1091,7 +1092,7 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     analysis = pull.get('analysis') or {}
     data, why = await focus.load(code, pull, name, analysis.get('extras') or {})
     if not data:
-        return picker + f'<p class="muted">{esc(why)}</p>'
+        return picker + f'<p class="muted">{esc(why)}</p>', None
     # the raid's per-player average on an add: over its DPS and tanks
     data = dict(data, peers=sum(1 for p in analysis.get('players') or [] if p.get('role') != 'healer'))
     order, color_of = focusview.colors(data)
@@ -1110,15 +1111,16 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     mine_total = sum(sum(r['b']) for r in data['you'].values()) or 1
     my_share = {t: sum(r['b']) / mine_total for t, r in data['you'].items()}
     label = compare_data.get('label') or 'players'
+    pull_focus = {'number': number, 'colors': color_of, 'rows': {r['target']: r for r in focus.target_rows(data)}}
+    switches = max(0, len(focus.your_targets(data, order)) - 1)
     return f"""{picker}
-        <p class="muted small">Pull #{number}: who you were damaging, moment by moment, next to the whole raid - each
-           column is {focus.BUCKET_MS // 1000} s, split by target. Shaded windows show when an add was up; a thick outline
-           means the raid made it the priority. Your potion and major cooldowns are underneath.</p>
-        {focusview.legend(data, order, color_of)}
-        {focusview.timeline(data, pull, name, color_of, order, cooldowns, potions, pull.get('phases') or [])}
-        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label)}
-        <h4>This pull by target</h4>
-        {focusview.target_table(data, color_of)}"""
+        <p class="muted small">Pull #{number}, second by second: the boss's phases, adds appearing and dying, its
+           abilities, who you were hitting at every moment ({switches} target switch{'es' if switches != 1 else ''}), and per target when the raid was on it
+           (light - an add that was up; outlined while it was the raid's priority) next to when you were (solid).
+           Your potion and major cooldowns are at the bottom. Hover anything for the numbers.</p>
+        {focusview.timeline(data, pull, name, color_of, order, cooldowns, potions, pull.get('phases') or [],
+                            (db.get_report(code) or {}).get('phase_names'))}
+        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label)}""", pull_focus
 
 
 async def handle_spell(request):

@@ -312,29 +312,70 @@ tr.muted-row td { opacity: 0.7; }
 .m.cd { width: 16px; height: 16px; border-radius: 4px; background-color: var(--surface); background-size: cover;
     box-shadow: 0 0 0 1.5px var(--surface); }
 .m.cd:hover, .m.dia:hover, .m.bar:hover { box-shadow: 0 0 0 1.5px #fff; }
-/* Focus timeline (focusview.py): add windows, 100%-stacked focus strips, potion bars */
-.focus-tl .tl-body { grid-template-columns: 130px minmax(0, 1fr); }
+/* Focus timeline (focusview.py): its own panel; groups with headers; per target a raid track over a you track */
+.focus-tl { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px 6px; margin: 12px 0 18px; }
+.focus-tl .tl-body { grid-template-columns: 210px minmax(0, 1fr); }
 .focus-tl .tl-scroll { padding: 0 10px; }
-.focus-tl .tl-lab.f-strip, .focus-tl .tl-row.f-strip { height: 46px; }
-.focus-tl .tl-lab.f-wins, .focus-tl .tl-row.f-wins { height: 26px; }
-.focus-tl .tl-lab.f-cds, .focus-tl .tl-row.f-cds { height: 26px; }
-.focus-tl .tl-lab.f-boss, .focus-tl .tl-row.f-boss { height: 18px; }
-.focus-tl .tl-row.f-strip::before, .focus-tl .tl-row.f-wins::before { display: none; }
-.focus-tl .tl-row.f-strip { margin: 2px 0; }
-.focus-tl .tl-lab.f-strip { font-weight: 600; color: var(--text); }
-.fcol { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column-reverse; gap: 1px;
-    border-right: 1px solid var(--surface); cursor: help; }
-.fcol b { display: block; min-height: 1px; }
-.fcol:first-child b:first-child { border-bottom-left-radius: 3px; }
-.fcol:hover { filter: brightness(1.25); }
-.fwin { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; cursor: help; overflow: hidden;
-    background: color-mix(in srgb, var(--c) 28%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 70%, transparent); }
-.fwin.prio { background: color-mix(in srgb, var(--c) 45%, transparent); box-shadow: inset 0 0 0 2px var(--c); }
-.fwin span { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 600;
+.focus-tl .tl-row::before { display: none; }
+.focus-tl .tl-lab.fgrp, .focus-tl .tl-row.fgrp { height: 40px; }
+.focus-tl .tl-lab.fgrp { flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 1px;
+    padding: 0 0 5px 2px; white-space: normal; }
+.focus-tl .tl-lab.fgrp b { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text); }
+.focus-tl .tl-lab.fgrp small { font-size: 11px; color: var(--faint); }
+.focus-tl .tl-row.fgrp { border-bottom: 1px solid rgba(255,255,255,0.12); }
+.focus-tl .tl-lab.f-boss, .focus-tl .tl-row.f-boss { height: 22px; }
+.focus-tl .tl-lab.f-boss { font-size: 12px; }
+.focus-tl .tl-lab.f-boss .ability-icon { width: 16px; height: 16px; }
+.focus-tl .tl-row.f-boss { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.focus-tl .m.tick { height: 14px; width: 3px; }
+.focus-tl .tl-lab.f-ribbon, .focus-tl .tl-row.f-ribbon { height: 40px; }
+.focus-tl .tl-lab.f-ribbon { font-weight: 600; color: var(--text); font-size: 13px; }
+.frun { position: absolute; top: 8px; bottom: 8px; min-width: 2px; background: var(--c); cursor: help;
+    box-shadow: inset -1px 0 var(--surface-2); }
+.frun:hover, .fyou:hover, .fraid:hover { filter: brightness(1.3); }
+.focus-tl .tl-lab.f-target, .focus-tl .tl-row.f-target { height: 52px; }
+.focus-tl .tl-row.f-target.alt, .focus-tl .tl-lab.f-target.alt { background: rgba(255,255,255,0.025); }
+.focus-tl .tl-lab.f-target { justify-content: space-between; padding-left: 2px; color: var(--text); font-size: 13px; }
+.flab { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.flab > span { overflow: hidden; text-overflow: ellipsis; }
+.flab .pill { font-size: 10px; padding: 1px 6px; flex-shrink: 0; }
+.fsides { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; flex-shrink: 0; padding-left: 6px; }
+.fsides small { font-size: 10px; line-height: 14px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.flane { position: absolute; inset: 0; }
+.fraid { position: absolute; top: 8px; height: 14px; border-radius: 3px; cursor: help;
+    background: color-mix(in srgb, var(--c) 22%, transparent); }
+.fraid.prio { background: color-mix(in srgb, var(--c) 35%, transparent); box-shadow: inset 0 0 0 1.5px var(--c); }
+.fyou { position: absolute; bottom: 8px; height: 16px; border-radius: 3px; min-width: 2px; background: var(--c); cursor: help; }
+.focus-tl .tl-lab.f-phase, .focus-tl .tl-row.f-phase { height: 28px; }
+.focus-tl .tl-lab.f-adds, .focus-tl .tl-row.f-adds { height: 34px; }
+.focus-tl .tl-lab.f-phase, .focus-tl .tl-lab.f-adds { color: var(--text); font-weight: 600; }
+.focus-tl .tl-phase { border-left: 1px dashed rgba(255,255,255,0.4); }
+.fphase { position: absolute; top: 4px; bottom: 4px; background: rgba(116,132,236,0.18); border-radius: 3px;
+    box-shadow: inset 1px 0 rgba(255,255,255,0.35); overflow: hidden; cursor: help; }
+.fphase.alt { background: rgba(116,132,236,0.30); }
+.fphase.inter { background: repeating-linear-gradient(135deg, rgba(201,133,0,0.25) 0 6px, rgba(201,133,0,0.12) 6px 12px); }
+.fphase span { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 600;
     color: var(--text); white-space: nowrap; }
+.fev { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 16px; height: 16px; border-radius: 4px;
+    background: var(--c); color: #fff; font-size: 9px; font-style: normal; line-height: 16px; text-align: center;
+    cursor: help; z-index: 1; }
+.fev.out { background: var(--surface-3); color: var(--c); box-shadow: inset 0 0 0 1.5px var(--c); }
+.fev.died { background: var(--surface-3); color: var(--bad); box-shadow: inset 0 0 0 1.5px var(--bad); }
+.fev.prio { box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 3.5px var(--c); }
+.fev span { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 600;
+    color: var(--text); white-space: nowrap; pointer-events: none; }
+.fev:hover { filter: brightness(1.3); z-index: 3; }
+.freact { position: absolute; bottom: 15px; height: 0; border-top: 2px dashed var(--c); cursor: help; }
+.freact.never { border-top-color: var(--bad); opacity: 0.8; }
+.focus-tl .tl-lab.f-cds, .focus-tl .tl-row.f-cds { height: 34px; }
+.focus-tl .tl-lab.f-cds { color: var(--text); font-weight: 600; }
 .fpot { position: absolute; top: 5px; bottom: 5px; border-radius: 4px; background: rgba(81,207,102,0.22);
     box-shadow: inset 0 0 0 1px rgba(81,207,102,0.7); cursor: help; }
 .fpot span { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); font-size: 11px; }
+.focus-table .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
+    border-bottom: 1px solid var(--border); }
+.focus-table .col-pull, .focus-table .col-all { border-left: 1px solid var(--border); }
 .fsw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .flegend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 4px 0 8px; font-size: 12px; color: var(--muted); }
 .fcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin: 10px 0 16px; }

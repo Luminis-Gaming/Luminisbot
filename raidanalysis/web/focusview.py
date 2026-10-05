@@ -1,7 +1,8 @@
 """
-The Focus timeline for one pull (data from focus.py): when each add was up, who you and the raid were
-damaging moment by moment (100%-stacked strips, one color per target), the boss's abilities, your
-potion and major cooldowns - and a card per add window that says whether you were on it.
+The Focus timeline for one pull (data from focus.py), as horizontal lanes: the boss's abilities, who you
+were hitting at every moment (switches show as a change of color), one lane per target - when it was up
+and when you were on it - and your potion and major cooldowns; then a card per add window that says
+whether you were on it.
 
 Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from data-tip / data-spell).
 """
@@ -29,53 +30,167 @@ def _swatch(color):
     return f'<i class="fsw" style="background:{color}"></i>'
 
 
-def _strip(side, order, color_of, step, duration, label):
-    """One 100%-stacked column per bucket; hovering a column lists every target's share and DPS."""
-    rows = focus.folded(side, order)
-    keys = [t for t in order + [focus.OTHER] if t in rows]
-    n = max((len(v) for v in rows.values()), default=0)
-    cols = []
-    for i in range(n):
-        total = sum(rows[k][i] for k in keys)
-        if not total:
-            continue
-        segs, tip = [], []
-        for k in keys:
-            v = rows[k][i]
-            if v <= 0:
-                continue
-            segs.append(f'<b style="height:{100 * v / total:.2f}%;background:{color_of[k]}"></b>')
-            tip.append(f'{k} {_pct(v / total)} ({fmt_amount(v / (step / 1000))}/s)')
-        start, end = i * step, min(duration, (i + 1) * step)
-        cols.append(f'<i class="fcol" style="left:{100 * start / duration:.3f}%;width:{100 * (end - start) / duration:.3f}%" '
-                    f'data-tip="{esc(label)} {fmt_duration(start)}–{fmt_duration(end)} · {esc(" · ".join(tip))}">'
-                    f'{"".join(segs)}</i>')
-    return ''.join(cols)
-
-
 def _at(t, duration):
     return f'{100 * max(0, min(t, duration)) / duration:.3f}%'
 
 
-def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases):
+def _span(start, end, duration):
+    return f'left:{_at(start, duration)};width:{100 * max(0, min(end, duration) - start) / duration:.3f}%'
+
+
+def _ribbon(data, order, color_of, duration):
+    """Who you were hitting at every moment (focus.your_targets): one colored stretch per target, switches in between."""
+    out = []
+    for r in focus.your_targets(data, order):
+        secs = (r['end'] - r['start']) / 1000
+        out.append(f'<i class="frun" style="{_span(r["start"], r["end"], duration)};--c:{color_of.get(r["target"], OTHER_COLOR)}" '
+                   f'data-tip="{esc(r["target"])} · {fmt_duration(r["start"])}–{fmt_duration(r["end"])} ({secs:.0f} s) · '
+                   f'{fmt_amount(r["damage"])} damage"></i>')
+    return ''.join(out)
+
+
+def _target_lane(target, mine, raid_row, wins, color, step, duration, peak, always_up):
     """
+    One target, two tracks: on top what the raid did (light: the add was up and the raid was hitting it -
+    outlined while it was the raid's priority; the whole pull for a boss), underneath what you did (solid: a
+    bar for every stretch you were hitting it, brighter the harder you hit).
+    """
+    if always_up:
+        raid = (f'<i class="fraid" style="{_span(0, duration, duration)}" '
+                f'data-tip="{esc(target)} · up the whole pull"></i>')
+    else:
+        raid = ''
+        for first, last in focus.runs(raid_row or []):
+            start, end = first * step, (last + 1) * step
+            w = next((w for w in wins if w['start'] < end and w['end'] > start), None)
+            tip = f'{esc(target)} up {fmt_duration(start)}–{fmt_duration(end)}'
+            if w:
+                tip += (f' · the raid put about {_pct(w["raid_share"])} of its damage into it'
+                        f'{" - a priority" if w["priority"] else ""}, you {_pct(w["you_share"])} of yours')
+            raid += (f'<i class="fraid{" prio" if w and w["priority"] else ""}" style="{_span(start, end, duration)}" '
+                     f'data-tip="{tip}"></i>')
+    you = []
+    for w in wins:  # from the add appearing to your first hit on it
+        if w['first_hit'] is None:
+            you.append(f'<i class="freact never" style="{_span(w["start"], w["end"], duration)}" '
+                       f'data-tip="You never hit {esc(target)} while it was up ({fmt_duration(w["start"])}–'
+                       f'{fmt_duration(w["end"])})"></i>')
+        elif w['first_hit'] >= step:
+            you.append(f'<i class="freact" style="{_span(w["start"], w["start"] + w["first_hit"], duration)}" '
+                       f'data-tip="Reaction: you first hit {esc(target)} {w["first_hit"] / 1000:.0f} s after it '
+                       f'appeared ({fmt_duration(w["start"])})"></i>')
+    for first, last in focus.runs(mine):
+        start, end = first * step, (last + 1) * step
+        dmg = sum(mine[first:last + 1])
+        dps = dmg / ((end - start) / 1000)
+        strength = 0.5 + 0.5 * min(1, dps / peak) if peak else 1
+        you.append(f'<i class="fyou" style="{_span(start, end, duration)};opacity:{strength:.2f}" '
+                   f'data-tip="You on {esc(target)} · {fmt_duration(start)}–{fmt_duration(end)} · {fmt_amount(dmg)} '
+                   f'({fmt_amount(dps)}/s)"></i>')
+    return f'<div class="flane" style="--c:{color}">{raid}{"".join(you)}</div>'
+
+
+def _group(title, hint=''):
+    """A group header in the label column (and an empty row beside it)."""
+    hint_html = f'<small>{hint}</small>' if hint else ''
+    return (f'<div class="tl-lab fgrp"><b>{title}</b>{hint_html}</div>', 'fgrp', '')
+
+
+def _phase_lane(phases, names, duration):
+    """The boss's phases as labelled stretches (names from the report, else Phase n)."""
+    out = []
+    for i, phase in enumerate(phases):
+        end = phases[i + 1]['start'] if i + 1 < len(phases) else duration
+        info = names.get(str(phase['id'])) or {}
+        label = info.get('name') or f"Phase {phase['id']}"
+        out.append(f'<i class="fphase{" alt" if i % 2 else ""}{" inter" if info.get("intermission") else ""}" '
+                   f'style="{_span(phase["start"], end, duration)}" data-tip="{esc(label)} · '
+                   f'{fmt_duration(phase["start"])}–{fmt_duration(end)}"><span>{esc(label)}</span></i>')
+    return ''.join(out)
+
+
+def _adds_lane(wins, color_of, duration):
+    """Each add window: a marker where it appeared (the raid's first hit) and where it died or went away."""
+    out = []
+    for w in wins:
+        color = color_of.get(w['target'], OTHER_COLOR)
+        name = esc(w['target'])
+        react = ('you never hit it' if w['first_hit'] is None else
+                 f'you hit it {w["first_hit"] / 1000:.0f} s later' if w['first_hit'] else 'you hit it right away')
+        label = f'<span>{name}</span>' if w['priority'] else ''
+        out.append(f'<i class="fev in{" prio" if w["priority"] else ""}" style="left:{_at(w["start"], duration)};'
+                   f'--c:{color}" data-tip="{name} appeared · {fmt_duration(w["start"])} · {react}">▲{label}</i>')
+        died = w['died_at'] is not None
+        end = w['died_at'] if died else w['end']
+        what = 'died' if died else 'gone (the raid stopped hitting it)'
+        out.append(f'<i class="fev {"died" if died else "out"}" style="left:{_at(end, duration)};--c:{color}" '
+                   f'data-tip="{name} {what} · {fmt_duration(end)} · up {(end - w["start"]) / 1000:.0f} s">'
+                   f'{"✖" if died else "▼"}</i>')
+    return ''.join(out)
+
+
+def _boss_lanes(analysis, duration):
+    """One lane per boss ability (icon + name, first cast first), a tick per cast - like the cooldown timeline."""
+    meta = {a['id']: a for a in analysis.get('boss_abilities') or []}
+    by_name = {}
+    for t, sid in analysis.get('boss_casts') or []:
+        if sid in meta:
+            by_name.setdefault(meta[sid].get('name') or '?', []).append((t, sid))
+    lanes = []
+    for name, casts in sorted(by_name.items(), key=lambda kv: min(t for t, _ in kv[1])):
+        first = casts[0][1]
+        icon = safe_icon(meta[first].get('icon'))
+        img = f'<img class="ability-icon" src="{ICON_BASE}{esc(icon)}" alt="" loading="lazy">' if icon else ''
+        ticks = ''.join(f'<i class="m tick" style="left:{_at(t, duration)}" data-spell="{sid}" '
+                        f'data-tip="{esc(name)} · {fmt_duration(t)}"></i>' for t, sid in sorted(casts))
+        lanes.append((f'<div class="tl-lab boss f-boss" data-spell="{first}" '
+                      f'data-tip="Cast {len(casts)}× this pull">{img}<span>{esc(name)}</span></div>',
+                      'boss f-boss', ticks))
+    return lanes, meta
+
+
+def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, phase_names=None):
+    """
+    Horizontal lanes over the pull: the boss's abilities, who you were hitting at every moment, one lane per
+    target (when it was up, when you were on it), your potion and major cooldowns.
     cooldowns: [(t, spell id, name, icon url)] your major cooldowns this pull; potions: [{'t', 'end', 'ability'}];
-    phases: [{'id', 'start'}].
+    phases: [{'id', 'start'}]; phase_names: the report's ({encounter id: {phase id: {'name', 'intermission'}}}).
     """
     duration = max(1, pull['end_ms'] - pull['start_ms'])
-    step = data.get('bucket_ms') or focus.BUCKET_MS
-    analysis = pull.get('analysis') or {}
-    boss_meta = {a['id']: a for a in analysis.get('boss_abilities') or []}
-    ticks = ''.join(f'<i class="m tick" style="left:{_at(t, duration)}" data-spell="{sid}" '
-                    f'data-tip="{esc(boss_meta[sid].get("name") or "")} · {fmt_duration(t)}"></i>'
-                    for t, sid in analysis.get('boss_casts') or [] if sid in boss_meta)
+    step = data.get('bin_ms') or focus.BIN_MS
+    boss_lanes, boss_meta = _boss_lanes(pull.get('analysis') or {}, duration)
     wins = focus.windows(data)
-    bands = ''.join(
-        f'<i class="fwin{" prio" if w["priority"] else ""}" style="left:{_at(w["start"], duration)};'
-        f'width:{100 * (w["end"] - w["start"]) / duration:.3f}%;--c:{color_of.get(w["target"], OTHER_COLOR)}" '
-        f'data-tip="{esc(w["target"])} up {fmt_duration(w["start"])}–{fmt_duration(w["end"])} · the raid put '
-        f'{_pct(w["raid_share"])} of its damage into it, you {_pct(w["you_share"])}"><span>{esc(w["target"])}</span></i>'
-        for w in wins)
+    lanes = [_group('👹 Boss', 'phases, adds appearing (▲) and dying (✖) or going away (▼), every cast')]
+    if len(phases) > 1:
+        names = (phase_names or {}).get(str(pull.get('encounter_id'))) or {}
+        lanes.append(('<div class="tl-lab f-phase">Phases</div>', 'f-phase', _phase_lane(phases, names, duration)))
+    if wins:
+        lanes.append(('<div class="tl-lab f-adds">Adds</div>', 'f-adds', _adds_lane(wins, color_of, duration)))
+    lanes += boss_lanes
+    lanes += [_group('🎯 Who you were hitting', 'a change of color is a target switch'),
+              ('<div class="tl-lab f-ribbon">Your target</div>', 'f-ribbon', _ribbon(data, order, color_of, duration))]
+    mine = focus.folded(data.get('you'), order)
+    raid_rows = focus.folded(data.get('raid'), order)
+    peak = max((sum(b[a:z + 1]) / ((z - a + 1) * step / 1000) for b in mine.values() for a, z in focus.runs(b)),
+               default=0)
+    lanes.append(_group('⚔️ Targets', 'light = raid on it (add up) · solid = you on it · dashed = your reaction'))
+    n = 0
+    for target in order + [focus.OTHER]:
+        if target not in mine and target not in raid_rows:
+            continue
+        color = color_of.get(target, OTHER_COLOR)
+        main = target == data.get('main')
+        always_up = main or (target in (data.get('raid') or {})
+                             and focus.always_up(data['raid'][target], data.get('n') or 0))
+        boss = '<span class="pill pill-muted">boss</span>' if main else ''
+        lanes.append((f'<div class="tl-lab f-target{" alt" if n % 2 else ""}" title="{esc(target)}">'
+                      f'<span class="flab">{_swatch(color)}<span>{esc(target)}</span>{boss}</span>'
+                      f'<span class="fsides"><small>raid</small><small>you</small></span></div>',
+                      f'f-target{" alt" if n % 2 else ""}',
+                      _target_lane(target, mine.get(target) or [], None if main else raid_rows.get(target),
+                                   [w for w in wins if w['target'] == target], color, step, duration, peak,
+                                   always_up)))
+        n += 1
     pots = ''.join(
         f'<i class="fpot" style="left:{_at(p["t"], duration)};width:{100 * max(1000, (p.get("end") or p["t"] + 30000) - p["t"]) / duration:.3f}%" '
         f'data-tip="{esc(p.get("ability") or "Potion")} · {fmt_duration(p["t"])}–{fmt_duration(p.get("end") or p["t"] + 30000)}">'
@@ -85,20 +200,18 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases):
         bg = f';background-image:url({safe_icon(icon)})' if safe_icon(icon) else ''
         cds.append(f'<i class="m cd" style="left:{_at(t, duration)}{bg}" data-spell="{sid}" '
                    f'data-tip="{esc(name)} · {fmt_duration(t)}"></i>')
+    lanes += [_group('🧪 Your potion & cooldowns'),
+              ('<div class="tl-lab f-cds">You</div>', 'f-cds', pots + ''.join(cds))]
     phase_lines = ''.join(f'<i class="tl-phase al" style="left:{_at(p["start"], duration)}"></i>'
                           for p in phases[1:] if p.get('start'))
-    grid = ''.join(f'<i style="left:{_at(t, duration)}"></i>' for t in range(0, duration + 1, 60000))
+    every = 30000 if duration <= 240000 else 60000
+    grid = ''.join(f'<i style="left:{_at(t, duration)}"></i>' for t in range(0, duration + 1, every))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{_at(t, duration)}">{fmt_duration(t)}</span>'
-                    for t in range(0, duration + 1, 60000))
+                    for t in range(0, duration + 1, every))
     spell_json = {a['id']: {'name': a.get('name') or '', 'icon': f'{ICON_BASE}{a["icon"]}' if a.get('icon') else '',
                             'meta': '', 'desc': ''} for a in boss_meta.values() if safe_icon(a.get('icon'))}
-    lanes = [('Boss', 'boss', ticks), ('Adds up', 'wins', bands),
-             (f'You', 'strip you', _strip(data.get('you'), order, color_of, step, duration, 'You')),
-             ('Raid', 'strip', _strip(data.get('raid'), order, color_of, step, duration, 'Raid')),
-             ('Potion & cooldowns', 'cds', pots + ''.join(cds))]
-    labels = ''.join(f'<div class="tl-lab f-{cls.split()[0]}">{esc(label)}</div>' for label, cls, _ in lanes)
-    tracks = ''.join(f'<div class="tl-row f-{cls.split()[0]}{" you" if "you" in cls else ""}">{body}</div>'
-                     for _, cls, body in lanes)
+    labels = ''.join(label for label, _, _ in lanes)
+    tracks = ''.join(f'<div class="tl-row {cls}">{body}</div>' for _, cls, body in lanes)
     return f"""<div class="tl focus-tl" data-duration="{duration}">
         <div class="tl-tools">
             <span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom · hover anything</span>
@@ -133,7 +246,13 @@ def cards(data, color_of, potions, cooldowns, top_share, my_share, label):
     for w in sorted(focus.windows(data), key=lambda w: (not w['priority'], w['start'])):
         length = w['end'] - w['start']
         cls, text = VERDICTS.get(w['verdict'], ('pill-muted', 'Not a priority'))
-        lines = [f'You put <b>{_pct(w["you_share"])}</b> of your damage into it - the raid <b>{_pct(w["raid_share"])}</b>',
+        react = ('<b class="bad-text">You never hit it</b>' if w['first_hit'] is None else
+                 f'You first hit it <b>{w["first_hit"] / 1000:.0f} s</b> after it appeared' if w['first_hit'] else
+                 'You hit it <b>right away</b>')
+        ended = (f'died at {fmt_duration(w["died_at"])}' if w['died_at'] is not None else
+                 f'gone at {fmt_duration(w["end"])}')
+        lines = [f'⏱ Appeared at {fmt_duration(w["start"])}, {ended} - {react}',
+                 f'You put <b>{_pct(w["you_share"])}</b> of your damage into it - the raid <b>{_pct(w["raid_share"])}</b>',
                  f'Your DPS on it <b>{fmt_amount(w["you_dps"])}</b> · raid average per player {fmt_amount(w["raid_dps"])}']
         pot = min(potions, key=lambda p: abs(p['t'] - w['start']), default=None) if w['priority'] else None
         if pot and abs(pot['t'] - w['start']) <= 60000:
@@ -159,26 +278,3 @@ def cards(data, color_of, potions, cooldowns, top_share, my_share, label):
                 <ul>{''.join(f'<li>{line}</li>' for line in lines)}</ul>
             </div>""")
     return f'<div class="fcards">{"".join(out)}</div>' if out else ''
-
-
-def target_table(data, color_of):
-    rows = ''.join(f"""
-        <tr><td>{_swatch(color_of.get(r['target'], OTHER_COLOR))}{esc(r['target'])}
-                {' <span class="pill pill-muted">boss</span>' if r['type'] == 'Boss' else ''}</td>
-            <td class="num" data-v="{r['damage']}">{fmt_amount(r['damage'])}</td>
-            <td class="num" data-v="{r['share']:.4f}">{_pct(r['share'])}</td>
-            <td class="num" data-v="{r['up_s']:.0f}">{fmt_duration(r['up_s'] * 1000)}</td>
-            <td class="num" data-v="{r['dps']:.0f}">{fmt_amount(r['dps'])}</td></tr>"""
-                   for r in focus.target_rows(data) if r['damage'])
-    return f"""<div class="table-wrapper"><table class="compact">
-        <tr><th data-sort>Target</th><th data-sort class="num">Your damage</th><th data-sort class="num">Share</th>
-            <th data-sort class="num" title="How long the raid was hitting it">Up</th>
-            <th data-sort class="num" title="Your damage on it divided by the time it was up">Your DPS while up</th></tr>
-        {rows}</table></div>"""
-
-
-def legend(data, order, color_of):
-    """Every colored target, plus Other when some were folded into it."""
-    folded_away = any(t not in order for side in ('raid', 'you') for t in data.get(side) or {})
-    shown = order + ([focus.OTHER] if folded_away else [])
-    return '<div class="flegend">' + ''.join(f'<span>{_swatch(color_of[t])}{esc(t)}</span>' for t in shown) + '</div>'

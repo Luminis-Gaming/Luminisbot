@@ -1001,51 +1001,79 @@ class TestHotsOnOthers(unittest.TestCase):
 class TestFocusTimeline(unittest.TestCase):
     """The Venomous Heart is up 25 s: the raid piles into it - were you on it, and was your potion ready?"""
 
+    NAMES = {1: "Ula'tek", 2: 'Venomous Heart', 3: 'Blightscale Rawling'}
+
     @staticmethod
-    def graph(series):
-        """WCL-style graph: values on a 1 s interval from the pull's start (t0 = 1000)."""
-        return {'data': {'series': [{'name': n, 'type': k, 'pointStart': 1000, 'pointInterval': 1000, 'data': v}
-                                    for n, k, v in series]}}
+    def events(per_second):
+        """[(second, target id, amount)] -> WCL damage events (the pull starts at 1000 ms)."""
+        return [{'type': 'damage', 'timestamp': 1000 + s * 1000 + 10, 'targetID': t, 'amount': a}
+                for s, t, a in per_second]
 
     def data(self, my_heart):
         from raidanalysis import focus
-        boss = [10] * 300
-        heart = [0] * 140 + [30] * 25 + [0] * 135        # up 2:20-2:45, the raid's main target then
-        raid = self.graph([('Ula\'tek', 'Boss', boss), ('Venomous Heart', 'NPC', heart), ('Total', '', [1] * 300)])
-        mine_heart = [0] * 140 + [my_heart] * 25 + [0] * 135
-        you = self.graph([('Ula\'tek', 'Boss', [1] * 300), ('Venomous Heart', 'NPC', mine_heart)])
-        return focus.from_graphs(raid, you, 1000, 300000,
-                                 {"Ula'tek": 3_000_000, 'Venomous Heart': 750_000},
-                                 {"Ula'tek": 300_000, 'Venomous Heart': 25_000 * my_heart or 1})
+        n = 300
+        heart = range(140, 165)                                       # up 2:20-2:45
+        # The raid (everything but the main boss): 600/s into the heart while it's up, a trickle into an add
+        raid = self.events([(s, 2, 600) for s in heart] + [(s, 3, 5) for s in range(0, n, 2)])
+        # When you go for the heart, it takes you 4 s to get there
+        mine = self.events([(s, 1, 100) for s in range(n) if s not in heart or not my_heart or s < 144]
+                           + [(s, 2, 100) for s in heart if my_heart and s >= 144])
+        deaths = [{'type': 'death', 'timestamp': 1000 + 165500, 'targetID': 2}]
+        raid_part = {'main': "Ula'tek", 'b': focus.bin_damage(raid, 1000, n, self.NAMES),
+                     'deaths': focus.deaths_by_target(deaths, 1000, self.NAMES)}
+        targets = [{'name': "Ula'tek", 'total': 300 * 1000, 'type': 'Boss'},
+                   {'name': 'Venomous Heart', 'total': 25 * 600, 'type': 'NPC'}]
+        return focus.build(focus.bin_damage(mine, 1000, n, self.NAMES), raid_part, n, targets)
 
     def test_windows_and_verdicts(self):
         from raidanalysis import focus
-        d = self.data(my_heart=0.2)
-        self.assertEqual(set(d['raid']), {"Ula'tek", 'Venomous Heart'})            # no 'Total' series
-        self.assertEqual(sum(d['raid']['Venomous Heart']['b']), 750_000)           # scaled to the real damage
+        d = self.data(my_heart=False)
+        self.assertEqual(set(d['raid']), {'Venomous Heart', 'Blightscale Rawling'})   # the main boss isn't fetched
         w = focus.windows(d)[0]
         self.assertEqual((w['target'], w['start'], w['end']), ('Venomous Heart', 140000, 165000))
         self.assertTrue(w['priority'])
-        self.assertGreater(w['raid_share'], 0.7)
         self.assertEqual(w['verdict'], 'off')                                       # you stayed on the boss
-        self.assertEqual(focus.windows(self.data(my_heart=5))[0]['verdict'], 'good')
+        self.assertEqual(focus.windows(self.data(my_heart=True))[0]['verdict'], 'good')
+        self.assertEqual(len(focus.windows(d)), 1)                                  # the trickle add is up all fight
+        self.assertEqual((w['died_at'], w['first_hit']), (165500, None))            # died; you never touched it
+        self.assertEqual(focus.windows(self.data(my_heart=True))[0]['first_hit'], 4000)
 
-    def test_points_formats(self):
+    def test_up_time_and_switches(self):
         from raidanalysis import focus
-        pairs = {'data': {'series': [{'name': 'A', 'data': [[1000, 5], [6000, 5]]}]}}
-        dicts = {'data': {'series': [{'name': 'A', 'data': [{'x': 1000, 'y': 5}, {'x': 6000, 'y': 5}]}]}}
-        for g in (pairs, dicts):
-            self.assertEqual(focus.buckets(g, 1000, 10000)['A']['b'], [5.0, 5.0])
+        d = self.data(my_heart=True)
+        rows = {r['target']: r for r in focus.target_rows(d)}
+        self.assertEqual(rows["Ula'tek"]['up_s'], 300)                              # the boss: the whole pull
+        self.assertEqual(rows['Venomous Heart']['up_s'], 25)
+        runs = focus.your_targets(d, focus.palette_order(d))
+        self.assertEqual([r['target'] for r in runs], ["Ula'tek", 'Venomous Heart', "Ula'tek"])
+        self.assertEqual((runs[1]['start'], runs[1]['end']), (144000, 165000))
+
+    def test_damage_outside_the_pull_or_on_players_is_left_out(self):
+        from raidanalysis import focus
+        events = self.events([(0, 1, 10), (5, 99, 10)]) + [{'type': 'damage', 'timestamp': 999_999, 'targetID': 1,
+                                                           'amount': 10}, {'type': 'heal', 'timestamp': 1500, 'targetID': 1}]
+        self.assertEqual(sum(focus.bin_damage(events, 1000, 10, self.NAMES)["Ula'tek"]), 10)
 
     def test_view_renders_potion_timing(self):
         from raidanalysis.web import focusview
-        d = self.data(my_heart=0.2)
+        d = self.data(my_heart=False)
         order, color_of = focusview.colors(d)
         pull = {'fight_id': 1, 'start_ms': 1000, 'end_ms': 301000, 'analysis': {'boss_casts': [], 'boss_abilities': []}}
         potions = [{'t': 130000, 'end': 160000, 'ability': 'Liquid Luster'}]
         html = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [])
-        self.assertIn('fwin prio', html)
+        self.assertIn('fraid prio', html)
+        self.assertIn('Your target', html)
+        self.assertIn('Venomous Heart appeared', html)
+        self.assertIn('Venomous Heart died · 2:45', html)
+        self.assertIn('freact never', html)                                         # never hit it
+        phased = focusview.timeline(d, dict(pull, encounter_id=7), 'Boops', color_of, order, [], [],
+                                    [{'id': 1, 'start': 0}, {'id': 2, 'start': 120000}],
+                                    {'7': {'2': {'name': 'Stage Two', 'intermission': False}}})
+        self.assertIn('<span>Stage Two</span>', phased)
+        self.assertIn('<span>Phase 1</span>', phased)
         cards = focusview.cards(d, color_of, potions, [], {}, {}, 'Havoc Demon Hunters')
         self.assertIn('10 s before it appeared', cards)
         self.assertIn('covered <b>80%</b>', cards)                                 # 20 of the 25 s
         self.assertIn('Off target', cards)
+        self.assertIn('died at 2:45', cards)
+        self.assertIn('You never hit it', cards)

@@ -251,20 +251,22 @@ async def get_actor_ids(session, code):
     return _actors[code]
 
 
-async def get_focus_graphs(session, code, fight_id, actor_id):
-    """The raid's and one player's damage over time by target (focus.py) - v2 only: v1 has no graphs."""
-    data = await query(session, """
-        query($code: String!, $fights: [Int]!, $actor: Int!) {
-          reportData {
-            report(code: $code) {
-              raid: graph(fightIDs: $fights, dataType: DamageDone, viewBy: Target)
-              you: graph(fightIDs: $fights, dataType: DamageDone, viewBy: Target, sourceID: $actor)
+_all_actors = {}  # report code -> every actor (focus.py: enemies by id, a player's pets)
+
+
+async def get_report_actors(session, code):
+    """Every actor in a report - players, pets, NPCs: [{'id', 'name', 'type', 'subType', 'petOwner'}]."""
+    if code not in _all_actors:
+        if len(_all_actors) > 200:
+            _all_actors.clear()
+        data = await query(session, """
+            query($code: String!) {
+              reportData { report(code: $code) { masterData { actors { id name type subType petOwner } } } }
             }
-          }
-        }
-    """, {'code': code, 'fights': [fight_id], 'actor': int(actor_id)})
-    report = (data.get('reportData') or {}).get('report') or {}
-    return {'raid': _unwrap(report.get('raid')), 'you': _unwrap(report.get('you'))}
+        """, {'code': code})
+        _all_actors[code] = ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {})
+                             .get('actors')) or []
+    return _all_actors[code]
 
 
 @_v1_fallback

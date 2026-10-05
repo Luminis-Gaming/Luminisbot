@@ -42,10 +42,11 @@ def _pct(share):
 # Damage & focus
 # ============================================================================
 
-def damage_tab(numbered, player, pull_href, focus_section=''):
+def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
     """
     numbered: [(pull number, pull)] the page covers; player: analyzer.player_report row; focus_section:
-    the one-pull focus timeline (routes.py builds it - it may fetch from WCL).
+    the one-pull focus timeline (routes.py builds it - it may fetch from WCL); pull_focus: that pull's
+    numbers by target ({'number', 'colors', 'rows'}) for the table.
     """
     name, role = player['name'], player.get('role')
     metric = 'HPS' if role == 'healer' else 'DPS'
@@ -94,39 +95,63 @@ def damage_tab(numbered, player, pull_href, focus_section=''):
                       'Parses, HPS and active time pull by pull - and where your damage went, which still '
                       'matters on adds the raid has to burn.')}
         {subsection('Performance', performance)}
-        {subsection('Focus', focus_section + '<h4>Over all these pulls</h4>' + _focus(numbered, name, role))}
+        {subsection('Focus', focus_section + '<h4>Where your damage went</h4>' + _focus(numbered, name, role, pull_focus))}
     </div>"""
 
 
-def _focus(numbered, name, role):
+def _focus(numbered, name, role, pull_focus=None):
+    """
+    One table by target: the focus timeline's pull (your damage, share, how long it was up, your DPS while
+    up) next to all these pulls (your share against the raid's typical one).
+    """
     rows = throughput.focus(numbered, name, role)
-    if not rows:
+    pull_rows = (pull_focus or {}).get('rows') or {}
+    colors = (pull_focus or {}).get('colors') or {}
+    if not rows and not pull_rows:
         return '<p class="muted">No damage by target recorded.</p>'
     peers = 'tanks' if role == 'tank' else 'DPS'
+    names = [r['name'] for r in rows]
+    names += sorted((t for t in pull_rows if t not in names), key=lambda t: -pull_rows[t]['damage'])
+    overall = {r['name']: r for r in rows}
+    number = (pull_focus or {}).get('number')
     out = []
-    for r in rows:
-        width = 100 * r['mine_share']
-        raid = r['raid_share']
-        marker = (f'<i style="position:absolute;left:{min(100, 100 * raid):.1f}%;top:-3px;bottom:-3px;width:2px;'
-                  f'background:var(--text)" title="Raid typical: {100 * raid:.0f}%"></i>' if raid is not None else '')
-        note = (f'<div class="bad-text small">⚠ The raid\'s {peers} typically put {100 * raid:.0f}% of their damage '
-                f'here - you put {100 * r["mine_share"]:.0f}%</div>' if r['low'] else '')
-        kind = ' <span class="pill pill-muted">boss</span>' if r['type'] == 'Boss' else ''
-        out.append(f"""
-            <tr><td>{esc(r['name'])}{kind}{note}</td>
-                <td class="num" data-v="{r['mine']}">{fmt_amount(r['mine'])}</td>
-                <td class="num">{_pct(r['mine_share'])}</td>
+    for target in names:
+        r, p = overall.get(target), pull_rows.get(target)
+        boss = (r or {}).get('type') == 'Boss' or (p or {}).get('type') == 'Boss'
+        kind = ' <span class="pill pill-muted">boss</span>' if boss else ''
+        swatch = (f'<i class="fsw" style="background:{colors[target]}"></i>' if target in colors else '')
+        pull_cells = (f"""<td class="num col-pull" data-v="{p['damage']}">{fmt_amount(p['damage'])}</td>
+                <td class="num">{_pct(p['share'])}</td>
+                <td class="num" data-v="{p['up_s']:.0f}">{fmt_duration(p['up_s'] * 1000)}</td>
+                <td class="num" data-v="{p['dps']:.0f}">{fmt_amount(p['dps'])}</td>""" if p else
+                      '<td class="num col-pull muted">—</td><td></td><td></td><td></td>') if pull_focus else ''
+        if r:
+            raid = r['raid_share']
+            marker = (f'<i style="position:absolute;left:{min(100, 100 * raid):.1f}%;top:-3px;bottom:-3px;width:2px;'
+                      f'background:var(--text)" title="Raid typical: {100 * raid:.0f}%"></i>' if raid is not None else '')
+            note = (f'<div class="bad-text small">⚠ The raid\'s {peers} typically put {100 * raid:.0f}% of their '
+                    f'damage here - you put {100 * r["mine_share"]:.0f}%</div>' if r['low'] else '')
+            all_cells = f"""<td class="num col-all">{_pct(r['mine_share'])}</td>
                 <td class="num">{_pct(raid)}</td>
                 <td style="min-width:160px"><div class="focus-bar" style="position:relative;overflow:visible">
-                    <i style="width:{width:.1f}%;background:{'var(--bad)' if r['low'] else 'var(--accent)'}"></i>{marker}</div></td>
-            </tr>""")
+                    <i style="width:{100 * r['mine_share']:.1f}%;background:{'var(--bad)' if r['low'] else 'var(--accent)'}"></i>{marker}</div></td>"""
+        else:
+            note, all_cells = '', '<td class="num col-all muted">—</td><td></td><td></td>'
+        out.append(f"""
+            <tr><td>{swatch}{esc(target)}{kind}{note}</td>{pull_cells}{all_cells}</tr>""")
+    pull_head = (f'<th colspan="4" class="col-pull">Pull #{number} (the timeline above)</th>' if pull_focus else '')
+    pull_cols = ('<th data-sort class="num col-pull">Your damage</th><th data-sort class="num">Share</th>'
+                 '<th data-sort class="num" title="Bosses: the whole pull. Adds: while the raid was hitting them">Up</th>'
+                 '<th data-sort class="num" title="Your damage on it over the time it was up">Your DPS while up</th>'
+                 if pull_focus else '')
     return f"""
-        <p class="muted small">Where your damage went over these pulls, next to the rest of the raid's {peers}
-           (their typical share - the line on the bar). Adds the raid focuses show up here by themselves; a red
-           bar means you put clearly less into a target than the others did.</p>
-        <div class="table-wrapper"><table class="compact">
-            <tr><th>Target</th><th class="num">Your damage</th><th class="num">Your share</th>
-                <th class="num">Raid typical</th><th></th></tr>
+        <p class="muted small">{f'Pull #{number} on the left, ' if pull_focus else ''}all {len(numbered)} pull(s) of
+           this boss on the right: your share of your damage next to the rest of the raid's {peers} (their typical
+           share - the line on the bar). A red bar means you put clearly less into a target than the others did.</p>
+        <div class="table-wrapper"><table class="compact focus-table">
+            <tr class="group-head"><th></th>{pull_head}<th colspan="3" class="col-all">All these pulls</th></tr>
+            <tr><th data-sort>Target</th>{pull_cols}
+                <th data-sort class="num col-all">Your share</th><th class="num">Raid typical</th><th></th></tr>
             {''.join(out)}</table></div>"""
 
 
