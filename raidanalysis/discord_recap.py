@@ -1,10 +1,12 @@
 """
 "📊 My analysis" - a private, per-player raid recap in Discord.
 
-The button sits on the bot's log posts and on raid events with a linked log.
-Clicking it replies with an ephemeral message (only the clicker sees it):
-their score, sub-scores and feedback for every boss they pulled that night,
-with Mythic Trap clips for the mechanics they struggled with.
+The button sits on raid events with a linked log (and older log posts). Clicking it replies with an
+ephemeral message (only the clicker sees it): one message for the night - the few things to work on and
+what went well, picked by coach.py from everything we know (mechanics, priority adds, potion timing,
+cooldowns and rotation against the top players, output) and weighted toward the bosses that mattered, a
+line per boss, and links to the full pages. The coaching may load the key pulls' focus data from Warcraft
+Logs first - Discord shows "thinking" meanwhile.
 
 Players are matched to the log through their linked Battle.net characters
 (wow_characters) and the character they signed up with for the event.
@@ -16,12 +18,11 @@ from urllib.parse import quote
 
 import discord
 
-from . import analyzer, benchmarks, db, guides
+from . import coach, db
 
 logger = logging.getLogger(__name__)
 
 CUSTOM_ID = 'raidanalysis:mine'
-MAX_BOSS_EMBEDS = 4
 DIFFICULTY_NAMES = {1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic'}
 _REPORT_CODE_RE = re.compile(r'reports/([A-Za-z0-9]{16})')
 
@@ -53,71 +54,14 @@ def _event_log_code(message_id):
     return match.group(1) if match else None
 
 
-def player_recap(code, character_names):
-    """
-    {'report', 'character', 'other_characters', 'bosses': [{'name', 'difficulty', 'pulls', 'killed',
-    'best', 'row', 'guide_for'}]} for one player in one report, or a dict with only 'error'.
-    """
-    report = db.get_report(code)
-    pulls = db.get_pulls(code) if report else []
-    if not pulls:
-        return {'error': 'not_analyzed' if not report else 'no_raid'}
-
-    played = {}
-    for pull in pulls:
-        for p in (pull.get('analysis') or {}).get('players') or []:
-            if p['name'].lower() in character_names:
-                played[p['name']] = played.get(p['name'], 0) + 1
-    if not played:
-        return {'error': 'not_in_log', 'report': report}
-    character = max(played, key=played.get)
-
-    groups = {}
-    for pull in pulls:
-        groups.setdefault((pull['encounter_id'], pull['difficulty']), []).append(pull)
-    bosses = []
-    for (encounter_id, difficulty), boss_pulls in groups.items():
-        numbered = [{'number': i, 'kill': p['kill'],
-                     'analysis': dict(p['analysis'] or {}, _duration=p['end_ms'] - p['start_ms'])}
-                    for i, p in enumerate(boss_pulls, 1)]
-        tags, _ = guides.effective_tags(encounter_id)
-        row = next((r for r in analyzer.player_report(numbered, tags) if r['name'] == character), None)
-        if not row:
-            continue
-        bosses.append({
-            'name': boss_pulls[0]['encounter_name'], 'difficulty': difficulty, 'pulls': len(boss_pulls),
-            'killed': any(p['kill'] for p in boss_pulls),
-            'best': min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None),
-            'row': row, 'guide_for': guides.guide_lookup(encounter_id),
-            **_cooldown_notes(code, (encounter_id, difficulty), boss_pulls, character)})
-    bosses.sort(key=lambda b: -b['row']['pulls'])
-    return {'report': report, 'character': character, 'bosses': bosses,
-            'other_characters': sorted(set(played) - {character})}
-
-
-def _cooldown_notes(code, boss, boss_pulls, character):
-    """{'cd_notes', 'compare_url'}: how their major cooldowns line up with the top parses of their spec."""
-    numbered = list(enumerate(boss_pulls, 1))
-    try:  # make sure the spells have Wowhead's text first (trinket or not, cooldown length...)
-        asyncio.run(benchmarks.ensure_spells_for(numbered, character))
-    except Exception:
-        logger.warning('[RAIDS] Spell lookups before the cooldown comparison failed', exc_info=True)
-    try:
-        data = benchmarks.for_player(numbered, character)
-    except Exception:
-        logger.exception('[RAIDS] Cooldown comparison failed')
-        data = None
-    if not data or not data['top'] or not data['rows']:
-        return {'cd_notes': [], 'compare_url': None}
-    from .web.routes import public_base_url
-    base = public_base_url()
-    url = (f'{base}/raids/report/{code}/compare/{quote(character)}?boss={boss[0]}-{boss[1]}' if base else None)
-    return {'cd_notes': benchmarks.notes(data['rows'], data['label'], limit=2), 'compare_url': url}
-
-
 # ============================================================================
 # Embeds
 # ============================================================================
+
+KIND_ICONS = {'mechanic': '💥', 'death': '💀', 'focus': '🎯', 'reaction': '⏱️', 'potion': '🧪', 'cooldowns': '⚔️',
+              'rotation': '🔁', 'uptime': '⏳', 'procs': '♻️', 'active': '⏸️', 'parse': '🏆', 'star': '⭐',
+              'prep': '🍲', 'utility': '🛠️', 'kill': '✔️', 'note': '•'}
+
 
 def _band(score):
     if score >= 80:
@@ -127,14 +71,14 @@ def _band(score):
     return 'Room to improve', 0xFF6B6B
 
 
-def _note_line(note, guide_for):
-    icon = {'bad': '⚠️', 'good': '✅', 'info': 'ℹ️'}[note['tone']]
-    line = f'{icon} {note["text"]}'
-    ability = note.get('ability')
-    if ability:
-        guide = guide_for(ability['id'], ability['name'])
+def _line(insight, multi_boss):
+    """One coaching line: icon, the boss when the night had several, the text, a Mythic Trap clip if there is one."""
+    line = f'{KIND_ICONS.get(insight["kind"], "•")} ' + (f'**{insight["boss"]}** · ' if multi_boss else '') + insight['text']
+    ability = insight.get('ability')
+    if ability and insight.get('guide_for'):
+        guide = insight['guide_for'](ability['id'], ability['name'])
         if guide and guide.get('video_url'):
-            line += f' — [🎞 watch the clip]({guide["embed_url"]})'
+            line += f' — [🎞 clip]({guide["embed_url"]})'
     return line
 
 
@@ -147,57 +91,58 @@ def _field_text(lines, limit=1024):
     return out.strip() or '—'
 
 
-def recap_embeds(recap):
-    report = recap['report']
-    title = report['title'][:200]
-    header = discord.Embed(
-        title=f'📊 Your raid: {title}',
-        url=f'https://www.warcraftlogs.com/reports/{report["code"]}',
-        description=(f'Playing **{recap["character"]}** · {len(recap["bosses"])} '
-                     f'boss{"es" if len(recap["bosses"]) != 1 else ""} · '
-                     f'{sum(b["row"]["pulls"] for b in recap["bosses"])} pulls'
-                     + (f'\nAlso played: {", ".join(recap["other_characters"])}' if recap['other_characters'] else '')),
-        color=0x6D7CFF)
-    embeds = [header]
-    said = set()  # trinkets already recommended
-    for boss in recap['bosses'][:MAX_BOSS_EMBEDS]:
-        row = boss['row']
-        label, color = _band(row['score'])
-        result = '✔ killed' if boss['killed'] else (f'best {boss["best"]:.1f}%' if boss['best'] is not None else '')
-        scores = ' · '.join(f'{name} **{row["scores"][key]:.0f}**' for key, name in
-                            (('survival', 'Survival'), ('mechanics', 'Mechanics'), ('potions', 'Potions'))
-                            if key in row['scores'])
-        embed = discord.Embed(
-            title=f'{boss["name"]} ({DIFFICULTY_NAMES.get(boss["difficulty"], boss["difficulty"])}) — '
-                  f'{row["score"]}/100 · {label}',
-            description=(f'{scores}\n{row["pulls"]} pull{"s" if row["pulls"] != 1 else ""} ({result}) · '
-                         f'{row["deaths"]} early death{"s" if row["deaths"] != 1 else ""} by mistake · '
-                         f'potted {row["potion_pulls"]}/{row["pulls"]}'),
-            color=color)
-        bad = [_note_line(n, boss['guide_for']) for n in row['feedback'] if n['tone'] == 'bad'][:3]
-        good = [_note_line(n, boss['guide_for']) for n in row['feedback'] if n['tone'] == 'good'][:3]
-        if bad:
-            embed.add_field(name='What to work on', value=_field_text(bad), inline=False)
-        if good:
-            embed.add_field(name='Going well', value=_field_text(good), inline=False)
-        if not bad and not good:
-            embed.add_field(name='Feedback', value='Nothing stands out — solid night. 👍' if row['score'] >= 60
-                            else 'No single thing stands out — see the scores above.', inline=False)
-        # "trinket X is worth getting" once per recap, not under every boss
-        cd_notes = [n for n in boss.get('cd_notes') or [] if n['tone'] != 'info' or n['text'].split(':')[0] not in said]
-        said.update(n['text'].split(':')[0] for n in cd_notes if n['tone'] == 'info')
-        if cd_notes:
-            icons = {'bad': '⚠️', 'good': '✅', 'info': '💎'}
-            lines = [f'{icons.get(n["tone"], "•")} {n["text"]}' for n in cd_notes]
-            if boss.get('compare_url'):
-                lines.append(f'[📈 See your cooldowns next to theirs]({boss["compare_url"]})')
-            embed.add_field(name='Cooldowns vs top players', value=_field_text(lines), inline=False)
-        embeds.append(embed)
-    if len(recap['bosses']) > MAX_BOSS_EMBEDS:
-        embeds[-1].set_footer(text=f'+{len(recap["bosses"]) - MAX_BOSS_EMBEDS} more bosses not shown')
-    else:
-        embeds[-1].set_footer(text='Only you can see this · scores compare you with the rest of the raid')
-    return embeds
+def _boss_line(b):
+    diff = DIFFICULTY_NAMES.get(b['difficulty'], b['difficulty'])
+    result = '✔' if b['killed'] else '✖'
+    progress = '' if b['killed'] or b['best'] is None else f' · best {b["best"]:.1f}%'
+    parse = f' · parse **{b["parse"]:.0f}**' if b.get('parse') is not None else ''
+    star = f' · ⭐ {b["star"]}' if b.get('star') else ''
+    return (f'{result} **{b["name"]}** ({diff}) · {b["pulls"]} pull{"s" if b["pulls"] != 1 else ""}{progress} · '
+            f'score **{b["score"]}**{parse}{star}')
+
+
+def recap_message(recap):
+    """(embed, view) for one player's night (coach.night): work on, going well, a line per boss, links."""
+    from .web.routes import public_base_url
+    report, bosses = recap['report'], recap['bosses']
+    main = max(bosses, key=lambda b: b['weight']) if bosses else None
+    multi = len(bosses) > 1
+    kills, pulls = sum(1 for b in bosses if b['killed']), sum(b['pulls'] for b in bosses)
+    parsed = [b for b in bosses if b.get('parse') is not None]
+    best = max(parsed, key=lambda b: b['parse']) if parsed else None
+    lines = [f'Playing **{recap["character"]}** · {len(bosses)} boss{"es" if len(bosses) != 1 else ""} · '
+             f'{kills} kill{"s" if kills != 1 else ""} · {pulls} pull{"s" if pulls != 1 else ""}']
+    if best:
+        lines.append(f'🏆 Best parse **{best["parse"]:.0f}** on {best["name"]}')
+    if recap['other_characters']:
+        lines.append(f'Also played: {", ".join(recap["other_characters"])}')
+    _, color = _band(main['score']) if main else ('', 0x6D7CFF)
+    embed = discord.Embed(title=f'📊 Your night: {report["title"][:200]}',
+                          url=f'https://www.warcraftlogs.com/reports/{report["code"]}',
+                          description='\n'.join(lines), color=color)
+    work = [_line(i, multi) for i in recap['work_on']]
+    embed.add_field(name='🔧 Work on', inline=False, value=_field_text(work) if work else
+                    'Nothing big stands out — a solid night. 👍')
+    good = [_line(i, multi) for i in recap['going_well']]
+    if good:
+        embed.add_field(name='✨ Going well', value=_field_text(good), inline=False)
+    embed.add_field(name='📋 Boss by boss', value=_field_text([_boss_line(b) for b in bosses]), inline=False)
+    foot = 'Only you can see this · Score = our mechanics grade · Parse = Warcraft Logs'
+    if recap.get('missing'):
+        foot += ' · Priority-add tips need Warcraft Logs, which is busy - try again later for those'
+    embed.set_footer(text=foot)
+
+    view = discord.ui.View()
+    base = public_base_url()
+    if base and main:
+        url = (f'{base}/raids/report/{report["code"]}/player/{quote(recap["character"])}'
+               f'?boss={main["key"][0]}-{main["key"][1]}&tab=damage')
+        view.add_item(discord.ui.Button(label=f'My full analysis ({main["name"]})'[:80], emoji='🎯',
+                                        style=discord.ButtonStyle.link, url=url))
+    night = full_analysis_url(report['code'])
+    if night:
+        view.add_item(discord.ui.Button(label='Full raid analysis', emoji='⚔️', style=discord.ButtonStyle.link, url=night))
+    return embed, view
 
 
 # ============================================================================
@@ -252,26 +197,28 @@ async def handle_my_analysis(interaction: discord.Interaction):
         if not names:
             await interaction.followup.send(ERRORS['no_characters'], ephemeral=True)
             return
-        recap = await asyncio.to_thread(player_recap, code, names)
+        recap = await asyncio.to_thread(coach.night, code, names)  # may load from WCL: 'thinking' meanwhile
         if recap.get('error') == 'not_analyzed':
             # Nothing yet: analyze it now and turn this private reply into the recap when done.
             reply = await interaction.followup.send(
                 '⏳ This log hasn\'t been analyzed yet — analyzing it now. This message will turn into your '
                 'recap when it\'s ready (usually a minute or two).', ephemeral=True, wait=True)
             ran = await _analyze_now(code)
-            recap = await asyncio.to_thread(player_recap, code, names)
+            recap = await asyncio.to_thread(coach.night, code, names)
             if recap.get('error'):
                 from .sync import status
                 why = (status.get('last_error') or '') if ran else 'the analysis queue was busy'
                 await reply.edit(content=ERRORS.get(recap['error'], ERRORS['not_analyzed'])
                                  + (f'\n-# {why[:300]}' if why else ''))
                 return
-            await reply.edit(content=None, embeds=recap_embeds(recap))
+            embed, view = recap_message(recap)
+            await reply.edit(content=None, embed=embed, view=view)
             return
         if recap.get('error'):
             await interaction.followup.send(ERRORS[recap['error']], ephemeral=True)
             return
-        await interaction.followup.send(embeds=recap_embeds(recap), ephemeral=True)
+        embed, view = recap_message(recap)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
         logger.exception('[RAIDS] My analysis failed')
         await interaction.followup.send('Something went wrong building your analysis — try again in a bit.',

@@ -390,6 +390,17 @@ def _sources_filter(names):
     return f'type = "damage" and ({who})'
 
 
+def key_pull(numbered, name):
+    """
+    (number, pull) a player's focus is shown and coached on: the kill, else the furthest wipe (the longest
+    among equals) - of the pulls with their throughput (extras). None without any.
+    """
+    have = [(n, p) for n, p in numbered
+            if name in (((p.get('analysis') or {}).get('extras') or {}).get('players') or {})]
+    return min(have, key=lambda np: (not np[1].get('kill'), np[1].get('fight_pct') or 100,
+                                     -(np[1]['end_ms'] - np[1]['start_ms']))) if have else None
+
+
 def priority_targets(code, pulls):
     """
     The kinds of add that were a priority in any of these pulls - from the raid samples focus views stored

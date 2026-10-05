@@ -755,6 +755,18 @@ def spec_label(player):
     return f"{readable(player.get('spec'))} {readable(player.get('class'))}s".strip()
 
 
+def major_casts(analysis, name):
+    """
+    A player's major cooldowns in one pull - damage / healing, on-use items, personal defensives:
+    [(ms into the pull, spell id, name, icon url)] (the focus timeline's lanes, the recap's coaching).
+    """
+    from . import db, spells
+    casts = (analysis.get('casts') or {}).get(name) or []
+    info = db.get_spells({sid for _, sid in casts}) if casts else {}
+    return [(t, sid, info[sid].get('name') or '', spells.icon_url(info[sid].get('icon'))) for t, sid in casts
+            if category(sid, info.get(sid)) in (THROUGHPUT, TRINKET, 'personal')]
+
+
 def for_player(numbered, name):
     """
     Everything the comparison views need for one character on one boss+difficulty:

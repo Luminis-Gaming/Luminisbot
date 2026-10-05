@@ -1181,3 +1181,66 @@ class TestPlayersCompactOutput(unittest.TestCase):
         self.assertLess(html.index('>Parse</th>'), html.index('>Player</th>'))       # between score and player
         self.assertIn('title="Average 75 over 2 parses · best 90"><span class="parse p75">75</span>', html)
         self.assertIn('title="No Warcraft Logs parse in these pulls">—', html)      # Boops: none
+
+
+class TestCoach(unittest.TestCase):
+    """The 'My analysis' coaching: the bosses that mattered, the few things that cost the most, what went well."""
+
+    def test_boss_weights(self):
+        from raidanalysis import coach
+        easy = {'pulls': 1, 'killed': True, 'start': 0}          # first boss, one-shot
+        mid = {'pulls': 6, 'killed': True, 'start': 1}
+        prog = {'pulls': 18, 'killed': False, 'start': 2}        # the night ended on 18 wipes here
+        w_easy, w_mid, w_prog = coach.boss_weights([easy, mid, prog])
+        self.assertEqual(w_prog, 1)
+        self.assertLess(w_easy, 0.15)                             # hardly worth a word
+        self.assertTrue(w_easy < w_mid < w_prog)
+
+    def test_pick_weighs_and_dedupes(self):
+        from raidanalysis import coach
+        found = [dict(coach._insight('bad', 60, 'death', 'Died first'), boss='Easy', score=60 * 0.1),
+                 dict(coach._insight('bad', 40, 'rotation', 'Rapid Fire low'), boss='Prog', score=40),
+                 dict(coach._insight('bad', 30, 'rotation', 'Aimed Shot low'), boss='Prog', score=30),
+                 dict(coach._insight('bad', 35, 'focus', 'Off the Heart'), boss='Prog', score=35),
+                 dict(coach._insight('good', 45, 'star', 'Most damage to the Heart'), boss='Prog', score=45)]
+        work = coach._pick(found, 'bad', 3)
+        self.assertEqual([i['text'] for i in work], ['Rapid Fire low', 'Off the Heart'])  # one rotation tip, easy boss out
+        self.assertEqual([i['text'] for i in coach._pick(found, 'good', 3)], ['Most damage to the Heart'])
+
+    def test_focus_insights(self):
+        from raidanalysis import coach
+        t = TestFocusTimeline()
+        off = coach.focus_insights(t.data(my_heart=False), 3, [{'t': 130000, 'end': 160000}])
+        texts = ' | '.join(i['text'] for i in off)
+        self.assertIn('Venomous Heart: you put 0% of your damage into it', texts)
+        self.assertIn('Never hit Venomous Heart', texts)
+        self.assertIn('Potion 10.0 s before Venomous Heart', texts)
+        late = coach.focus_insights(t.data(my_heart=True), 3, [{'t': 150000, 'end': 180000}],
+                                    {'Venomous Heart': {'players': [{'name': 'Boops'}, {'name': 'Futhark'}]}}, 'Boops')
+        texts = ' | '.join(i['text'] for i in late)
+        self.assertIn('Potion 10.0 s after Venomous Heart appeared', texts)
+        self.assertIn('4.0 s from Venomous Heart appearing to your first hit', texts)
+        self.assertIn('★ Most damage to Venomous Heart in the raid (pull #3)', texts)
+
+    def test_recap_message(self):
+        from unittest import mock
+        from raidanalysis import coach, discord_recap
+        work = [dict(coach._insight('bad', 50, 'focus', 'Venomous Heart: you put 34% of your damage into it'),
+                     boss="Ula'tek", score=50, guide_for=None)]
+        good = [dict(coach._insight('good', 45, 'star', '★ Most damage to Venomous Heart in the raid (pull #9)'),
+                     boss="Ula'tek", score=45, guide_for=None)]
+        bosses = [{'name': 'Gore Rattle', 'difficulty': 5, 'key': (1, 5), 'pulls': 1, 'killed': True, 'best': None,
+                   'score': 88, 'parse': 71.0, 'weight': 0.1, 'star': None},
+                  {'name': "Ula'tek", 'difficulty': 5, 'key': (2, 5), 'pulls': 18, 'killed': False, 'best': 8.9,
+                   'score': 62, 'parse': 53.0, 'weight': 1, 'star': 'Venomous Heart'}]
+        recap = {'report': {'title': 'Tuesday', 'code': 'abc'}, 'character': 'Futhark', 'other_characters': [],
+                 'bosses': bosses, 'work_on': work, 'going_well': good, 'missing': None}
+        with mock.patch('raidanalysis.web.routes.public_base_url', return_value='https://lumi.example'):
+            embed, view = discord_recap.recap_message(recap)
+        fields = {f.name: f.value for f in embed.fields}
+        self.assertIn("**Ula'tek** · Venomous Heart: you put 34%", fields['🔧 Work on'])
+        self.assertIn("✖ **Ula'tek** (Mythic) · 18 pulls · best 8.9% · score **62** · parse **53** · ⭐ Venomous Heart",
+                      fields['📋 Boss by boss'])
+        self.assertIn('Best parse **71**', embed.description)
+        urls = [b.url for b in view.children]
+        self.assertIn("https://lumi.example/raids/report/abc/player/Futhark?boss=2-5&tab=damage", urls)

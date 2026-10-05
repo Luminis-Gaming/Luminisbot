@@ -1117,8 +1117,7 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     if not have:
         return '', None
     wanted = request.query.get('fp')
-    number, pull = next(((n, p) for n, p in have if str(p['fight_id']) == wanted), None) or min(
-        have, key=lambda np: (not np[1].get('kill'), np[1].get('fight_pct') or 100, -(np[1]['end_ms'] - np[1]['start_ms'])))
+    number, pull = next(((n, p) for n, p in have if str(p['fight_id']) == wanted), None) or focus.key_pull(have, name)
     def chip_label(p):
         return '✔ Kill' if p.get('kill') else f"{p.get('fight_pct') or 0:.0f}%"
     chips = ''.join(
@@ -1129,11 +1128,7 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     analysis = pull.get('analysis') or {}
     # Your major cooldowns this pull (damage / healing, on-use items, personal defensives): drawn in their
     # own lanes, and their buffs fetched with the focus data
-    casts = (analysis.get('casts') or {}).get(name) or []
-    info = db.get_spells({sid for _, sid in casts}) if casts else {}
-    cooldowns = [(t, sid, info[sid].get('name') or '', spells.icon_url(info[sid].get('icon')))
-                 for t, sid in casts
-                 if benchmarks.category(sid, info.get(sid)) in (benchmarks.THROUGHPUT, benchmarks.TRINKET, 'personal')]
+    cooldowns = benchmarks.major_casts(analysis, name)
     if request.query.get('focus_load'):
         data, why = await focus.load(code, pull, name, analysis.get('extras') or {}, {c[2] for c in cooldowns if c[2]})
         if data:  # and everyone's damage per target in it, for the opened rows of "Where your damage went"
