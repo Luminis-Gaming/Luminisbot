@@ -160,10 +160,10 @@ async def check_for_new_logs():
                     )
                     embed.set_footer(text="Click the buttons below to view performance data")
                     
-                    # Add buttons (+ private per-player recap from the raid analysis)
+                    # Add buttons. No "My analysis" / "Full analysis" here: the log is posted as the raid
+                    # starts, before there's anything to analyze - they're on the raid's signup, which
+                    # gets this log attached (auto_link_raid_log below).
                     view = LogButtonsView()
-                    from raidanalysis.discord_recap import add_button as add_my_analysis_button
-                    add_my_analysis_button(view, code=log['code'])
 
                     try:
                         await send_message_with_auto_delete(channel, embed=embed, view=view)
@@ -331,7 +331,7 @@ async def on_ready():
         client.add_view(LogButtonsView())
         client.add_view(RaidButtonsView())  # Add raid system buttons
         mythicplus.register_views(client)   # M+ event buttons (survive restarts)
-        raidanalysis.register_views(client) # "My analysis" button on log posts / raid events
+        raidanalysis.register_views(client) # "My analysis" button on raid events (and older log posts)
         client.added_view = True
     
     # Sync command tree and start background tasks

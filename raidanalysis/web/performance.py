@@ -99,6 +99,17 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
     </div>"""
 
 
+def _meter(fill, value, color, tick=None, title='', cls=''):
+    """
+    One line: a thin track filled to `fill` (0-1; a tick at `tick`), then its value - the same shape in every
+    column, so a row's bars and numbers line up.
+    """
+    mark = f'<i class="dtick" style="left:{min(100, 100 * tick):.1f}%"></i>' if tick is not None else ''
+    return (f'<div class="dmeter{" " + cls if cls else ""}" style="--c:{color}" title="{title}">'
+            f'<div class="dtrack"><i style="width:{min(100, 100 * max(0, fill)):.1f}%"></i>{mark}</div>'
+            f'<span class="dval">{value}</span></div>')
+
+
 def _focus(numbered, name, role, pull_focus=None):
     """
     Where your damage went, as a damage meter (WCL-style): a bar per target in its timeline color with the
@@ -136,11 +147,9 @@ def _focus(numbered, name, role, pull_focus=None):
             pull_cells = f"""
                 <td data-v="{p['damage']}"><div class="dbar" style="--c:{color};--w:{100 * p['damage'] / most:.1f}%">
                     <span>{fmt_amount(p['damage'])}</span><b>{_pct(p['share'])}</b></div></td>
-                <td class="num" data-v="{p['up_s']:.0f}" style="--c:{color}">{fmt_duration(p['up_s'] * 1000)}
-                    <div class="dmini"><i style="width:{100 * p['up_s'] / longest:.0f}%"></i></div></td>
-                <td class="num{' dtop' if p['dps'] >= fastest else ''}" data-v="{p['dps']:.0f}" style="--c:{color}">
-                    <span class="dnum">{fmt_amount(p['dps'])}</span>
-                    <div class="dmini"><i style="width:{100 * p['dps'] / fastest:.0f}%"></i></div></td>"""
+                <td data-v="{p['up_s']:.0f}">{_meter(p['up_s'] / longest, fmt_duration(p['up_s'] * 1000), color)}</td>
+                <td data-v="{p['dps']:.0f}">{_meter(p['dps'] / fastest, fmt_amount(p['dps']), color,
+                                                    cls='dtop' if p['dps'] >= fastest else '')}</td>"""
         elif pull_focus:
             pull_cells = '<td class="muted small">not hit this pull</td><td></td><td></td>'
         else:
@@ -151,13 +160,11 @@ def _focus(numbered, name, role, pull_focus=None):
             band = 'bad' if r['low'] else 'good' if delta is not None and delta >= 3 else ''
             chip = (f'<span class="ddelta {band}" title="Your share minus the raid\'s {peers}\' typical share">'
                     f'{delta:+.0f} pts</span>' if delta is not None else '')
-            tick = (f'<i style="left:{min(100, 100 * raid):.1f}%"></i>' if raid is not None else '')
             all_cells = f"""
-                <td data-v="{r['mine_share']:.4f}" style="min-width:150px">
-                    <div class="fshare" style="--c:{'var(--bad)' if r['low'] else color}"
-                         title="You {_pct(r['mine_share'])} · raid typical {_pct(raid)}">
-                        <b style="width:{min(100, 100 * r['mine_share']):.1f}%"></b>{tick}</div>
-                    <span class="small muted">{_pct(r['mine_share'])} · raid {_pct(raid)}</span></td>
+                <td data-v="{r['mine_share']:.4f}">{_meter(
+                    r['mine_share'], f'{_pct(r["mine_share"])} <small>raid {_pct(raid)}</small>',
+                    'var(--bad)' if r['low'] else color, raid, f'You {_pct(r["mine_share"])} · raid typical {_pct(raid)}',
+                    'wide')}</td>
                 <td data-v="{delta if delta is not None else 0:.1f}">{chip}</td>"""
         else:
             all_cells = '<td class="muted small">—</td><td></td>'

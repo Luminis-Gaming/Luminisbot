@@ -400,6 +400,30 @@ tr.muted-row td { opacity: 0.7; }
 .focus-table .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
     border-bottom: 1px solid var(--border); }
 .focus-table .col-pull, .focus-table .col-all { border-left: 1px solid var(--border); }
+/* Focus loading: a WoW cast bar (gold, a spark at the edge; green when done, red when interrupted) */
+.castbar-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 36px 0 30px; }
+.castbar { display: flex; align-items: center; gap: 10px; width: min(460px, 100%); }
+.cb-icon { width: 40px; height: 40px; border-radius: 4px; flex-shrink: 0;
+    box-shadow: 0 0 0 1px #000, 0 0 0 2px #8a6d2b; animation: cb-glow 1.6s ease-in-out infinite; }
+@keyframes cb-glow { 50% { box-shadow: 0 0 0 1px #000, 0 0 0 2px #e8b64c, 0 0 14px rgba(240,180,60,0.55); } }
+.cb-bar { position: relative; flex: 1; height: 26px; border-radius: 3px; overflow: hidden; background: #17120a;
+    border: 1px solid #000; box-shadow: 0 0 0 1px #8a6d2b, inset 0 0 8px rgba(0,0,0,0.85); }
+.cb-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    background: linear-gradient(180deg, #ffd96a, #f2a400 48%, #c27800); }
+.cb-fill::after { content: ''; position: absolute; right: -7px; top: -6px; bottom: -6px; width: 14px;
+    background: radial-gradient(closest-side, rgba(255,255,225,0.95), rgba(255,215,110,0)); }
+.cb-name, .cb-time { position: absolute; top: 0; line-height: 26px; font-size: 12px; font-weight: 700; color: #fff;
+    text-shadow: 0 1px 2px #000, 0 0 3px #000; white-space: nowrap; }
+.cb-name { left: 10px; right: 52px; overflow: hidden; text-overflow: ellipsis; }
+.cb-time { right: 8px; font-variant-numeric: tabular-nums; }
+.cb-flavor { margin: 0; min-height: 18px; font-size: 13px; font-style: italic; color: var(--muted); text-align: center; }
+.castbar-wrap.done .cb-fill { background: linear-gradient(180deg, #8dff8d, #2fbf3a 48%, #1b7d24); }
+.castbar-wrap.done .cb-fill::after, .castbar-wrap.failed .cb-fill::after { display: none; }
+.castbar-wrap.failed .cb-fill { width: 100% !important; background: linear-gradient(180deg, #ff7a7a, #c62828 48%, #7a1717); }
+.castbar-wrap.failed .cb-icon { animation: none; filter: grayscale(0.7); }
+.castbar-wrap.failed .cb-flavor { font-style: normal; color: var(--text); }
+.cb-retry[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .cb-icon { animation: none; } }
 /* Focus: toggles, spawn bars, add cards (tabs, share bars, chips), the damage-by-target meter */
 .focus-tl .tl-chips { margin: 0 0 10px; }
 .focus-tl .tl-chip i { background: var(--c); }
@@ -477,10 +501,17 @@ tr.muted-row td { opacity: 0.7; }
     background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 55%, transparent)); }
 .dbar span, .dbar b { position: relative; padding: 0 9px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px rgba(0,0,0,0.65); }
 .dbar span { font-weight: 700; color: #fff; } .dbar b { font-size: 12px; }
-.dmini { height: 4px; border-radius: 2px; background: var(--surface-3); margin-top: 5px; min-width: 60px; }
-.dmini i { display: block; height: 100%; border-radius: 2px; background: var(--c); }
-.dnum { font-weight: 700; font-variant-numeric: tabular-nums; }
-.dtop .dnum { color: #ff8000; }
+/* Every metric cell: one line - a 6px track (on the row's middle, like the damage bar's) and its value */
+.dmeter { display: flex; align-items: center; gap: 10px; min-width: 150px; }
+.dtrack { position: relative; flex: 1; min-width: 60px; height: 6px; border-radius: 3px; background: var(--surface-3); }
+.dtrack > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--c); }
+.dtrack .dtick { left: 0; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
+.dval { flex: 0 0 56px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dmeter.wide { min-width: 220px; }
+.dmeter.wide .dval { flex-basis: 104px; text-align: left; }
+.dval small { font-weight: 400; color: var(--muted); margin-left: 4px; }
+.dmeter.dtop .dval { color: #ff8000; }
+.dtable td:last-child { text-align: left; }
 .ddelta { display: inline-block; min-width: 58px; text-align: center; padding: 3px 8px; border-radius: 999px; font-size: 12px;
     font-weight: 700; font-variant-numeric: tabular-nums; background: var(--surface-3); color: var(--muted); }
 .ddelta.good { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
@@ -784,6 +815,45 @@ document.querySelectorAll('.cons-tl').forEach(tl => {
   }));
   boxes.forEach(b => b.addEventListener('change', apply));
   apply();
+});
+// Focus loading: a cast bar while ?focus_load=1 fetches the pull from Warcraft Logs, then a reload
+// (the browser keeps the scroll position) renders the timeline from the stored data.
+document.querySelectorAll('[data-focus-load]').forEach(box => {
+  const fill = box.querySelector('.cb-fill'), time = box.querySelector('.cb-time');
+  const name = box.querySelector('.cb-name'), flavor = box.querySelector('.cb-flavor');
+  const lines = JSON.parse(box.dataset.lines || '[]'), CAST = 8;  // a typical load, in seconds
+  const t0 = performance.now();
+  let finished = false, n = 0;
+  const frame = () => {
+    if (finished) return;
+    const s = (performance.now() - t0) / 1000;  // full speed to 90 %, then ever slower: never "done" by itself
+    const p = s < CAST ? 0.9 * s / CAST : 0.9 + 0.09 * (1 - Math.exp(-(s - CAST) / 8));
+    fill.style.width = (100 * p).toFixed(1) + '%';
+    time.textContent = s.toFixed(1);
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+  const rotate = setInterval(() => { if (lines.length) flavor.textContent = lines[++n % lines.length]; }, 2400);
+  const fail = why => {
+    finished = true; clearInterval(rotate);
+    box.classList.add('failed'); name.textContent = 'Interrupted'; time.textContent = '';
+    flavor.textContent = why || "Warcraft Logs didn't answer - try again in a bit.";
+    const retry = box.querySelector('.cb-retry');
+    retry.hidden = false; retry.onclick = () => location.reload();
+  };
+  const url = new URL(location.href);
+  url.hash = '';
+  url.searchParams.set('focus_load', '1');
+  fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(res => {
+      if (!res.ok) return fail(res.why);
+      finished = true; clearInterval(rotate);
+      box.classList.add('done'); fill.style.width = '100%'; name.textContent = 'Cast complete';
+      flavor.textContent = 'Here it comes…';
+      setTimeout(() => location.reload(), 400);
+    })
+    .catch(() => fail());
 });
 // Focus cards: Overall / per-spawn tabs.
 document.querySelectorAll('.fcard .ftabs').forEach(bar => bar.querySelectorAll('[data-tab]').forEach(btn => {

@@ -390,6 +390,13 @@ def _sources_filter(names):
     return f'type = "damage" and ({who})'
 
 
+def cached(code, fight_id, name):
+    """The stored focus data for one player in one pull, or None when it still has to come from WCL."""
+    from . import db
+    data = db.get_focus(code, fight_id, name)
+    return data if data and data.get('v') == FOCUS_VERSION else None
+
+
 async def load(code, pull, name, extras, cooldown_names=()):
     """
     The focus data for one player in one pull: cached in raid_focus, else fetched from WCL now (the player's

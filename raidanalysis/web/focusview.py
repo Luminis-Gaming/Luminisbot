@@ -535,3 +535,35 @@ def cards(data, color_of, potions, cooldowns, top_share, my_share, label):
                 '<div class="fcards compact">' + ''.join(_compact_card(k, color_of.get(k['target'], OTHER_COLOR))
                                                          for k in rest) + '</div>')
     return out
+
+
+# ============================================================================
+# Loading: a WoW cast bar while the pull's events come from Warcraft Logs
+# ============================================================================
+
+LOADER_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_rune_01.jpg'  # the Hearthstone
+LOADER_LINES = (
+    'Waiting for the tank to pull…', 'Asking Warcraft Logs nicely…', 'Counting every Venomous Heart…',
+    'Lining up your potion with the spawns…', 'Checking who stood in the bad…', 'Rolling Need on your damage events…',
+    'Reading the whole combat log. Every line.', 'Releasing spirit… no wait, still loading',
+    'Drinking to full before the next pull…', 'Buffing the raid, one last time…',
+)
+
+
+def loader(number):
+    """
+    The cast bar shown while pull #number's focus data loads (PAGE_JS: it asks the page for ?focus_load=1,
+    then reloads with everything in place - or shows the cast as interrupted, with why).
+    """
+    import json
+    return f"""
+        <div class="castbar-wrap" data-focus-load data-lines="{esc(json.dumps(LOADER_LINES))}">
+            <div class="castbar">
+                <img class="cb-icon" src="{LOADER_ICON}" alt="">
+                <div class="cb-bar"><i class="cb-fill"></i>
+                    <span class="cb-name">Summoning pull #{number} from Warcraft Logs</span>
+                    <span class="cb-time">0.0</span></div>
+            </div>
+            <p class="cb-flavor">{LOADER_LINES[0]}</p>
+            <button type="button" class="btn btn-secondary btn-sm cb-retry" hidden>Recast</button>
+        </div>"""

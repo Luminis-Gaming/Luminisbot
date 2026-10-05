@@ -133,7 +133,8 @@ def _public(handler):
             response = await handler(request)
         except web.HTTPFound as redirect:
             raise web.HTTPFound(redirect.location.replace('/admin/raids', '/raids', 1)) from None
-        if cacheable and response.status == 200 and response.content_type == 'text/html':
+        if cacheable and response.status == 200 and response.content_type == 'text/html' \
+                and 'data-focus-load' not in response.text:  # still loading: the reload must render it anew
             if len(_public_cache) >= PUBLIC_CACHE_MAX:
                 _public_cache.clear()
             _public_cache[key] = (time.time() + PUBLIC_CACHE_SECONDS, response.text)
@@ -1054,6 +1055,8 @@ async def handle_player(request):
         body += players.player_page(player, guide_for, pull_href)
     elif tab == 'damage':
         section, pull_focus = await _focus_section(request, code, numbered, whole_night, name, tab_href('damage'))
+        if isinstance(section, web.Response):  # ?focus_load=1: the cast bar's request
+            return section
         body += performance.damage_tab(numbered, player, pull_href, section, pull_focus)
     elif tab == 'cooldowns':
         await benchmarks.ensure_spells_for(whole_night, name)
@@ -1070,8 +1073,10 @@ async def handle_player(request):
 async def _focus_section(request, code, numbered, whole_night, name, damage_href):
     """
     The Focus timeline for one pull (?fp=fight id; default the kill, else the furthest wipe), with its pull
-    picker. Fetches the pull's damage events from WCL the first time someone opens it (focus.load).
-    Returns (html, that pull's numbers by target for the damage tab's table, or None).
+    picker. Returns (html, that pull's numbers by target for the damage tab's table, or None).
+    Not stored yet: the tab renders at once with a cast bar in its place, which asks for the same page with
+    ?focus_load=1 - that fetches it from WCL (focus.load) and answers {'ok', 'why'} - and then reloads. So
+    for ?focus_load=1 the first value is that JSON response.
     """
     from .. import focus
     from . import focusview
@@ -1097,9 +1102,12 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     cooldowns = [(t, sid, info[sid].get('name') or '', spells.icon_url(info[sid].get('icon')))
                  for t, sid in casts
                  if benchmarks.category(sid, info.get(sid)) in (benchmarks.THROUGHPUT, benchmarks.TRINKET, 'personal')]
-    data, why = await focus.load(code, pull, name, analysis.get('extras') or {}, {c[2] for c in cooldowns if c[2]})
+    if request.query.get('focus_load'):
+        data, why = await focus.load(code, pull, name, analysis.get('extras') or {}, {c[2] for c in cooldowns if c[2]})
+        return web.json_response({'ok': bool(data), 'why': why}, headers=SECURITY_HEADERS), None
+    data = focus.cached(code, pull['fight_id'], name)
     if not data:
-        return picker + f'<p class="muted">{esc(why)}</p>', None
+        return picker + focusview.loader(number), None
     order, color_of = focusview.colors(data)
     potions = [u for u in analysis.get('consumables') or [] if u['name'] == name and u.get('kind') == 'potion']
     compare_data = benchmarks.for_player(whole_night, name) or {}
