@@ -158,6 +158,10 @@ async def list_guild_reports(session, guild_id, limit=10):
              'zone': {'id': r.get('zone')}, 'owner': {'name': r.get('owner')}} for r in reports]
 
 
+async def get_actor_ids(session, code):
+    return {a['name']: a['id'] for a in _players(await _report_fights(session, code))}
+
+
 # ============================================================================
 # Tables and events
 # ============================================================================
@@ -209,7 +213,7 @@ async def get_fight_extras(session, code, fight_id):
             'boss_ids': wcl.boss_ids(await _table(session, code, 'damage-taken', start, end, hostility=1))}
 
 
-async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False, others=()):
+async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False, others=(), targets=False):
     start, end = await _window(session, code, fight_id)
     others = {int(o) for o in others}
     out = {}
@@ -220,7 +224,9 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
                                              hostility=1) for b in bosses],
                     'casts': await _table(session, code, 'casts', start, end, sourceid=aid) if casts else None,
                     'on_others': (await _table(session, code, 'buffs', start, end, sourceid=aid)
-                                  if aid in others else None)}
+                                  if aid in others else None),
+                    'targets': (await _table(session, code, 'damage-done', start, end, sourceid=aid, by='target')
+                                if targets else None)}
     return out
 
 

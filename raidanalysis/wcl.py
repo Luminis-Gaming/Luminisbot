@@ -236,6 +236,37 @@ async def get_report_rankings(session, code, fight_id):
     return ((data.get('reportData') or {}).get('report') or {}).get('rankings')
 
 
+_actors = {}  # report code -> {player name: actor id} (the focus view asks once per report)
+
+
+@_v1_fallback
+async def get_actor_ids(session, code):
+    """{player name: actor id} in a report."""
+    if code not in _actors:
+        data = await query(session, """
+            query($code: String!) { reportData { report(code: $code) { masterData { actors(type: "Player") { id name } } } } }
+        """, {'code': code})
+        actors = ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {}).get('actors')) or []
+        _actors[code] = {a['name']: a['id'] for a in actors}
+    return _actors[code]
+
+
+async def get_focus_graphs(session, code, fight_id, actor_id):
+    """The raid's and one player's damage over time by target (focus.py) - v2 only: v1 has no graphs."""
+    data = await query(session, """
+        query($code: String!, $fights: [Int]!, $actor: Int!) {
+          reportData {
+            report(code: $code) {
+              raid: graph(fightIDs: $fights, dataType: DamageDone, viewBy: Target)
+              you: graph(fightIDs: $fights, dataType: DamageDone, viewBy: Target, sourceID: $actor)
+            }
+          }
+        }
+    """, {'code': code, 'fights': [fight_id], 'actor': int(actor_id)})
+    report = (data.get('reportData') or {}).get('report') or {}
+    return {'raid': _unwrap(report.get('raid')), 'you': _unwrap(report.get('you'))}
+
+
 @_v1_fallback
 async def get_fight_extras(session, code, fight_id):
     """
@@ -286,12 +317,13 @@ PLAYER_TABLES_PER_REQUEST = 5
 
 
 @_v1_fallback
-async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False, others=()):
+async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False, others=(), targets=False):
     """
     Per player: the buffs they gave themselves, their debuffs on each boss, with casts=True their Casts
     table (names + counts), and for the ids in others (healers) the buffs they put on anyone - HoTs like
-    Renewing Mist - a few players per request: {actor id: {'buffs', 'debuffs': [one table per boss],
-    'casts', 'on_others'}} (v1-shaped tables, None when not asked).
+    Renewing Mist - and with targets=True their damage by target (the top players' focus) - a few players
+    per request: {actor id: {'buffs', 'debuffs': [one table per boss], 'casts', 'on_others', 'targets'}}
+    (v1-shaped tables, None when not asked).
     """
     if not actor_ids:
         return {}
@@ -299,7 +331,7 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
         out = {}
         for i in range(0, len(actor_ids), PLAYER_TABLES_PER_REQUEST):
             out.update(await get_player_tables(session, code, fight_id, actor_ids[i:i + PLAYER_TABLES_PER_REQUEST],
-                                               bosses, casts, others))
+                                               bosses, casts, others, targets))
         return out
     parts = []
     for aid in actor_ids:
@@ -312,6 +344,8 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
             parts.append(f'c{aid}: table(fightIDs: $fights, dataType: Casts, sourceID: {aid})')
         if aid in {int(o) for o in others}:
             parts.append(f'o{aid}: table(fightIDs: $fights, dataType: Buffs, sourceID: {aid})')
+        if targets:
+            parts.append(f't{aid}: table(fightIDs: $fights, dataType: DamageDone, viewBy: Target, sourceID: {aid})')
     data = await query(session, """
         query($code: String!, $fights: [Int]!) {
           reportData { report(code: $code) { %s } }
@@ -321,7 +355,8 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
     return {int(aid): {'buffs': _unwrap(report.get(f'b{int(aid)}')),
                        'debuffs': [_unwrap(report.get(f'd{int(aid)}_{k}')) for k in range(len(bosses))],
                        'casts': _unwrap(report.get(f'c{int(aid)}')),
-                       'on_others': _unwrap(report.get(f'o{int(aid)}'))}
+                       'on_others': _unwrap(report.get(f'o{int(aid)}')),
+                       'targets': _unwrap(report.get(f't{int(aid)}'))}
             for aid in actor_ids}
 
 

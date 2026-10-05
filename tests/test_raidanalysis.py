@@ -996,3 +996,56 @@ class TestHotsOnOthers(unittest.TestCase):
         row = throughput.on_others_rows(numbered, 'Boops', top)[0]
         self.assertEqual((row['name'], row['ours'], row['top'], row['verdict']), ('Renewing Mist', 6.0, 8.0, 'ok'))
         self.assertEqual(throughput.uptime(numbered, 'Boops', top), [])  # no "uptime on you" tile for it
+
+
+class TestFocusTimeline(unittest.TestCase):
+    """The Venomous Heart is up 25 s: the raid piles into it - were you on it, and was your potion ready?"""
+
+    @staticmethod
+    def graph(series):
+        """WCL-style graph: values on a 1 s interval from the pull's start (t0 = 1000)."""
+        return {'data': {'series': [{'name': n, 'type': k, 'pointStart': 1000, 'pointInterval': 1000, 'data': v}
+                                    for n, k, v in series]}}
+
+    def data(self, my_heart):
+        from raidanalysis import focus
+        boss = [10] * 300
+        heart = [0] * 140 + [30] * 25 + [0] * 135        # up 2:20-2:45, the raid's main target then
+        raid = self.graph([('Ula\'tek', 'Boss', boss), ('Venomous Heart', 'NPC', heart), ('Total', '', [1] * 300)])
+        mine_heart = [0] * 140 + [my_heart] * 25 + [0] * 135
+        you = self.graph([('Ula\'tek', 'Boss', [1] * 300), ('Venomous Heart', 'NPC', mine_heart)])
+        return focus.from_graphs(raid, you, 1000, 300000,
+                                 {"Ula'tek": 3_000_000, 'Venomous Heart': 750_000},
+                                 {"Ula'tek": 300_000, 'Venomous Heart': 25_000 * my_heart or 1})
+
+    def test_windows_and_verdicts(self):
+        from raidanalysis import focus
+        d = self.data(my_heart=0.2)
+        self.assertEqual(set(d['raid']), {"Ula'tek", 'Venomous Heart'})            # no 'Total' series
+        self.assertEqual(sum(d['raid']['Venomous Heart']['b']), 750_000)           # scaled to the real damage
+        w = focus.windows(d)[0]
+        self.assertEqual((w['target'], w['start'], w['end']), ('Venomous Heart', 140000, 165000))
+        self.assertTrue(w['priority'])
+        self.assertGreater(w['raid_share'], 0.7)
+        self.assertEqual(w['verdict'], 'off')                                       # you stayed on the boss
+        self.assertEqual(focus.windows(self.data(my_heart=5))[0]['verdict'], 'good')
+
+    def test_points_formats(self):
+        from raidanalysis import focus
+        pairs = {'data': {'series': [{'name': 'A', 'data': [[1000, 5], [6000, 5]]}]}}
+        dicts = {'data': {'series': [{'name': 'A', 'data': [{'x': 1000, 'y': 5}, {'x': 6000, 'y': 5}]}]}}
+        for g in (pairs, dicts):
+            self.assertEqual(focus.buckets(g, 1000, 10000)['A']['b'], [5.0, 5.0])
+
+    def test_view_renders_potion_timing(self):
+        from raidanalysis.web import focusview
+        d = self.data(my_heart=0.2)
+        order, color_of = focusview.colors(d)
+        pull = {'fight_id': 1, 'start_ms': 1000, 'end_ms': 301000, 'analysis': {'boss_casts': [], 'boss_abilities': []}}
+        potions = [{'t': 130000, 'end': 160000, 'ability': 'Liquid Luster'}]
+        html = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [])
+        self.assertIn('fwin prio', html)
+        cards = focusview.cards(d, color_of, potions, [], {}, {}, 'Havoc Demon Hunters')
+        self.assertIn('10 s before it appeared', cards)
+        self.assertIn('covered <b>80%</b>', cards)                                 # 20 of the 25 s
+        self.assertIn('Off target', cards)

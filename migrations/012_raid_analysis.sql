@@ -129,3 +129,14 @@ CREATE TABLE IF NOT EXISTS raid_tracked_spells (
 
 -- When a report first came in: the 10 latest raid nights are kept, imports for 7 days (db.prune_reports).
 ALTER TABLE raid_reports ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+
+-- Focus over time for one player in one pull (raidanalysis/focus.py): WCL's damage graphs by target,
+-- fetched when someone opens the pull's Focus view, bucketed and scaled.
+CREATE TABLE IF NOT EXISTS raid_focus (
+    report_code TEXT NOT NULL REFERENCES raid_reports(code) ON DELETE CASCADE,
+    fight_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    data JSONB NOT NULL,
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (report_code, fight_id, name)
+);

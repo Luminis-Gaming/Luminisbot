@@ -131,6 +131,17 @@ def ensure_guide_schema(cursor):
         );
     """)
     cursor.execute("ALTER TABLE raid_spells ADD COLUMN IF NOT EXISTS parser INTEGER NOT NULL DEFAULT 1")
+    # Focus over time for one player in one pull (focus.py), fetched when someone opens it
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_focus (
+            report_code TEXT NOT NULL REFERENCES raid_reports(code) ON DELETE CASCADE,
+            fight_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            data JSONB NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (report_code, fight_id, name)
+        );
+    """)
     # Spells the game's Cooldown Manager tracks as buffs (gamedata.py), from wago.tools
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_tracked_spells (
@@ -231,6 +242,19 @@ def fight_ids_missing_extras(code, version):
           AND COALESCE((analysis->'extras'->>'v')::int, 0) < %s
     """, (code, version), fetch='all')
     return {r['fight_id'] for r in rows}
+
+
+def get_focus(code, fight_id, name):
+    row = _run("SELECT data FROM raid_focus WHERE report_code = %s AND fight_id = %s AND name = %s",
+               (code, fight_id, name), fetch='one')
+    return row['data'] if row else None
+
+
+def save_focus(code, fight_id, name, data):
+    _run("""
+        INSERT INTO raid_focus (report_code, fight_id, name, data) VALUES (%s, %s, %s, %s)
+        ON CONFLICT (report_code, fight_id, name) DO UPDATE SET data = EXCLUDED.data, fetched_at = NOW()
+    """, (code, fight_id, name, Json(data)))
 
 
 def extras_state(code, version):

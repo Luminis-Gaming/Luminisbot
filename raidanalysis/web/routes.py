@@ -1045,7 +1045,8 @@ async def handle_player(request):
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)
     elif tab == 'damage':
-        body += performance.damage_tab(numbered, player, pull_href)
+        section = await _focus_section(request, code, numbered, whole_night, name, tab_href('damage'))
+        body += performance.damage_tab(numbered, player, pull_href, section)
     elif tab == 'cooldowns':
         await benchmarks.ensure_spells_for(whole_night, name)
         body += _compare_card(request, code, selected, name, whole_night, tab_href('cooldowns'))
@@ -1056,6 +1057,60 @@ async def handle_player(request):
         body += performance.rotation_tab(numbered, player, data, back=None if request.get('public') else tab_href('rotation'),
                                          tracked=tracked_ids())
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
+
+
+async def _focus_section(request, code, numbered, whole_night, name, damage_href):
+    """
+    The Focus timeline for one pull (?fp=fight id; default the kill, else the furthest wipe), with its pull
+    picker. Fetches the pull's damage graphs from WCL the first time someone opens it (focus.load).
+    """
+    from .. import focus
+    from . import focusview
+    have = [(n, p) for n, p in numbered
+            if name in ((p.get('analysis') or {}).get('extras') or {}).get('players', {})]
+    if not have:
+        return ''
+    wanted = request.query.get('fp')
+    number, pull = next(((n, p) for n, p in have if str(p['fight_id']) == wanted), None) or min(
+        have, key=lambda np: (not np[1].get('kill'), np[1].get('fight_pct') or 100, -(np[1]['end_ms'] - np[1]['start_ms'])))
+    def chip_label(p):
+        return '✔ Kill' if p.get('kill') else f"{p.get('fight_pct') or 0:.0f}%"
+    chips = ''.join(
+        f'<a class="pull-chip{" kill" if p.get("kill") else ""}{" active" if p is pull else ""}" '
+        f'href="{esc(damage_href)}&fp={p["fight_id"]}#focus">#{n} {chip_label(p)}</a>'
+        for n, p in have)
+    picker = f'<div class="pull-chips" id="focus"><span class="chips-label">Pull</span>{chips}</div>'
+    analysis = pull.get('analysis') or {}
+    data, why = await focus.load(code, pull, name, analysis.get('extras') or {})
+    if not data:
+        return picker + f'<p class="muted">{esc(why)}</p>'
+    # the raid's per-player average on an add: over its DPS and tanks
+    data = dict(data, peers=sum(1 for p in analysis.get('players') or [] if p.get('role') != 'healer'))
+    order, color_of = focusview.colors(data)
+    casts = (analysis.get('casts') or {}).get(name) or []
+    info = db.get_spells({sid for _, sid in casts}) if casts else {}
+    cooldowns = [(t, sid, info[sid].get('name') or '', spells.icon_url(info[sid].get('icon')))
+                 for t, sid in casts if benchmarks.category(sid, info.get(sid)) in (benchmarks.THROUGHPUT, benchmarks.TRINKET)]
+    potions = [u for u in analysis.get('consumables') or [] if u['name'] == name and u.get('kind') == 'potion']
+    compare_data = benchmarks.for_player(whole_night, name) or {}
+    top_share = {}
+    for p in compare_data.get('top') or []:
+        total = sum((p.get('targets') or {}).values())
+        for target, dmg in (p.get('targets') or {}).items():
+            top_share.setdefault(target, []).append(dmg / total if total else 0)
+    top_share = {t: sorted(v)[len(v) // 2] for t, v in top_share.items() if len(v) >= 3}
+    mine_total = sum(sum(r['b']) for r in data['you'].values()) or 1
+    my_share = {t: sum(r['b']) / mine_total for t, r in data['you'].items()}
+    label = compare_data.get('label') or 'players'
+    return f"""{picker}
+        <p class="muted small">Pull #{number}: who you were damaging, moment by moment, next to the whole raid - each
+           column is {focus.BUCKET_MS // 1000} s, split by target. Shaded windows show when an add was up; a thick outline
+           means the raid made it the priority. Your potion and major cooldowns are underneath.</p>
+        {focusview.legend(data, order, color_of)}
+        {focusview.timeline(data, pull, name, color_of, order, cooldowns, potions, pull.get('phases') or [])}
+        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label)}
+        <h4>This pull by target</h4>
+        {focusview.target_table(data, color_of)}"""
 
 
 async def handle_spell(request):

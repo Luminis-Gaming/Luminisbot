@@ -41,8 +41,11 @@ def _pct(share):
 # Damage & focus
 # ============================================================================
 
-def damage_tab(numbered, player, pull_href):
-    """numbered: [(pull number, pull)] the page covers; player: analyzer.player_report row."""
+def damage_tab(numbered, player, pull_href, focus_section=''):
+    """
+    numbered: [(pull number, pull)] the page covers; player: analyzer.player_report row; focus_section:
+    the one-pull focus timeline (routes.py builds it - it may fetch from WCL).
+    """
     name, role = player['name'], player.get('role')
     metric = 'HPS' if role == 'healer' else 'DPS'
     rows = throughput.per_pull(numbered, name, role)
@@ -90,7 +93,7 @@ def damage_tab(numbered, player, pull_href):
                       'Parses, HPS and active time pull by pull - and where your damage went, which still '
                       'matters on adds the raid has to burn.')}
         {subsection('Performance', performance)}
-        {subsection('Focus', _focus(numbered, name, role))}
+        {subsection('Focus', focus_section + '<h4>Over all these pulls</h4>' + _focus(numbered, name, role))}
     </div>"""
 
 
