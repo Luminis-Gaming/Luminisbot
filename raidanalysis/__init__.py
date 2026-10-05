@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 SYNC_INTERVAL_MINUTES = 10
 SYNC_REPORT_LIMIT = 10
+# Nobody raids then: each of these hours (guild time) goes to top-player benchmarks with the full
+# WCL budget, so a backlog (or the weekly refresh) clears overnight instead of 3 per sync.
+BENCHMARK_NIGHT_HOURS = range(2, 8)
 
 _sync_loop = None
 
@@ -46,7 +49,28 @@ def start_tasks():
     @ext_tasks.loop(minutes=SYNC_INTERVAL_MINUTES)
     async def raid_analysis_sync():
         await sync_guild(limit=SYNC_REPORT_LIMIT)
+        try:
+            await _benchmark_night()
+        except Exception:
+            logger.exception("[RAIDS] Nightly top-player fetch failed")
 
     _sync_loop = raid_analysis_sync
     _sync_loop.start()
     logger.info("[RAIDS] Raid analysis sync started")
+
+
+async def _benchmark_night():
+    """During BENCHMARK_NIGHT_HOURS: fetch every missing / stale benchmark the hour's WCL budget allows."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from raid_system import DEFAULT_TIMEZONE
+
+    from . import benchmarks, db, sync
+    if datetime.now(ZoneInfo(DEFAULT_TIMEZONE)).hour not in BENCHMARK_NIGHT_HOURS or sync._paused():
+        return
+    w = sync.status.get('wcl') or {}
+    if w.get('spent') is not None and w['spent'] >= sync.FULL_BUDGET_SHARE * (w.get('limit') or 3600):
+        return  # this hour's budget is spent (as of the sync just now): wait for it to reset
+    if db.benchmarks_needed(1, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES):
+        await sync.fetch_all_benchmarks(full_budget=True)

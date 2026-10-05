@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from .. import SYNC_INTERVAL_MINUTES, SYNC_REPORT_LIMIT, analyzer, benchmarks, db, guides, progstats, spells, sync, teams
+from .. import BENCHMARK_NIGHT_HOURS, SYNC_INTERVAL_MINUTES, SYNC_REPORT_LIMIT, analyzer, benchmarks, db, guides, progstats, spells, sync, teams
 from . import compare, consumables, insights, performance, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
                      section_head, stat_tiles, subsection,
@@ -474,12 +474,13 @@ def _benchmarks_line(running):
     needed = db.benchmarks_needed(10000, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES)
     if not needed:
         return ('<p class="muted small">⚔️ Top-player benchmarks are up to date for every spec played in the '
-                'last 30 days.</p>')
+                'logs we keep.</p>')
     return f"""
         <form method="post" action="/admin/raids/benchmarks" class="inline-form">
             <span class="small muted">⚔️ {len(needed)} spec/boss combo{'s' if len(needed) != 1 else ''} played in
-                the last 30 days {'have' if len(needed) != 1 else 'has'} no (or an outdated) top-player benchmark
-                - the sync fetches {benchmarks.SPECS_PER_RUN} per run.</span>
+                the logs we keep {'have' if len(needed) != 1 else 'has'} no (or an outdated) top-player benchmark
+                - the sync fetches {benchmarks.SPECS_PER_RUN} per run, and as many as WCL allows every night
+                ({BENCHMARK_NIGHT_HOURS.start:02d}:00-{BENCHMARK_NIGHT_HOURS.stop:02d}:00).</span>
             <button class="btn btn-secondary btn-sm" {'disabled' if running else ''}
                     title="About {1 + benchmarks.TOP_N} WCL requests per combo; pauses at the WCL budget limit">
                 Fetch all top players</button>
@@ -1147,8 +1148,8 @@ def _benchmark_status(data):
     if not data:
         return "We don't know this character's spec in these pulls, so there's nothing to compare."
     if not bench:
-        return (f"The top {esc(data['label'])} on this boss haven't been fetched yet - the sync picks up a few "
-                f"specs at a time, so check back after the next syncs.")
+        return (f"The top {esc(data['label'])} on this boss haven't been fetched yet - the sync fetches a few "
+                f"specs per run and the rest overnight, so check back tomorrow.")
     if bench['status'] == 'empty':
         return f"Warcraft Logs has no public top parses for {esc(data['label'])} on this boss yet."
     if bench['status'] == 'error' and not bench['players']:

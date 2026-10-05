@@ -440,7 +440,7 @@ async def fetch_all_benchmarks(full_budget=False):
         _share = FULL_BUDGET_SHARE if full_budget else WCL_BUDGET_SHARE
         status.update(running=True, last_error=None, current='Fetching top players…')
         started = time.time()
-        done, error = 0, None
+        done, error, points = 0, None, None
         total = len(db.benchmarks_needed(10000, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES))
         try:
             async with aiohttp.ClientSession() as session:
@@ -454,7 +454,7 @@ async def fetch_all_benchmarks(full_budget=False):
                 if done < total and not await _budget_ok(session):
                     error = _budget_message()
                 if spent_before is not None and status.get('wcl'):
-                    status['last_points'] = max(0, status['wcl']['spent'] - spent_before)
+                    status['last_points'] = points = max(0, status['wcl']['spent'] - spent_before)
             status['current'] = 'Looking up spell tooltips on Wowhead…'
             while await fill_missing() >= 400:  # spells.PER_RUN at a time until none are left
                 pass
@@ -466,8 +466,11 @@ async def fetch_all_benchmarks(full_budget=False):
         finally:
             _share = WCL_BUDGET_SHARE
             left = max(0, total - done)
+            cost = (f", {points:.0f} WCL points" + (f" (~{points / done:.0f} per combo)" if done else '')
+                    if points is not None else '')
             status.update(running=False, current=None, last_finished=time.time(), last_new=0,
                           last_result=f"Top players fetched for {done} spec/boss combo(s) in "
-                                      f"{time.time() - started:.0f}s" + (f" - {left} left for later syncs" if left else ''),
+                                      f"{time.time() - started:.0f}s{cost}"
+                                      + (f" - {left} left for later syncs" if left else ''),
                           last_error=error)
         return done

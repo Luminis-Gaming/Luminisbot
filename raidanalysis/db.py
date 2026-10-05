@@ -668,18 +668,25 @@ def get_spells(spell_ids):
 # TOP-PLAYER BENCHMARKS (benchmarks.py)
 # ============================================================================
 
-def benchmarks_needed(limit, refresh_days, difficulties, recent_days=30):
+def benchmarks_needed(limit, refresh_days, difficulties):
     """
-    (boss, difficulty, class, spec) combos our raiders played in the last recent_days that have no
+    (boss, difficulty, class, spec) combos played in the logs we keep (prune_reports: the latest
+    KEEP_LATEST_LOGS guild / raid-event logs, plus imports from the last KEEP_IMPORTED_DAYS) that have no
     benchmark yet, a stale one, or a failed one from over a day ago - most recently played first.
     """
     return _run("""
+        WITH latest AS (
+            SELECT r.code FROM raid_reports r
+            WHERE r.source <> 'manual' AND EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = r.code)
+            ORDER BY r.start_time DESC LIMIT %s
+        )
         SELECT c.* FROM (
             SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec,
                    MAX(x->>'role') AS role, MAX(r.start_time + p.start_ms) AS last_played
             FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code,
                  jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
-            WHERE r.start_time > EXTRACT(EPOCH FROM NOW() - make_interval(days => %s)) * 1000
+            WHERE (r.code IN (SELECT code FROM latest)
+                   OR COALESCE(r.created_at, NOW()) >= NOW() - make_interval(days => %s))
               AND p.difficulty = ANY(%s) AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
             GROUP BY 1, 2, 3, 4
         ) c
@@ -687,15 +694,19 @@ def benchmarks_needed(limit, refresh_days, difficulties, recent_days=30):
             SELECT 1 FROM raid_benchmarks b
             WHERE b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
               AND b.class = c.class AND b.spec = c.spec
-              AND b.fetched_at > NOW() - CASE WHEN b.status = 'error' THEN INTERVAL '1 day'
-                                              ELSE make_interval(days => %s) END
-              -- fetched before every top parse's spec was checked, or before their auras and
-              -- casts were kept (uptime / casts per minute): fetch again
-              AND (jsonb_array_length(b.players) = 0 OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras'))
+              AND (
+                  -- failed lately: wait a day, whatever top players it kept (otherwise a failing combo
+                  -- with old-format players would top this list again right away, every batch)
+                  (b.status = 'error' AND b.fetched_at > NOW() - INTERVAL '1 day')
+                  OR (b.status <> 'error' AND b.fetched_at > NOW() - make_interval(days => %s)
+                      -- fetched before every top parse's spec was checked, or before their auras and
+                      -- casts were kept (uptime / casts per minute): fetch again
+                      AND (jsonb_array_length(b.players) = 0
+                           OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras'))))
         )
         ORDER BY c.last_played DESC
         LIMIT %s
-    """, (recent_days, list(difficulties), refresh_days, limit), fetch='all')
+    """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, list(difficulties), refresh_days, limit), fetch='all')
 
 
 def save_benchmark(encounter_id, difficulty, class_name, spec, metric, players, status, error=None):
