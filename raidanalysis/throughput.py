@@ -89,6 +89,32 @@ def auras(table, fight_start, duration, kind):
     return sorted(best.values(), key=lambda x: -x['uptime'])
 
 
+ON_OTHERS_SPECS = {'Augmentation'}  # besides healers: specs whose key buffs go on others (Ebon Might, Prescience)
+MIN_ON_OTHERS = 0.1                 # a buff on others averaging fewer active than this isn't kept
+
+
+def wants_on_others(player):
+    """Healers (HoTs: Renewing Mist, Rejuvenation, Atonement...) and Augmentation keep buffs up on others."""
+    return player.get('role') == 'healer' or player.get('spec') in ON_OTHERS_SPECS
+
+
+def on_others(table, duration, cast):
+    """
+    The buffs a player kept on anyone (their own spells only: cast = their Casts table's names) ->
+    [{'id', 'name', 'uptime'}]: uptime summed over every target, so uptime / duration = how many were
+    active on average (WowAnalyzer's "average Renewing Mists").
+    """
+    best = {}
+    for a in (table or {}).get('auras') or []:
+        name = a.get('name') or ''
+        if not a.get('guid') or name not in cast or not duration:
+            continue
+        uptime = a.get('totalUptime') or 0
+        if uptime / duration >= MIN_ON_OTHERS and uptime > best.get(name, {}).get('uptime', 0):
+            best[name] = {'id': a['guid'], 'name': name, 'uptime': uptime}
+    return sorted(best.values(), key=lambda a: -a['uptime'])
+
+
 def boss_debuffs(tables, fight_start, duration):
     """
     Debuffs a player kept on the bosses (one Debuffs table per boss): each aura once, on the boss it
@@ -143,23 +169,26 @@ def resources(events, names_by_id, fight_end):
 
 
 MIN_PROCS = 3        # a self-buff applied fewer times than this isn't a proc worth tracking
+MAX_PROCS = 100      # ...nor one applied more than this a pull (Flurry, Maelstrom Weapon stacks: ~850 each) -
+                     # a stack builder, not a proc to save, and half of the raid's buff events
 SAME_MOMENT_MS = 20  # events of one aura this close together are one thing happening
 
 
 def proc_candidates(per_player, tracked=frozenset()):
     """
-    Self-buff ids worth checking for wasted procs (to keep the events request small): the ones the game's
-    Cooldown Manager tracks (gamedata.py), applied MIN_PROCS+ times - or, without that list, any
-    self-buff applied that often that isn't a spell the player casts.
+    Self-buff ids worth checking for wasted procs (to keep the events request small): procs - buffs that
+    aren't a spell the player casts - applied MIN_PROCS to MAX_PROCS times, of the ones the game's
+    Cooldown Manager tracks (gamedata.py; without that list, any).
     """
     ids = set()
     for tables in per_player.values():
         cast = set(cast_counts(tables.get('casts')))
         for a in (tables.get('buffs') or {}).get('auras') or []:
-            if not a.get('guid') or (a.get('totalUses') or 0) < MIN_PROCS:
+            if not a.get('guid') or not MIN_PROCS <= (a.get('totalUses') or 0) <= MAX_PROCS:
                 continue
-            if a['guid'] in tracked if tracked else (a.get('name') not in cast and not any(
-                    w in (a.get('name') or '').lower() for w in SKIP_AURA_WORDS)):
+            if a.get('name') in cast or any(w in (a.get('name') or '').lower() for w in SKIP_AURA_WORDS):
+                continue  # your own spell's buff (Renewing Mist): not a proc that can go to waste
+            if not tracked or a['guid'] in tracked:
                 ids.add(a['guid'])
     return sorted(ids)
 
@@ -213,7 +242,7 @@ def _worth_keeping(aura, cast, tracked):
 
 
 def build_extras(fight, roster, names_by_id, extras, per_player, parses, resource_events=(), proc_events=(),
-                 tracked=frozenset()):
+                 tracked=frozenset(), detail=True):
     """
     analysis['extras'] for one pull. roster: analysis['players']; extras: wcl.get_fight_extras();
     per_player: wcl.get_player_tables() by actor id; parses: {name: {'rank', 'bracket', 'amount'}};
@@ -246,13 +275,15 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
             'casts': cast,
             'resources': gained.get(name),
             'procs': procs.get(name) or {},
+            'on_others': (on_others(tables['on_others'], duration, cast or {})
+                          if tables.get('on_others') is not None else None),
         }
     raid = {}
     for p in players.values():
         for name, damage, kind in p['targets']:
             t = raid.setdefault(name, {'name': name, 'type': kind, 'total': 0})
             t['total'] += damage
-    return {'v': EXTRAS_VERSION, 'duration': duration, 'players': players,
+    return {'v': EXTRAS_VERSION, 'detail': detail, 'duration': duration, 'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 
 
@@ -275,8 +306,9 @@ def top_auras(tables, start, duration):
     """A top player's stored auras (no bands) and spell list, from wcl.get_player_tables()."""
     found = (auras(tables.get('buffs'), start, duration, 'buff')
              + boss_debuffs(tables.get('debuffs'), start, duration))
-    return ([{k: a[k] for k in ('id', 'name', 'kind', 'uptime')} for a in found],
-            cast_counts(tables.get('casts')))
+    cast = cast_counts(tables.get('casts'))
+    return ([{k: a[k] for k in ('id', 'name', 'kind', 'uptime')} for a in found], cast,
+            on_others(tables['on_others'], duration, cast) if tables.get('on_others') is not None else None)
 
 
 # ============================================================================
@@ -292,6 +324,11 @@ def player_pulls(numbered, name):
         if me is not None:
             out.append((number, pull, me, extras))
     return out
+
+
+def detail_pulls(numbered, name):
+    """player_pulls() of the pulls that have the per-player detail (kills and the furthest wipes - sync.py)."""
+    return [m for m in player_pulls(numbered, name) if m[3].get('detail', True)]
 
 
 def amount(row, role, duration):
@@ -363,19 +400,22 @@ def uptime(numbered, name, top, tracked=frozenset()):
     ours / top: share of the fight it was up (top = median of the top players that have it).
     bands: the longest pull's stretches (seconds), for the strip.
     """
-    mine = player_pulls(numbered, name)
+    mine = detail_pulls(numbered, name)
     if not mine or not top:
         return []
     need = min(3, len(top))
     spells = set(KEY_AURAS)
     for p in top:
         spells.update((p.get('cast_names') or {}).keys())
+    # A HoT like Renewing Mist is about how many are out on the raid (on_others_rows), not the one on you.
+    on_raid = {a['name'] for p in top for a in p.get('on_others') or []}
+    on_raid |= {a['name'] for _, _, me, _ in mine for a in me.get('on_others') or []}
     seen = {}
     for i, p in enumerate(top):
         if not p.get('duration'):
             continue
         for a in p.get('auras') or []:
-            if a['name'] not in spells and a['id'] not in tracked:
+            if (a['name'] not in spells and a['id'] not in tracked) or a['name'] in on_raid:
                 continue
             s = seen.setdefault((a['name'], a['kind']), {'id': a['id'], 'icon': a.get('icon'), 'shares': {},
                                                          'cast': a['name'] in spells})
@@ -405,6 +445,44 @@ def uptime(numbered, name, top, tracked=frozenset()):
     return sorted(rows, key=lambda r: (r['verdict'] == 'good', -r['top']))
 
 
+ON_OTHERS_GOOD, ON_OTHERS_OK = 0.9, 0.75   # how many you keep out on average, as a share of the top players'
+
+
+def on_others_rows(numbered, name, top):
+    """
+    HoTs and buffs kept on others, as the average number active over the fight, next to the top players
+    (median of those who use it): [{'id', 'name', 'ours', 'top', 'top_users', 'verdict'}].
+    """
+    mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None]
+    top = [p for p in top or [] if p.get('on_others') is not None and p.get('duration')]
+    if not mine:
+        return []
+    need = min(3, len(top))
+    total = sum(ex.get('duration') or 0 for _, _, _, ex in mine)
+    ours, ids = {}, {}
+    for _, _, me, _ in mine:
+        for a in me['on_others']:
+            ours[a['name']] = ours.get(a['name'], 0) + a['uptime']
+            ids.setdefault(a['name'], a['id'])
+    tops = {}
+    for p in top:
+        for a in p['on_others']:
+            tops.setdefault(a['name'], []).append(a['uptime'] / p['duration'])
+            ids.setdefault(a['name'], a['id'])
+    rows = []
+    for aura in set(ours) | {a for a, v in tops.items() if len(v) >= need}:
+        mean = ours.get(aura, 0) / total if total else 0
+        shares = tops.get(aura, [])
+        top_mean = _median(shares) if len(shares) >= need and shares else None
+        verdict = None
+        if top_mean:
+            ratio = mean / top_mean
+            verdict = 'good' if ratio >= ON_OTHERS_GOOD else 'ok' if ratio >= ON_OTHERS_OK else 'off'
+        rows.append({'id': ids.get(aura), 'name': aura, 'ours': mean, 'top': top_mean, 'top_users': len(shares),
+                     'verdict': verdict})
+    return sorted(rows, key=lambda r: -max(r['ours'], r['top'] or 0))
+
+
 MIN_GAINED = 50                 # less of a resource than this over the night says nothing about waste
 STRUCTURAL_WASTE = 0.4          # the top players "waste" this much too (Arcane Charges at cap): not judged
 WASTE_GOOD_GAP, WASTE_OK_GAP = 0.03, 0.08   # how much more of it you wasted than the top players
@@ -424,7 +502,7 @@ def resource_rows(numbered, name, top, role):
     Only judged against the top players: some waste is built into a spec (or only partly logged -
     passive energy regen isn't), so the bar is what the best players of that spec manage.
     """
-    mine = player_pulls(numbered, name)
+    mine = detail_pulls(numbered, name)
     top = [p for p in top or [] if p.get('resources')]
     if not mine:
         return []
@@ -474,7 +552,7 @@ def proc_rows(numbered, name, top, tracked=frozenset()):
     Cooldown Manager tracks for the spec (tracked - gamedata.py); without that list, the ones the top
     players clearly take care to use (CARED_FOR_WASTE) - an enchant proc everyone refreshes isn't one.
     """
-    mine = player_pulls(numbered, name)
+    mine = detail_pulls(numbered, name)
     top = [p for p in top or [] if p.get('procs') is not None]
     if not mine:
         return []
@@ -528,7 +606,7 @@ def cpm(numbered, name, top, items=frozenset()):
     'verdict'}]} most-pressed first - or None without cast data on either side. Items (trinkets,
     potions: is_item(), plus the names in items) are left out - they're gear, not rotation.
     """
-    mine = [(me.get('casts'), ex.get('duration') or 0) for _, _, me, ex in player_pulls(numbered, name)
+    mine = [(me.get('casts'), ex.get('duration') or 0) for _, _, me, ex in detail_pulls(numbered, name)
             if me.get('casts') is not None]
     minutes = sum(d for _, d in mine) / 60000
     top = [p for p in top or [] if p.get('cast_names') and p.get('duration')]

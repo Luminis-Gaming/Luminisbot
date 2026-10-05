@@ -233,6 +233,17 @@ def fight_ids_missing_extras(code, version):
     return {r['fight_id'] for r in rows}
 
 
+def extras_state(code, version):
+    """{fight id: None (no current extras) / True (with the per-player detail) / False (the cheap part only)}."""
+    rows = _run("""
+        SELECT fight_id,
+               COALESCE((analysis->'extras'->>'v')::int, 0) >= %s AS current,
+               COALESCE((analysis->'extras'->>'detail')::boolean, TRUE) AS detail
+        FROM raid_pulls WHERE report_code = %s AND analysis IS NOT NULL
+    """, (version, code), fetch='all')
+    return {r['fight_id']: (r['detail'] if r['current'] else None) for r in rows}
+
+
 def set_pull_extras(code, fight_id, extras):
     _run("""
         UPDATE raid_pulls SET analysis = jsonb_set(analysis, '{extras}', %s)

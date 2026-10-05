@@ -131,8 +131,9 @@ th[data-sort]:hover { color: var(--text); }
 .rot-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .rot-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
     display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.rot-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
-.rot-head .cmp-ab, .rot-head .ability-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rot-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; font-weight: 600; font-size: 14px; }
+.rot-head .cmp-ab, .rot-head .ability-cell { min-width: 0; overflow-wrap: anywhere; }
+.rot-head .pill { flex-shrink: 0; }
 .rot-value b { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .rot-value span { margin-left: 6px; font-size: 12px; color: var(--faint); }
 .uptime-strip { position: relative; height: 10px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }

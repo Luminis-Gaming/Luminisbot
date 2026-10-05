@@ -881,6 +881,24 @@ class TestThroughputAndUptime(unittest.TestCase):
         self.assertAlmostEqual(active, 0.95)
         self.assertAlmostEqual(raid, 0.9)
 
+    def test_detail_only_for_kills_and_furthest_wipes(self):
+        from raidanalysis import sync, throughput
+
+        def f(i, kill, pct, secs):
+            return {'id': i, 'encounterID': 1, 'difficulty': 5, 'kill': kill, 'fightPercentage': pct,
+                    'startTime': 0, 'endTime': secs * 1000}
+        pulls = [f(1, False, 90, 40), f(2, False, 60, 120), f(3, False, 30, 200), f(4, False, 45, 180),
+                 f(5, False, 20, 50), f(6, False, 25, 240), f(7, True, 0, 300)]
+        self.assertEqual(sync.detail_fight_ids(pulls), {7, 6, 3, 4})       # the kill + 3 furthest 1 min+ wipes
+        # Uptime and casts per minute only count pulls with the detail; a cheap pull doesn't dilute them.
+        numbered = [self.pull(1, True, 0.1, 0.6, 50)]
+        cheap = self.pull(2, False, 0.1, 0.0, 0)
+        cheap[1]['analysis']['extras']['detail'] = False
+        top = [{'duration': 300000, 'auras': [{'id': 258920, 'name': 'Immolation Aura', 'kind': 'buff',
+                                               'uptime': 270000}],
+                'cast_names': {'Chaos Strike': 100, 'Immolation Aura': 11}}] * 5
+        self.assertAlmostEqual(throughput.uptime(numbered + [cheap], 'Boops', top)[0]['ours'], 0.6)
+
     def test_tabs_render(self):
         from raidanalysis.web import performance
         numbered = [self.pull(1, True, 0.1, 0.6, 50)]
@@ -900,16 +918,16 @@ class TestWclV1Fallback(unittest.TestCase):
     def setUp(self):
         from raidanalysis import wcl, wcl_v1
         self.wcl, self.v1 = wcl, wcl_v1
-        self.saved = (wcl.prefer_v1, wcl._v2_blocked_until, wcl_v1._blocked_until)
-        wcl.prefer_v1, wcl._v2_blocked_until, wcl_v1._blocked_until = False, 0.0, 0.0
+        self.saved = (wcl._v2_blocked_until, wcl_v1._blocked_until)
+        wcl._v2_blocked_until, wcl_v1._blocked_until = 0.0, 0.0
 
     def tearDown(self):
-        self.wcl.prefer_v1, self.wcl._v2_blocked_until, self.v1._blocked_until = self.saved
+        self.wcl._v2_blocked_until, self.v1._blocked_until = self.saved
 
-    def run_events(self, v2, v1):
+    def run_events(self, v2, v1, first='0'):
         import asyncio
         from unittest import mock
-        with mock.patch.dict('os.environ', {'WCL_V1_API_KEY': 'key'}), \
+        with mock.patch.dict('os.environ', {'WCL_V1_API_KEY': 'key', 'WCL_V1_FIRST': first}), \
                 mock.patch.object(self.wcl, 'query', v2), mock.patch.object(self.v1, 'get_events', v1):
             return asyncio.run(self.wcl.get_events(None, 'code', 1, 'Casts', "type = 'cast'"))
 
@@ -919,20 +937,21 @@ class TestWclV1Fallback(unittest.TestCase):
         async def v2_ok(*a, **k):
             return {'reportData': {'report': {'events': {'data': ['v2'], 'nextPageTimestamp': None}}}}
 
+        async def v2_down(*a, **k):
+            raise self.wcl.WCLServerError('502')
+
         async def v2_limited(*a, **k):
             raise self.wcl.WCLRateLimited('429', 120)
-        v1 = mock.AsyncMock(return_value=['v1'])
-        self.assertEqual(self.run_events(v2_ok, v1), ['v2'])
-        self.assertEqual(self.run_events(v2_limited, v1), ['v1'])     # 429 -> same call on v1
-        self.assertTrue(self.wcl.v2_blocked())
-        self.wcl._v2_blocked_until = 0.0
-        self.wcl.prefer_v1 = True                                     # the sync used its share of v2
-        self.assertEqual(self.run_events(v2_ok, v1), ['v1'])
 
-        async def v1_limited(*a, **k):
-            self.v1.block(60)
-            raise self.wcl.WCLRateLimited('v1 429', 60)
-        self.assertEqual(self.run_events(v2_ok, v1_limited), ['v2'])  # v1 out: back to v2
+        async def v1_down(*a, **k):
+            raise self.wcl.WCLServerError('502')
+        v1 = mock.AsyncMock(return_value=['v1'])
+        self.assertEqual(self.run_events(v2_ok, v1), ['v2'])               # v2 by default
+        self.assertEqual(self.run_events(v2_down, v1), ['v1'])             # v2 502 (Cloudflare): v1 answers
+        with self.assertRaises(self.wcl.WCLRateLimited):                    # same hourly points: no use trying v1
+            self.run_events(v2_limited, v1)
+        self.assertEqual(self.run_events(v2_ok, v1, first='1'), ['v1'])    # WCL_V1_FIRST=1
+        self.assertEqual(self.run_events(v2_ok, v1_down, first='1'), ['v2'])  # v1 fails: v2 answers
 
     def test_overview_shape(self):
         report = {'title': 'Raid', 'start': 1, 'end': 2, 'owner': 'me',
@@ -952,3 +971,28 @@ class TestWclV1Fallback(unittest.TestCase):
         self.assertEqual(f['friendlyPlayers'], [5])                           # no NPC allies
         self.assertEqual(o['phases'][0]['phases'][1], {'id': 2, 'name': 'Break', 'isIntermission': True})
         self.assertEqual(o['masterData']['actors'][0]['subType'], 'Monk')
+
+
+class TestHotsOnOthers(unittest.TestCase):
+    """Renewing Mist is judged on how many are out on the raid, not on its uptime on the healer."""
+
+    def test_average_active_and_not_self_uptime(self):
+        from raidanalysis import throughput
+        roster = [{'name': 'Boops', 'role': 'healer'}]
+        tables = {'damageDone': {'entries': []}, 'healing': {'entries': [{'name': 'Boops', 'total': 1, 'activeTime': 1}]}}
+        per_player = {1: {'buffs': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 180000}]},
+                          'debuffs': [], 'casts': {'entries': [{'name': 'Renewing Mist', 'total': 50}]},
+                          'on_others': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 1_800_000},
+                                                  {'guid': 2, 'name': 'Power Infusion', 'totalUptime': 60000}]}}}
+        fight = {'id': 1, 'startTime': 0, 'endTime': 300000, 'kill': True}
+        extras = throughput.build_extras(fight, roster, {1: 'Boops'}, tables, per_player, {})
+        self.assertTrue(throughput.wants_on_others(roster[0]))
+        self.assertEqual([a['name'] for a in extras['players']['Boops']['on_others']], ['Renewing Mist'])  # own spells
+        numbered = [(1, {'fight_id': 1, 'kill': True, 'start_ms': 0, 'end_ms': 300000,
+                         'analysis': {'players': roster, 'extras': extras}})]
+        top = [{'duration': 300000, 'on_others': [{'id': 119611, 'name': 'Renewing Mist', 'uptime': 2_400_000}],
+                'auras': [{'id': 119611, 'name': 'Renewing Mist', 'kind': 'buff', 'uptime': 150000}],
+                'cast_names': {'Renewing Mist': 55}}] * 5
+        row = throughput.on_others_rows(numbered, 'Boops', top)[0]
+        self.assertEqual((row['name'], row['ours'], row['top'], row['verdict']), ('Renewing Mist', 6.0, 8.0, 'ok'))
+        self.assertEqual(throughput.uptime(numbered, 'Boops', top), [])  # no "uptime on you" tile for it

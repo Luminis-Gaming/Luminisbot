@@ -151,9 +151,15 @@ PLAYER_TABS = (('execution', '🧮', 'Execution'), ('damage', '📈', 'Damage & 
                ('cooldowns', '⚔️', 'Cooldowns'), ('rotation', '🔁', 'Rotation'))
 
 
+def throughput_label(role):
+    """The Damage & focus tab's name: healers are judged on healing."""
+    return 'Healing & focus' if role == 'healer' else 'Damage & focus'
+
+
 def player_hero(p, tab_href, active):
     """The player page's header - score, sub-scores, contributions - and its section tabs. tab_href(key) -> link."""
-    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" href="{esc(tab_href(key))}">{icon} {label}</a>'
+    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" href="{esc(tab_href(key))}">{icon} '
+                   f'{throughput_label(p.get("role")) if key == "damage" else label}</a>'
                    for key, icon, label in PLAYER_TABS)
     return f"""
     <div class="card">

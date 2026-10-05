@@ -10,6 +10,7 @@ The player page's "Damage & focus" and "Rotation" sections (numbers from through
 """
 from .. import throughput
 from . import compare
+from .players import throughput_label
 from .render import esc, fmt_amount, fmt_duration, per_pull_columns, section_head, stat_tiles, subsection
 
 VERDICT_PILLS = {'good': ('pill-kill', 'On par'), 'ok': ('pill', 'A bit low'), 'off': ('pill-wipe', 'Low')}
@@ -46,7 +47,7 @@ def damage_tab(numbered, player, pull_href):
     metric = 'HPS' if role == 'healer' else 'DPS'
     rows = throughput.per_pull(numbered, name, role)
     if not rows:
-        return f'<div class="card">{section_head("📈", "Damage & focus")}{NO_EXTRAS}</div>'
+        return f'<div class="card">{section_head("📈", throughput_label(role))}{NO_EXTRAS}</div>'
     parses = [r['parse'] for r in rows if r['parse'] is not None]
     kills = [r for r in rows if r['kill']]
     active, raid_active = throughput.active_time(numbered, name, role)
@@ -84,7 +85,10 @@ def damage_tab(numbered, player, pull_href):
          'a browser session set up (WCL_SCRAPE_COOKIES).</p>' if no_wipe_parses else ''}"""
     return f"""
     <div class="card">
-        {section_head('📈', 'Damage & focus', f'Parses, {metric} and where your damage went, pull by pull.')}
+        {section_head('📈', throughput_label(role),
+                      f'Parses, {metric} and where your damage went, pull by pull.' if role != 'healer' else
+                      'Parses, HPS and active time pull by pull - and where your damage went, which still '
+                      'matters on adds the raid has to burn.')}
         {subsection('Performance', performance)}
         {subsection('Focus', _focus(numbered, name, role))}
     </div>"""
@@ -192,6 +196,22 @@ def _resource_tiles(rows):
     return f'<div class="rot-tiles">{"".join(tiles)}</div>'
 
 
+def _on_others_tiles(rows):
+    tiles = []
+    for r in rows:
+        share = r['ours'] / r['top'] if r['top'] else None
+        band = {'good': 'good', 'ok': 'ok', None: 'neutral'}.get(r['verdict'], 'bad')
+        top = f'Top {r["top_users"]}: {r["top"]:.1f} active' if r['top'] else 'Top players: no data'
+        tiles.append(f"""
+            <div class="rot-tile">
+                <div class="rot-head"><span class="cmp-ab" data-spell="{r['id'] or ''}">{esc(r['name'])}</span>{_pill(r['verdict'])}</div>
+                <div class="rot-value"><b>{r['ours']:.1f}</b><span>active on average</span></div>
+                <div class="subscore-track"><div class="subscore-fill {band}" style="width:{min(100, 100 * (share or 0)):.0f}%"></div></div>
+                <div class="muted small">{top}</div>
+            </div>""")
+    return f'<div class="rot-tiles">{"".join(tiles)}</div>'
+
+
 def _proc_tiles(rows):
     tiles = []
     for r in rows:
@@ -230,14 +250,22 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
         sections.append(subsection('Keep on cooldown', f"""
             <p class="muted small">Abilities you press whenever they're ready (or on procs) - there's no right
                moment, so they're judged on how often you press them, next to the top {label}.</p>{rotational}"""))
+    kept_out = throughput.on_others_rows(numbered, name, top)
+    if kept_out:
+        sections.append(subsection('HoTs & buffs on others', f"""
+            <p class="muted small">How many of each you kept out on the raid on average, over the whole fight
+               (WowAnalyzer's "average Renewing Mists"), next to the top {label}. Letting charges sit at their
+               cap shows up here and in casts per minute.</p>{_on_others_tiles(kept_out)}"""))
     uptime = throughput.uptime(numbered, name, top, tracked)
     if uptime:
         sections.append(subsection('Uptime', f"""
             <p class="muted small">Your own buffs and debuffs on the boss that the top {label} keep up most of
                the fight. The strip shows when it was up in your longest pull.</p>{_uptime_tiles(uptime)}"""))
     elif have_extras and top and not any(p.get('auras') for p in top):
-        sections.append(subsection('Uptime', '<p class="muted">The top players\' buffs haven\'t been fetched yet - '
-                                             'they\'re picked up on the next syncs.</p>'))
+        sections.append(f"""<p class="warn-text small">⏳ <strong>Uptime, wasted procs, resources and casts per minute</strong>
+            are compared with the top {label}, whose buffs, procs and casts haven't been fetched since this was added.
+            The sync re-fetches a few specs at a time, so they fill in over the next syncs<span class="admin-only"> - or
+            press <strong>Fetch all top players</strong> on the Raid Analysis page to get them all now</span>.</p>""")
     procs = throughput.proc_rows(numbered, name, top, tracked)
     if procs:
         sections.append(subsection('Wasted procs', f"""
@@ -262,7 +290,8 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
     return f"""
     <div class="card">
         {section_head('🔁', 'Rotation', f'How you keep your rotation going, next to the top {label} on this boss: '
-                                         'active time, keep-on-cooldown abilities, uptime, wasted procs, resources '
-                                         'and casts per minute.')}
+                                         'active time, keep-on-cooldown abilities, HoTs on others, uptime, wasted '
+                                         'procs, resources and casts per minute - from your kills and furthest '
+                                         'wipes.')}
         {''.join(sections)}
     </div>"""

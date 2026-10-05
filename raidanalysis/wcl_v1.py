@@ -1,13 +1,14 @@
 """
 Warcraft Logs' v1 REST API as a stand-in for the v2 GraphQL calls in wcl.py.
 
-v1 has its own rate limit (requests, separate from v2's points per hour), so when v2 is rate limited
-or the sync has used its share of the hour, wcl.py sends whatever v1 can answer here instead. Every
+v1 answers what it can when v2 itself is down (5xx: Cloudflare 502s) - or first, with WCL_V1_FIRST=1.
+It's no way around the budget: v1's 800 requests / minute is only a burst limit, its calls count against
+the same hourly points as v2 (a v1 429 comes with v2's reset time). Every
 function has the same signature as its wcl.py namesake and returns the same shapes: v2's tables and
 events *are* v1's JSON, so mostly it's fetching per fight window instead of per fight id.
 
-v1 can't do: the rate-limit counter and WCL's parses for a report (kills are then left without a
-parse - wipes are scraped from the website anyway). It's a legacy API: if WCL turns it off, calls
+v1 can't do: the rate-limit counter and WCL's parses for a report (sync.py asks v2 for a kill's
+parses on its own - one small request; wipes are scraped from the website anyway). It's a legacy API: if WCL turns it off, calls
 fail and the sync simply waits for v2 again.
 
 Needs WCL_V1_API_KEY (the "V1 Client Key" on warcraftlogs.com/profile).
@@ -36,12 +37,21 @@ EVENT_VIEWS = {'Casts': 'casts', 'Buffs': 'buffs', 'Debuffs': 'debuffs', 'Damage
 
 
 def api_key():
-    return (os.getenv('WCL_V1_API_KEY') or '').strip()
+    return (os.getenv('WCL_V1_API_KEY') or os.getenv('WCL_API_KEY') or os.getenv('WCL_V1_KEY') or '').strip()
 
 
 def available():
     """Configured, and not rate limited right now."""
     return bool(api_key()) and time.time() >= _blocked_until
+
+
+def first():
+    """
+    Use v1 before v2 for what it can answer (WCL_V1_FIRST=1; off by default). Not a way around the
+    budget: v1's 800 / minute is only a burst limit - its calls count against the same hourly points as
+    v2 (a v1 429 came with v2's reset time) - so v1 mostly helps when v2 itself is down (502s).
+    """
+    return bool(api_key()) and (os.getenv('WCL_V1_FIRST') or '').strip().lower() in ('1', 'true', 'yes')
 
 
 def block(seconds):
@@ -61,6 +71,8 @@ async def _get(session, path, **params):
             wait = int(retry) if retry and retry.isdigit() else 60
             block(wait)
             raise wcl.WCLRateLimited('WCL v1 rate limit reached', wait)
+        if resp.status >= 500:
+            raise wcl.WCLServerError(f'WCL v1 returned {resp.status} (WCL or Cloudflare is having a moment)')
         if resp.status != 200:
             body = (await resp.text())[:300]
             raise wcl.WCLError(f'WCL v1 returned {resp.status}: {body}')
@@ -197,15 +209,18 @@ async def get_fight_extras(session, code, fight_id):
             'boss_ids': wcl.boss_ids(await _table(session, code, 'damage-taken', start, end, hostility=1))}
 
 
-async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False):
+async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False, others=()):
     start, end = await _window(session, code, fight_id)
+    others = {int(o) for o in others}
     out = {}
     for aid in actor_ids:
         aid = int(aid)
         out[aid] = {'buffs': await _table(session, code, 'buffs', start, end, sourceid=aid, targetid=aid),
                     'debuffs': [await _table(session, code, 'debuffs', start, end, sourceid=aid, targetid=int(b),
                                              hostility=1) for b in bosses],
-                    'casts': await _table(session, code, 'casts', start, end, sourceid=aid) if casts else None}
+                    'casts': await _table(session, code, 'casts', start, end, sourceid=aid) if casts else None,
+                    'on_others': (await _table(session, code, 'buffs', start, end, sourceid=aid)
+                                  if aid in others else None)}
     return out
 
 

@@ -211,32 +211,34 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
         if not casts:
             continue
         duration = fight['end'] - fight['start']
-        auras, cast_names, resources, procs = await _top_auras(session, r, fight, duration)
+        auras, cast_names, resources, procs, on_others = await _top_auras(session, r, fight, duration, role, spec)
         players.append({'rank': len(players) + 1, 'name': r['name'], 'spec': spec, 'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
-                        'resources': resources, 'procs': procs})
+                        'resources': resources, 'procs': procs, 'on_others': on_others})
     if wrong_spec:
         logger.warning(f"[RAIDS] Top {spec} {class_name} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
                        f"parse(s) of another spec")
     return players
 
 
-async def _top_auras(session, ranking, fight, duration):
+async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
     """
     A top player's self-buffs, debuffs on the bosses, casts per ability, resources and wasted procs
-    (throughput.py): (auras, cast names, resources, procs) - empty ones when WCL won't say.
+    and for healers / Augmentation the buffs they keep on others (throughput.py): (auras, cast names,
+    resources, procs, on_others) - empty ones when WCL won't say.
     """
     from . import gamedata, throughput, wcl
     aid = fight.get('actor_id')
     if not aid:
-        return [], {}, None, None
+        return [], {}, None, None, None
     code, fight_id, name = ranking['code'], ranking['fight_id'], ranking['name'].replace('"', '')
     try:
+        others = [aid] if throughput.wants_on_others({'role': role, 'spec': spec}) else []
         tables = (await wcl.get_player_tables(session, code, fight_id, [aid], fight.get('boss_ids') or [],
-                                              casts=True)).get(int(aid)) or {}
-        auras, cast_names = throughput.top_auras(tables, fight['start'], duration)
+                                              casts=True, others=others)).get(int(aid)) or {}
+        auras, cast_names, on_others = throughput.top_auras(tables, fight['start'], duration)
         events = await wcl.get_events(session, code, fight_id, 'Resources',
                                       f'type = "resourcechange" and target.name = "{name}"')
         resources = throughput.resources(events, {int(aid): ranking['name']}, fight['end']).get(ranking['name'])
@@ -246,12 +248,12 @@ async def _top_auras(session, ranking, fight, duration):
             session, code, fight_id, 'Buffs',
             f"source.id = target.id and ability.id in ({','.join(map(str, procs))})") if procs else []
         return (auras, cast_names, resources or {'gains': {}, 'mana_end': None},
-                throughput.proc_waste(proc_events, {int(aid): ranking['name']}).get(ranking['name']) or {})
+                throughput.proc_waste(proc_events, {int(aid): ranking['name']}).get(ranking['name']) or {}, on_others)
     except wcl.WCLRateLimited:
         raise
     except wcl.WCLError as e:
         logger.info(f"[RAIDS] No auras for top parse {code}#{fight_id}: {e}")
-        return [], {}, None, None
+        return [], {}, None, None, None
 
 
 def _slug(name):

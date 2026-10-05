@@ -29,6 +29,10 @@ class WCLError(Exception):
     pass
 
 
+class WCLServerError(WCLError):
+    """WCL (or Cloudflare in front of it) answered 5xx: down for a moment, not our request's fault."""
+
+
 class WCLRateLimited(WCLError):
     """WCL said 429. retry_after: seconds from its Retry-After header, when it sends one."""
     def __init__(self, message, retry_after=None):
@@ -37,12 +41,11 @@ class WCLRateLimited(WCLError):
 
 
 # ============================================================================
-# v1 fallback (wcl_v1.py): v1 has its own rate limit, so what it can answer goes there while v2 is
-# rate limited (blocked) or the sync has used its share of v2's hour (prefer_v1, set by sync.py).
+# v1 fallback (wcl_v1.py): what v1 can answer goes there while v2 is down (5xx) - or first, with
+# WCL_V1_FIRST. Not for rate limits: v1 counts against the same hourly points as v2.
 # ============================================================================
 
 V2_BLOCK_FALLBACK_SECONDS = 15 * 60  # after a 429 without a Retry-After
-prefer_v1 = False
 _v2_blocked_until = 0.0
 known_guild = None  # {'name', 'server', 'region'} of our guild, from a v2 report (v1 lists reports by name)
 
@@ -59,11 +62,11 @@ def block_v2(seconds=None):
 def on_v1():
     """Whether calls that v1 can answer go there right now."""
     from . import wcl_v1
-    return wcl_v1.available() and (prefer_v1 or v2_blocked())
+    return wcl_v1.available() and (wcl_v1.first() or v2_blocked())
 
 
 def _v1_fallback(fn):
-    """Run fn on v1 (wcl_v1's function of the same name) while on_v1(), or when v2 answers 429."""
+    """Run fn on v1 (wcl_v1's function of the same name) while on_v1(), or when v2 answers 5xx."""
     @functools.wraps(fn)
     async def wrapper(session, *args, **kwargs):
         from . import wcl_v1
@@ -75,13 +78,16 @@ def _v1_fallback(fn):
                 if v2_blocked():
                     raise  # both are out: the sync pauses
                 # v1 is out for now (wcl_v1 noted it): v2 it is
+            except WCLError as e:
+                if v2_blocked():
+                    raise
+                logger.info(f"[RAIDS] WCL v1 {fn.__name__} failed ({e}) - trying v2")
         try:
             return await fn(session, *args, **kwargs)
-        except WCLRateLimited as e:
-            block_v2(e.retry_after)
+        except WCLServerError:
             if not wcl_v1.available():
                 raise
-            logger.info(f"[RAIDS] WCL v2 rate limited - {fn.__name__} on v1 instead")
+            logger.info(f"[RAIDS] WCL v2 is down for a moment - {fn.__name__} on v1 instead")
             return await v1(session, *args, **kwargs)
     return wrapper
 
@@ -115,6 +121,8 @@ async def query(session, gql, variables=None):
             retry = resp.headers.get('Retry-After')
             raise WCLRateLimited("WCL rate limit reached - try again later",
                                  int(retry) if retry and retry.isdigit() else None)
+        if resp.status >= 500:
+            raise WCLServerError(f"WCL API returned {resp.status} (WCL or Cloudflare is having a moment)")
         if resp.status != 200:
             raise WCLError(f"WCL API returned {resp.status}: {(await resp.text())[:300]}")
         body = await resp.json()
@@ -218,6 +226,16 @@ async def get_fight_tables(session, code, fight_id):
             for key, value in report.items()}
 
 
+async def get_report_rankings(session, code, fight_id):
+    """WCL's parses for one pull (kills only) - v2 only, for when the rest came from v1."""
+    data = await query(session, """
+        query($code: String!, $fights: [Int]!) {
+          reportData { report(code: $code) { rankings(fightIDs: $fights) } }
+        }
+    """, {'code': code, 'fights': [fight_id]})
+    return ((data.get('reportData') or {}).get('report') or {}).get('rankings')
+
+
 @_v1_fallback
 async def get_fight_extras(session, code, fight_id):
     """
@@ -268,11 +286,12 @@ PLAYER_TABLES_PER_REQUEST = 5
 
 
 @_v1_fallback
-async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False):
+async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts=False, others=()):
     """
-    Per player: the buffs they gave themselves, their debuffs on each boss, and with casts=True their
-    Casts table (names + counts) - a few players per request:
-    {actor id: {'buffs', 'debuffs': [one table per boss], 'casts'}} (v1-shaped tables, None when not asked).
+    Per player: the buffs they gave themselves, their debuffs on each boss, with casts=True their Casts
+    table (names + counts), and for the ids in others (healers) the buffs they put on anyone - HoTs like
+    Renewing Mist - a few players per request: {actor id: {'buffs', 'debuffs': [one table per boss],
+    'casts', 'on_others'}} (v1-shaped tables, None when not asked).
     """
     if not actor_ids:
         return {}
@@ -280,7 +299,7 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
         out = {}
         for i in range(0, len(actor_ids), PLAYER_TABLES_PER_REQUEST):
             out.update(await get_player_tables(session, code, fight_id, actor_ids[i:i + PLAYER_TABLES_PER_REQUEST],
-                                               bosses, casts))
+                                               bosses, casts, others))
         return out
     parts = []
     for aid in actor_ids:
@@ -291,6 +310,8 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
                          f'sourceID: {aid}, targetID: {int(boss)})')
         if casts:
             parts.append(f'c{aid}: table(fightIDs: $fights, dataType: Casts, sourceID: {aid})')
+        if aid in {int(o) for o in others}:
+            parts.append(f'o{aid}: table(fightIDs: $fights, dataType: Buffs, sourceID: {aid})')
     data = await query(session, """
         query($code: String!, $fights: [Int]!) {
           reportData { report(code: $code) { %s } }
@@ -299,7 +320,8 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
     report = (data.get('reportData') or {}).get('report') or {}
     return {int(aid): {'buffs': _unwrap(report.get(f'b{int(aid)}')),
                        'debuffs': [_unwrap(report.get(f'd{int(aid)}_{k}')) for k in range(len(bosses))],
-                       'casts': _unwrap(report.get(f'c{int(aid)}'))}
+                       'casts': _unwrap(report.get(f'c{int(aid)}')),
+                       'on_others': _unwrap(report.get(f'o{int(aid)}'))}
             for aid in actor_ids}
 
 

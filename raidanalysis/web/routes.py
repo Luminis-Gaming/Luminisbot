@@ -336,13 +336,12 @@ async def handle_overview(request):
     if budget:
         share = budget['spent'] / (budget['limit'] or 1)
         resets = f" · resets in {int((budget.get('reset_in') or 0) / 60)} min" if budget.get('reset_in') else ''
-        last = f" · last sync used {st['last_points']}" if st.get('last_points') is not None else ''
+        last = f" · last sync used {st['last_points']:.0f}" if st.get('last_points') is not None else ''
         sync_state += (f'<p class="small {"bad-text" if share >= 0.7 else "muted"}" title="WCL allows a number of '
                        f'points per hour (bigger queries cost more), shared with the bot\'s other WCL buttons. '
-                       f'The sync pauses at 70% to leave room for them - or carries on with WCL v1 (its own limit) '
-                       f'when that is set up.">WCL API: {budget["spent"]}/{budget["limit"]} '
+                       f'The sync pauses at 70% to leave room for them.">WCL API: {budget["spent"]:.0f}/{budget["limit"]:.0f} '
                        f'points this hour{resets}{last}'
-                       f'{" · now on v1" if st.get("api") == "v1" else ""}</p>')
+                       f'{" · raid analysis uses WCL v1 first" if _v1_first() else ""}</p>')
 
     boss_rows = ''.join(f"""
         <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}'" style="cursor:pointer">
@@ -463,6 +462,11 @@ def _full_budget_box():
     return ('<label class="small muted full-budget" title="Let this run use up to 98% of the hour\'s WCL points '
             'instead of 70%. The bot\'s other WCL buttons (DPS / Heal / Deaths) may be short until the hour resets.">'
             '<input type="checkbox" name="full_budget" value="1"> Use the full WCL budget</label>')
+
+
+def _v1_first():
+    from ..wcl_v1 import first
+    return first()
 
 
 def _benchmarks_line(running):
