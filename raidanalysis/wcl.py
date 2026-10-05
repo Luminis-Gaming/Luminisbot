@@ -362,6 +362,9 @@ async def get_player_tables(session, code, fight_id, actor_ids, bosses=(), casts
             for aid in actor_ids}
 
 
+PAGE_END = 1e13  # "until the end": a later page's endTime (the fight ids bound it)
+
+
 @_v1_fallback
 async def get_events(session, code, fight_id, data_type, filter_expression, max_events=20000,
                      hostility='Friendlies'):
@@ -373,11 +376,13 @@ async def get_events(session, code, fight_id, data_type, filter_expression, max_
                      'filter': filter_expression, 'hostility': hostility}
         start_arg = ''
         if start is not None:
-            variables['start'] = start
-            start_arg = ', startTime: $start'
+            # Both ends: with only a startTime WCL answers the next page with nothing at all (the fight ids
+            # still bound it), so every request used to stop at its first 10,000 events.
+            variables.update(start=start, end=PAGE_END)
+            start_arg = ', startTime: $start, endTime: $end'
         data = await query(session, f"""
             query($code: String!, $fights: [Int]!, $dataType: EventDataType!, $hostility: HostilityType!,
-                  $filter: String{', $start: Float' if start is not None else ''}) {{
+                  $filter: String{', $start: Float, $end: Float' if start is not None else ''}) {{
               reportData {{
                 report(code: $code) {{
                   events(fightIDs: $fights, dataType: $dataType, hostilityType: $hostility,

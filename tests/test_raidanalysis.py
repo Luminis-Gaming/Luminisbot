@@ -1020,17 +1020,19 @@ class TestFocusTimeline(unittest.TestCase):
                            + [(s, 2, 100) for s in heart if my_heart and s >= 144])
         deaths = [{'type': 'death', 'timestamp': 1000 + 165500, 'targetID': 2}]
         raid_part = {'main': "Ula'tek", 'b': focus.bin_damage(raid, 1000, n, self.NAMES),
+                     'appear': focus.first_hits(raid, 1000, self.NAMES),
                      'deaths': focus.deaths_by_target(deaths, 1000, self.NAMES)}
         targets = [{'name': "Ula'tek", 'total': 300 * 1000, 'type': 'Boss'},
                    {'name': 'Venomous Heart', 'total': 25 * 600, 'type': 'NPC'}]
-        return focus.build(focus.bin_damage(mine, 1000, n, self.NAMES), raid_part, n, targets)
+        return focus.build(focus.bin_damage(mine, 1000, n, self.NAMES), raid_part, n, targets,
+                           you_firsts=focus.first_hits(mine, 1000, self.NAMES))
 
     def test_windows_and_verdicts(self):
         from raidanalysis import focus
         d = self.data(my_heart=False)
-        self.assertEqual(set(d['raid']), {'Venomous Heart', 'Blightscale Rawling'})   # the main boss isn't fetched
+        self.assertEqual(set(d['raid']), {"Ula'tek", 'Venomous Heart', 'Blightscale Rawling'})  # you're part of the raid
         w = focus.windows(d)[0]
-        self.assertEqual((w['target'], w['start'], w['end']), ('Venomous Heart', 140000, 165000))
+        self.assertEqual((w['target'], w['start'], w['end']), ('Venomous Heart', 140010, 165000))  # to the ms
         self.assertTrue(w['priority'])
         self.assertEqual(w['verdict'], 'off')                                       # you stayed on the boss
         self.assertEqual(focus.windows(self.data(my_heart=True))[0]['verdict'], 'good')
@@ -1063,7 +1065,8 @@ class TestFocusTimeline(unittest.TestCase):
         html = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [])
         self.assertIn('fraid prio', html)
         self.assertIn('Your target', html)
-        self.assertIn('Venomous Heart appeared', html)
+        self.assertIn('Venomous Heart appeared · 2:20.0', html)
+        self.assertIn('<span>10.0 s</span>', html)                                  # potion -> add bracket
         self.assertIn('Venomous Heart died · 2:45', html)
         self.assertIn('freact never', html)                                         # never hit it
         phased = focusview.timeline(d, dict(pull, encounter_id=7), 'Boops', color_of, order, [], [],
@@ -1072,7 +1075,7 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('<span>Stage Two</span>', phased)
         self.assertIn('<span>Phase 1</span>', phased)
         cards = focusview.cards(d, color_of, potions, [], {}, {}, 'Havoc Demon Hunters')
-        self.assertIn('10 s before it appeared', cards)
+        self.assertIn('pressed at 2:10.0, <b>10.0 s before it appeared</b>', cards)
         self.assertIn('covered <b>80%</b>', cards)                                 # 20 of the 25 s
         self.assertIn('Off target', cards)
         self.assertIn('died at 2:45', cards)

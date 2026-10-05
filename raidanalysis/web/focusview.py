@@ -10,7 +10,7 @@ from .. import focus
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
 
 # Categorical slots, dark steps, in fixed order (validated on the card surface #161a2c: all checks pass).
-COLORS = ('#3987e5', '#d95926', '#199e70', '#c98500', '#d55181')
+COLORS = ('#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#8f6ce0')
 OTHER_COLOR = '#5b6178'
 VERDICTS = {'good': ('pill-kill', 'On it'), 'ok': ('pill', 'Partly'), 'off': ('pill-wipe', 'Off target')}
 
@@ -28,6 +28,11 @@ def _pct(v):
 
 def _swatch(color):
     return f'<i class="fsw" style="background:{color}"></i>'
+
+
+def _clock(ms):
+    """2:20.4 - to the tenth of a second, for timings that matter (a potion against an add appearing)."""
+    return f'{int(ms // 60000)}:{ms % 60000 / 1000:04.1f}'
 
 
 def _at(t, duration):
@@ -65,7 +70,7 @@ def _target_lane(target, mine, raid_row, wins, color, step, duration, peak, alwa
             w = next((w for w in wins if w['start'] < end and w['end'] > start), None)
             tip = f'{esc(target)} up {fmt_duration(start)}–{fmt_duration(end)}'
             if w:
-                tip += (f' · the raid put about {_pct(w["raid_share"])} of its damage into it'
+                tip += (f' · the top DPS put {_pct(w["raid_share"])} of their damage into it'
                         f'{" - a priority" if w["priority"] else ""}, you {_pct(w["you_share"])} of yours')
             raid += (f'<i class="fraid{" prio" if w and w["priority"] else ""}" style="{_span(start, end, duration)}" '
                      f'data-tip="{tip}"></i>')
@@ -77,8 +82,8 @@ def _target_lane(target, mine, raid_row, wins, color, step, duration, peak, alwa
                        f'{fmt_duration(w["end"])})"></i>')
         elif w['first_hit'] >= step:
             you.append(f'<i class="freact" style="{_span(w["start"], w["start"] + w["first_hit"], duration)}" '
-                       f'data-tip="Reaction: you first hit {esc(target)} {w["first_hit"] / 1000:.0f} s after it '
-                       f'appeared ({fmt_duration(w["start"])})"></i>')
+                       f'data-tip="Reaction: you first hit {esc(target)} {w["first_hit"] / 1000:.1f} s after it '
+                       f'appeared ({_clock(w["start"])})"></i>')
     for first, last in focus.runs(mine):
         start, end = first * step, (last + 1) * step
         dmg = sum(mine[first:last + 1])
@@ -109,17 +114,32 @@ def _phase_lane(phases, names, duration):
     return ''.join(out)
 
 
-def _adds_lane(wins, color_of, duration):
+def potion_lead(potions, w):
+    """(potion, seconds it was pressed before the add appeared - negative: after) for a priority window, or None."""
+    pot = min(potions, key=lambda p: abs(p['t'] - w['start']), default=None) if w['priority'] else None
+    if not pot or abs(pot['t'] - w['start']) > 60000:
+        return None
+    return pot, (w['start'] - pot['t']) / 1000
+
+
+def _lead_text(lead):
+    return (f'{lead:.1f} s before it appeared' if lead >= 0.05 else
+            f'{-lead:.1f} s after it appeared' if lead <= -0.05 else 'as it appeared')
+
+
+def _adds_lane(wins, color_of, duration, potions=()):
     """Each add window: a marker where it appeared (the raid's first hit) and where it died or went away."""
     out = []
     for w in wins:
         color = color_of.get(w['target'], OTHER_COLOR)
         name = esc(w['target'])
         react = ('you never hit it' if w['first_hit'] is None else
-                 f'you hit it {w["first_hit"] / 1000:.0f} s later' if w['first_hit'] else 'you hit it right away')
+                 f'you hit it {w["first_hit"] / 1000:.1f} s later')
         label = f'<span>{name}</span>' if w['priority'] else ''
+        pot = potion_lead(potions, w)
+        pot_tip = f' · your potion {_lead_text(pot[1])}' if pot else ''
         out.append(f'<i class="fev in{" prio" if w["priority"] else ""}" style="left:{_at(w["start"], duration)};'
-                   f'--c:{color}" data-tip="{name} appeared · {fmt_duration(w["start"])} · {react}">▲{label}</i>')
+                   f'--c:{color}" data-tip="{name} appeared · {_clock(w["start"])} · {react}{pot_tip}">▲{label}</i>')
         died = w['died_at'] is not None
         end = w['died_at'] if died else w['end']
         what = 'died' if died else 'gone (the raid stopped hitting it)'
@@ -165,7 +185,7 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
         names = (phase_names or {}).get(str(pull.get('encounter_id'))) or {}
         lanes.append(('<div class="tl-lab f-phase">Phases</div>', 'f-phase', _phase_lane(phases, names, duration)))
     if wins:
-        lanes.append(('<div class="tl-lab f-adds">Adds</div>', 'f-adds', _adds_lane(wins, color_of, duration)))
+        lanes.append(('<div class="tl-lab f-adds">Adds</div>', 'f-adds', _adds_lane(wins, color_of, duration, potions)))
     lanes += boss_lanes
     lanes += [_group('🎯 Who you were hitting', 'a change of color is a target switch'),
               ('<div class="tl-lab f-ribbon">Your target</div>', 'f-ribbon', _ribbon(data, order, color_of, duration))]
@@ -195,6 +215,14 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
         f'<i class="fpot" style="left:{_at(p["t"], duration)};width:{100 * max(1000, (p.get("end") or p["t"] + 30000) - p["t"]) / duration:.3f}%" '
         f'data-tip="{esc(p.get("ability") or "Potion")} · {fmt_duration(p["t"])}–{fmt_duration(p.get("end") or p["t"] + 30000)}">'
         f'<span>🧪</span></i>' for p in potions)
+    for w in wins:
+        pot = potion_lead(potions, w)
+        if pot:
+            a, b = sorted((pot[0]['t'], w['start']))
+            pots += (f'<i class="flead" style="{_span(a, b, duration)};--c:{color_of.get(w["target"], OTHER_COLOR)}" '
+                     f'data-tip="{esc(pot[0].get("ability") or "Potion")} at {_clock(pot[0]["t"])} - '
+                     f'{_lead_text(pot[1])} ({esc(w["target"])}, {_clock(w["start"])})">'
+                     f'<span>{abs(pot[1]):.1f} s</span></i>')
     cds = []
     for t, sid, name, icon in cooldowns:
         bg = f';background-image:url({safe_icon(icon)})' if safe_icon(icon) else ''
@@ -247,20 +275,18 @@ def cards(data, color_of, potions, cooldowns, top_share, my_share, label):
         length = w['end'] - w['start']
         cls, text = VERDICTS.get(w['verdict'], ('pill-muted', 'Not a priority'))
         react = ('<b class="bad-text">You never hit it</b>' if w['first_hit'] is None else
-                 f'You first hit it <b>{w["first_hit"] / 1000:.0f} s</b> after it appeared' if w['first_hit'] else
-                 'You hit it <b>right away</b>')
+                 f'You first hit it <b>{w["first_hit"] / 1000:.1f} s</b> after it appeared')
         ended = (f'died at {fmt_duration(w["died_at"])}' if w['died_at'] is not None else
                  f'gone at {fmt_duration(w["end"])}')
-        lines = [f'⏱ Appeared at {fmt_duration(w["start"])}, {ended} - {react}',
-                 f'You put <b>{_pct(w["you_share"])}</b> of your damage into it - the raid <b>{_pct(w["raid_share"])}</b>',
-                 f'Your DPS on it <b>{fmt_amount(w["you_dps"])}</b> · raid average per player {fmt_amount(w["raid_dps"])}']
-        pot = min(potions, key=lambda p: abs(p['t'] - w['start']), default=None) if w['priority'] else None
-        if pot and abs(pot['t'] - w['start']) <= 60000:
+        lines = [f'⏱ Appeared at {_clock(w["start"])}, {ended} - {react}',
+                 f'You put <b>{_pct(w["you_share"])}</b> of your damage into it - the raid\'s top DPS <b>{_pct(w["raid_share"])}</b>',
+                 f'Your DPS on it <b>{fmt_amount(w["you_dps"])}</b> · the top DPS averaged {fmt_amount(w["raid_dps"])} each']
+        found = potion_lead(potions, w)
+        if found:
+            pot, lead = found
             end = pot.get('end') or pot['t'] + 30000
-            lead = (w['start'] - pot['t']) / 1000
-            when = (f'{lead:.0f} s before it appeared' if lead >= 1 else
-                    f'{-lead:.0f} s after it appeared' if lead <= -1 else 'as it appeared')
-            lines.append(f'🧪 {esc(pot.get("ability") or "Potion")} {when} - its buff covered '
+            lines.append(f'🧪 {esc(pot.get("ability") or "Potion")} pressed at {_clock(pot["t"])}, '
+                         f'<b>{_lead_text(lead)}</b> - its buff covered '
                          f'<b>{_pct(_overlap(pot["t"], end, w["start"], w["end"]) / length)}</b> of the window')
         elif w['priority']:
             lines.append('🧪 No potion near this window')

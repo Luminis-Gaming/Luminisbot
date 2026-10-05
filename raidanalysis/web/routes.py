@@ -1093,8 +1093,6 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     data, why = await focus.load(code, pull, name, analysis.get('extras') or {})
     if not data:
         return picker + f'<p class="muted">{esc(why)}</p>', None
-    # the raid's per-player average on an add: over its DPS and tanks
-    data = dict(data, peers=sum(1 for p in analysis.get('players') or [] if p.get('role') != 'healer'))
     order, color_of = focusview.colors(data)
     casts = (analysis.get('casts') or {}).get(name) or []
     info = db.get_spells({sid for _, sid in casts}) if casts else {}

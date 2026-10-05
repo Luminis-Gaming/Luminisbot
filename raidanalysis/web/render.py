@@ -366,9 +366,17 @@ tr.muted-row td { opacity: 0.7; }
 .fev span { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 600;
     color: var(--text); white-space: nowrap; pointer-events: none; }
 .fev:hover { filter: brightness(1.3); z-index: 3; }
+.flead { position: absolute; top: 3px; height: 9px; border: 2px solid var(--c); border-bottom: 0;
+    border-radius: 3px 3px 0 0; cursor: help; z-index: 2; }
+.flead span { position: absolute; left: 50%; top: -1px; transform: translate(-50%, -100%); font-size: 11px;
+    font-weight: 700; color: var(--text); background: var(--surface-2); padding: 0 4px; border-radius: 3px;
+    white-space: nowrap; }
 .freact { position: absolute; bottom: 15px; height: 0; border-top: 2px dashed var(--c); cursor: help; }
 .freact.never { border-top-color: var(--bad); opacity: 0.8; }
-.focus-tl .tl-lab.f-cds, .focus-tl .tl-row.f-cds { height: 34px; }
+.focus-tl .tl-lab.f-cds, .focus-tl .tl-row.f-cds { height: 48px; }
+.focus-tl .tl-row.f-cds .fpot { top: auto; bottom: 6px; height: 18px; }
+.focus-tl .tl-row.f-cds .m.cd { top: auto; bottom: 7px; }
+.focus-tl .tl-row.f-cds .m.cd { transform: translateX(-50%); }
 .focus-tl .tl-lab.f-cds { color: var(--text); font-weight: 600; }
 .fpot { position: absolute; top: 5px; bottom: 5px; border-radius: 4px; background: rgba(81,207,102,0.22);
     box-shadow: inset 0 0 0 1px rgba(81,207,102,0.7); cursor: help; }
