@@ -218,9 +218,8 @@ def _clock(ms):
 
 def boss_mechanic_insights(encounter_id, numbered, name):
     """
-    The boss's pass/fail mechanics (bossmech.py) for one player: failing one wipes the pull for everyone, so
-    it outweighs any rotation tip - e.g. bouncing on the Lost Explorers' mushroom too early. A small "going
-    well" when they used it with the raid every time.
+    The boss's curated pass/fail mechanics (bossmech.py) for one player: failing one tends to cost the pull for
+    everyone, so it outweighs any rotation tip. A small "going well" when they took part and never failed it.
     """
     out = []
     for mech in bossmech.for_encounter(encounter_id):
@@ -231,17 +230,12 @@ def boss_mechanic_insights(encounter_id, numbered, name):
             if fails is None:
                 continue  # analyzed before the check
             mine += [(number, f) for f in fails if name in f['players']]
-            used += sum(1 for _, players, _ in (analysis.get('boss_mechanics') or {}).get(mech['key']) or []
-                        if name in players)
+            used += bossmech.uses(analysis, mech, name)
         if mine:
             when = ', '.join(f"#{n} at {_clock(f['t'])}" for n, f in mine[:4]) + (' …' if len(mine) > 4 else '')
-            out.append(_insight('bad', 90, 'boss_mechanic',
-                                f"You {mech['verb']} on {mech['thing']} too early in {len(mine)} pull"
-                                f"{'s' if len(mine) != 1 else ''} ({when}) - it was gone before the rest of the "
-                                f"raid could. Wait for the raid."))
+            out.append(_insight('bad', 90, 'boss_mechanic', mech.you_failed(len({n for n, _ in mine}), when)))
         elif used:
-            out.append(_insight('good', 20, 'boss_mechanic',
-                                f"{mech['title']}: with the raid every time ({used}×), never too early"))
+            out.append(_insight('good', 20, 'boss_mechanic', mech.you_ok(used)))
     return out
 
 

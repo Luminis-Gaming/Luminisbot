@@ -106,14 +106,14 @@ def build(pulls, tags, guide_for, code):
         groups['Deaths'].append(_row('💀', 'No early deaths by mistake', body, 'good'))
 
     # --- Boss-specific pass/fail mechanics (bossmech.py) --------------------------
-    for mech in (m for ms in bossmech.MECHANICS.values() for m in ms):
+    for mech in bossmech.every():
         checked = [(p, f) for p, f in ((p, bossmech.failures(p['analysis'], mech)) for p in pulls) if f is not None]
         if not checked:
             continue  # not this boss, or analyzed before the check existed
         failed = [(p, f) for p, f in checked if f]
         if not failed:
             over = '' if single else ' in ' + _plural(len(checked), 'pull')
-            groups['Boss mechanics'].append(_row(mech['icon'], f'{mech["title"]}: nobody went too early{over}', '', 'good'))
+            groups['Boss mechanics'].append(_row(mech.icon, f'{esc(mech.ok_title)}{over}', '', 'good'))
             continue
         who, lines = {}, []
         for p, fails in failed:
@@ -121,16 +121,13 @@ def build(pulls, tags, guide_for, code):
                 for name in f['players']:
                     who[name] = who.get(name, 0) + 1
                 pull = '' if single else f'<strong>#{p["number"]}</strong> '
-                early = (f' {(f["t"] - f["appeared"]) / 1000:.1f} s after {mech["thing"]} appeared'
-                         if f.get('appeared') is not None else '')
-                alone = 'alone' if len(f['players']) == 1 else f'only {len(f["players"])} of you'
                 lines.append(f'<p class="small">{pull}{fmt_duration(f["t"])} - {", ".join(pname(n) for n in f["players"])} '
-                             f'{esc(mech["verb"])}{early}, {alone} - it was gone before the rest could</p>')
+                             f'{esc(f["detail"])}</p>')
         numbers = ', '.join(f'#{p["number"]}' for p, _ in failed)
-        sentence = (f'Failed {esc(mech["thing"])} (went too early) — <strong>{_plural(len(failed), "pull")}</strong>'
+        sentence = (f'{esc(mech.fail_title)} — <strong>{_plural(len(failed), "pull")}</strong>'
                     + ('' if single else f' <span class="muted small">({numbers})</span>'))
-        body = f'<h4>Who went too early</h4>{players_bars(who, "Times")}<h4>When</h4>{"".join(lines)}'
-        groups['Boss mechanics'].append(_row(mech['icon'], sentence, body, 'bad'))
+        body = f'<h4>Who failed it</h4>{players_bars(who, "Times")}<h4>When</h4>{"".join(lines)}'
+        groups['Boss mechanics'].append(_row(mech.icon, sentence, body, 'bad'))
 
     # --- Avoidable mechanics ----------------------------------------------------
     for ability in merged['abilities']:

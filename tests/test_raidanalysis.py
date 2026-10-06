@@ -495,12 +495,13 @@ class TestMushroomBounce(unittest.TestCase):
     def test_alone_right_after_it_appeared_fails(self):
         from raidanalysis import bossmech
         mech = bossmech.for_encounter(3497)[0]
-        early = bossmech.moments(self.events(0, 81109, [(81595, 1)]), 0, self.names, self.roster)
+        early = mech.collect(self.events(0, 81109, [(81595, 1)]), 0, self.names, self.roster)
         self.assertEqual(early, [[81109, ['Naautilus'], 81595]])                    # the mushroom's own events aren't bounces
-        self.assertEqual(bossmech.failures(self.analysis(early), mech),
-                         [{'t': 81595, 'appeared': 81109, 'players': ['Naautilus']}])
-        together = bossmech.moments(self.events(0, 81046, [(104494 + 100 * i, i) for i in range(2, 12)]), 0,
-                                    self.names, self.roster)
+        self.assertEqual(bossmech.failures(self.analysis(early), mech), [{
+            't': 81595, 'players': ['Naautilus'],
+            'detail': 'bounced 0.5 s after the mushroom appeared, alone - it was gone before the rest could'}])
+        together = mech.collect(self.events(0, 81046, [(104494 + 100 * i, i) for i in range(2, 12)]), 0,
+                                self.names, self.roster)
         self.assertEqual(len(together[0][1]), 10)
         self.assertEqual(bossmech.failures(self.analysis(together), mech), [])     # the raid together: fine
         # Three left standing after a wipe bouncing isn't failing it
