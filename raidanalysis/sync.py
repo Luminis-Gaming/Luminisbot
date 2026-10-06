@@ -9,7 +9,7 @@ import time
 
 import aiohttp
 
-from . import analyzer, cooldowns, db, wcl
+from . import analyzer, bossmech, cooldowns, db, wcl
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,19 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
     analysis = analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
                                   set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events,
                                   combatant_events, cooldown_meta, event_ids=complete_ids, debuff_events=debuff_events)
+    # Boss-specific pass/fail mechanics (bossmech.py): who used e.g. the Bouncy Mushroom, moment by moment.
+    # The ability's events can be auras on us or our casts: both hostilities, every event type.
+    special = bossmech.for_encounter(fight['encounterID'])
+    if special:
+        names_by_id = {a['id']: a['name'] for a in actors}
+        roster = {p['name'] for p in analysis.get('players') or []}
+        analysis['boss_mechanics'] = {}
+        for mech in special:
+            events = []
+            for hostility in ('Friendlies', 'Enemies'):
+                events += await wcl.get_events(session, code, fight['id'], 'All', bossmech.filter_expression(mech),
+                                               hostility=hostility)
+            analysis['boss_mechanics'][mech['key']] = bossmech.moments(events, fight['startTime'], names_by_id, roster)
     analysis['cast_ids'] = cast_ids  # which spells 'casts' is complete for (benchmarks.compare)
     # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
     # (a talent you don't take), as opposed to one we didn't fetch.

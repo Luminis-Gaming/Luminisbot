@@ -469,6 +469,57 @@ class TestSuggestions(unittest.TestCase):
         self.assertEqual(suggested, {AURA})
 
 
+class TestMushroomBounce(unittest.TestCase):
+    """The Lost Explorers: two pulls from the log - Naautilus alone 0.5 s after it appeared; the raid 23 s later."""
+    MUSHROOM = 99
+
+    def events(self, start, appear_ms, bounces):
+        """The log's "Bounce" events: the mushroom gaining and casting it as it appears, then players afflicted."""
+        ev = [{'timestamp': start + appear_ms, 'type': t, 'sourceID': self.MUSHROOM, 'targetID': tgt}
+              for t, tgt in (('applybuff', self.MUSHROOM), ('cast', -1), ('applybuff', self.MUSHROOM))]
+        for ms, who in bounces:
+            ev.append({'timestamp': start + ms, 'type': 'applydebuff', 'sourceID': self.MUSHROOM, 'targetID': who})
+            ev.append({'timestamp': start + ms + 1500, 'type': 'removedebuff', 'sourceID': self.MUSHROOM,
+                       'targetID': who})
+        return ev
+
+    def setUp(self):
+        self.names = {i: f'P{i}' for i in range(1, 21)}
+        self.names.update({1: 'Naautilus', 2: 'Futhark', self.MUSHROOM: 'Bouncy Mushroom'})
+        self.roster = {n for i, n in self.names.items() if i != self.MUSHROOM}
+
+    def analysis(self, data, deaths=()):
+        return {'players': [{'name': n} for n in sorted(self.roster)], 'deaths': [{'t': t} for t in deaths],
+                'boss_mechanics': {'mushroom': data}}
+
+    def test_alone_right_after_it_appeared_fails(self):
+        from raidanalysis import bossmech
+        mech = bossmech.for_encounter(3497)[0]
+        early = bossmech.moments(self.events(0, 81109, [(81595, 1)]), 0, self.names, self.roster)
+        self.assertEqual(early, [[81109, ['Naautilus'], 81595]])                    # the mushroom's own events aren't bounces
+        self.assertEqual(bossmech.failures(self.analysis(early), mech),
+                         [{'t': 81595, 'appeared': 81109, 'players': ['Naautilus']}])
+        together = bossmech.moments(self.events(0, 81046, [(104494 + 100 * i, i) for i in range(2, 12)]), 0,
+                                    self.names, self.roster)
+        self.assertEqual(len(together[0][1]), 10)
+        self.assertEqual(bossmech.failures(self.analysis(together), mech), [])     # the raid together: fine
+        # Three left standing after a wipe bouncing isn't failing it
+        self.assertEqual(bossmech.failures(self.analysis(early, deaths=[1000] * 15), mech), [])
+        self.assertIsNone(bossmech.failures({'players': []}, mech))                 # analyzed before the check
+
+    def test_night_summary(self):
+        from raidanalysis.web import insights
+
+        def pull(n, data):
+            return {'number': n, 'fight_id': n, 'kill': False, 'reason': None, 'phases': [],
+                    'analysis': dict(self.analysis(data), _duration=150000, abilities=[])}
+        html = insights.build([pull(1, [[81109, ['Naautilus'], 81595]]), pull(2, [[81046, ['P3', 'P4', 'P5', 'P6'], 104494]])],
+                              {}, lambda i, n: None, 'x')
+        self.assertIn('Failed the mushroom (went too early) — <strong>1 pull</strong>', html)
+        self.assertIn('bounced 0.5 s after the mushroom appeared, alone', html)
+        self.assertIn('Naautilus', html)
+
+
 class TestSameNameMechanics(unittest.TestCase):
     """The Lost Explorers: Shell Spin only stuns (0-damage hits), Evil Eyes is logged under two spell ids."""
 
