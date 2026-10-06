@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 REGION = 'eu'
 FRESH_HOURS = 6
-SHEET_VERSION = 1  # a stored copy from before load() fetched the stat sheet and set bonuses is fetched again
+SHEET_VERSION = 2  # a stored copy from before load() kept the stat sheet, set bonuses and raid order is fetched again
+OUR_RAIDS_SECONDS = 600
 ICON_URL = 'https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg'
 
 # The in-game character panel: gear down both sides of the model, weapons underneath
@@ -123,14 +124,43 @@ def summary(data):
     if mplus is None:
         seasons = rio.get('mythic_plus_scores_by_season') or [{}]
         mplus = ((seasons[0] or {}).get('scores') or {}).get('all')
-    raids = []
-    for raid, prog in (data.get('raid_progression') or rio.get('raid_progression') or {}).items():
-        if isinstance(prog, dict) and prog.get('summary'):
-            raids.append((raid.replace('-', ' ').title(), prog['summary']))
+    progression = data.get('raid_progression') or rio.get('raid_progression') or {}
+    raids = [(raid.replace('-', ' ').title(), progression[raid]['summary']) for raid in raid_order(data, progression)
+             if isinstance(progression.get(raid), dict) and progression[raid].get('summary')]
     return {'ilvl': ilvl, 'spec': data.get('active_spec') or rio.get('active_spec_name'),
             'class': data.get('character_class') or rio.get('class'), 'race': data.get('race') or rio.get('race'),
             'realm': rio.get('realm') or data.get('realm'), 'guild': (rio.get('guild') or {}).get('name'),
             'mplus': mplus, 'raids': raids[:2], 'raiderio_url': data.get('raiderio_url') or rio.get('profile_url')}
+
+
+def raid_order(data, progression):
+    """
+    Raider.IO's raids, the current ones first. The order it sends (newest first) doesn't survive being stored
+    (Postgres JSONB sorts object keys - "sporefall" before "the-venomous-abyss"), so load() keeps it as a list
+    ('raid_order'); and the raids we have logs of come first either way, the latest tier leading.
+    """
+    kept = [k for k in data.get('raid_order') or [] if k in progression]
+    order = kept + [k for k in progression if k not in kept]
+    ours = _our_raids()
+    return sorted(order, key=lambda k: ours.index(k) if k in ours else len(ours))  # stable: the rest keep their order
+
+
+_our_raids_cache = [0.0, []]
+
+
+def _our_raids():
+    """Our logs' raid tiers as Raider.IO slugs ('the-venomous-abyss'), newest first (kept OUR_RAIDS_SECONDS)."""
+    import time
+    if time.time() - _our_raids_cache[0] < OUR_RAIDS_SECONDS:
+        return _our_raids_cache[1]
+    try:
+        from . import db
+        slugs = [re.sub(r'[^a-z0-9]+', '-', (t['zone_name'] or '').lower().replace("'", '')).strip('-')
+                 for t in db.list_tiers()]
+    except Exception:
+        slugs = []
+    _our_raids_cache[:] = [time.time(), [s for s in slugs if s]]
+    return _our_raids_cache[1]
 
 
 def stats(data):
@@ -181,7 +211,8 @@ def tier_set(data):
         pieces = s.get('items') or []
         bonuses = []
         for e in s['effects']:
-            text = re.sub(r'^\(\d+\) Set:?\s*', '', e.get('display_string') or '').strip()
+            # Blizzard: "Set: Rising Sun Kick deals..." (sometimes "(2) Set: ...") - the count is shown on its own
+            text = re.sub(r'^(\(\d+\)\s*)?Set\s*:?\s*', '', e.get('display_string') or '').strip()
             bonuses.append({'count': e.get('required_count') or 0, 'text': text, 'active': bool(e.get('is_active'))})
         return {'name': (s.get('item_set') or {}).get('name') or 'Tier set',
                 'worn': sum(1 for p in pieces if p.get('is_equipped')), 'size': len(pieces), 'bonuses': bonuses}
@@ -301,7 +332,7 @@ def cached(name, realm=None):
     else:  # a linked character refreshed on the admin site since we last fetched it
         data, fetched = dict(linked['enrichment_cache']), linked.get('last_enriched')
         if own_ok:
-            for key in ('statistics', 'tier_set'):
+            for key in ('statistics', 'tier_set', 'raid_order'):
                 if own['data'].get(key) and not data.get(key):
                     data[key] = own['data'][key]
     stale = (not _fresh(fetched) or not own_ok or not _fresh(own['fetched_at'])
@@ -355,6 +386,7 @@ async def load(code, name, realm=None):
     if statistics:
         keep['statistics'] = statistics
     keep['sheet_v'] = SHEET_VERSION
+    keep['raid_order'] = list((rio.get('raid_progression') or {}).keys())  # Raider.IO's order: newest first
     if not tier_set(keep):
         keep['tier_set'] = await _wowhead_set(keep)
     db.save_armory(name, realm, keep)

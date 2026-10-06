@@ -2075,3 +2075,26 @@ class TestBossWeightsByDifficulty(unittest.TestCase):
         w_prog, w_farm = coach.boss_weights([prog, farm], self.ORDER)
         self.assertEqual(w_prog, 1)
         self.assertLess(w_farm, 0.15)  # like before: an easy kill hardly counts
+
+
+class TestArmoryRaidProgress(unittest.TestCase):
+    def test_current_raids_first_whatever_jsonb_did_to_the_order(self):
+        from unittest import mock
+        from raidanalysis import armory
+        prog = {'sporefall': {'summary': '1/1 M'}, 'tier-mn-1': {'summary': '8/9 M'},   # as JSONB returns it
+                'the-venomous-abyss': {'summary': '1/8 M'}, 'the-tidebound-grotto': {'summary': '1/1 H'}}
+        with mock.patch.object(armory, '_our_raids', lambda: ['the-venomous-abyss', 'tier-mn-1']):
+            kept = armory.summary({'raid_progression': prog, 'raid_order': ['the-tidebound-grotto', 'the-venomous-abyss',
+                                                                              'sporefall', 'tier-mn-1']})
+            self.assertEqual(kept['raids'], [('The Venomous Abyss', '1/8 M'), ('Tier Mn 1', '8/9 M')])
+        with mock.patch.object(armory, '_our_raids', lambda: []):
+            kept = armory.summary({'raid_progression': prog, 'raid_order': ['the-tidebound-grotto', 'the-venomous-abyss',
+                                                                              'sporefall', 'tier-mn-1']})
+            self.assertEqual([r for r, _ in kept['raids']], ['The Tidebound Grotto', 'The Venomous Abyss'])
+
+    def test_blizzard_set_text(self):
+        from raidanalysis import armory
+        data = {'equipped_items': [{'set': {'item_set': {'name': 'Guile'}, 'items': [{'is_equipped': True}],
+                                            'effects': [{'display_string': 'Set: Rising Sun Kick hits harder.',
+                                                         'required_count': 2, 'is_active': True}]}}]}
+        self.assertEqual(armory.tier_set(data)['bonuses'][0]['text'], 'Rising Sun Kick hits harder.')
