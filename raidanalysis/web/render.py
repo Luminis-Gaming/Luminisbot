@@ -918,9 +918,10 @@ document.querySelectorAll('.mech-wrap').forEach(wrap => {
   });
   apply();
 });
-// Raid timeline: a dropdown per category (an All box, a box per thing) and the Deaths chip choose what's
-// drawn - everything on it carries a data-k, shown while its box / chip is on.
-document.querySelectorAll('.cons-tl').forEach(tl => {
+// Raid and Focus timelines: a dropdown per category (an All box, a box per thing) and the Deaths chip choose
+// what's drawn - everything on it carries a data-k, shown while its box / chip is on; a group header
+// (data-kgroup) hides once its dropdown is all off.
+document.querySelectorAll('.cons-tl, .focus-tl').forEach(tl => {
   const dds = [...tl.querySelectorAll('.tl-dd')];
   const boxes = [...tl.querySelectorAll('.tl-dd-menu input[value]')];
   const els = [...tl.querySelectorAll('.tl-labels [data-k], .tl-inner [data-k]')];
@@ -934,6 +935,10 @@ document.querySelectorAll('.cons-tl').forEach(tl => {
       all.checked = n === mine.length; all.indeterminate = n > 0 && n < mine.length;
       dd.querySelector('.tl-dd-n').textContent = n === mine.length ? 'All' : n ? n + '/' + mine.length : 'Off';
       dd.classList.toggle('on', n > 0);
+    });
+    tl.querySelectorAll('[data-kgroup]').forEach(el => {
+      const dd = tl.querySelector('.tl-dd[data-dd="' + el.dataset.kgroup + '"]');
+      el.hidden = !!dd && !dd.querySelector('input[value]:checked');
     });
   };
   dds.forEach(dd => {
@@ -1013,29 +1018,8 @@ document.querySelectorAll('.fcard .ftabs').forEach(bar => bar.querySelectorAll('
     card.querySelectorAll('.fpane').forEach(p => { p.hidden = p.dataset.pane !== btn.dataset.tab; });
   });
 }));
-// Focus timeline: your cooldowns / buffs from others - a chip per group, the picker per ability; a group's
-// header hides with its last ability.
-document.querySelectorAll('.focus-tl').forEach(tl => {
-  const boxes = [...tl.querySelectorAll('.tl-pick input')];
-  const lanes = key => tl.querySelectorAll('.tl-labels [data-g="' + key + '"], .tl-inner [data-g="' + key + '"]');
-  const apply = () => {
-    boxes.forEach(b => lanes(b.value).forEach(el => { el.hidden = !b.checked; }));
-    tl.querySelectorAll('.tl-chip[data-cat]').forEach(chip => {
-      const mine = boxes.filter(b => b.dataset.cat === chip.dataset.cat), n = mine.filter(b => b.checked).length;
-      chip.setAttribute('aria-pressed', n ? 'true' : 'false');
-      chip.classList.toggle('partial', n > 0 && n < mine.length);
-      lanes(chip.dataset.cat).forEach(el => { el.hidden = !n; });
-    });
-  };
-  tl.querySelectorAll('.tl-chip[data-cat]').forEach(chip => chip.addEventListener('click', () => {
-    const mine = boxes.filter(b => b.dataset.cat === chip.dataset.cat), all = mine.every(b => b.checked);
-    mine.forEach(b => { b.checked = !all; });
-    apply();
-  }));
-  boxes.forEach(b => b.addEventListener('change', apply));
-});
-// Compare and Focus timelines: chips show/hide a group of lanes; Align phases / Real time swaps positions.
-document.querySelectorAll('.cmp-tl, .focus-tl').forEach(tl => {
+// Compare timeline: chips show/hide a group of lanes; Align phases / Real time swaps positions.
+document.querySelectorAll('.cmp-tl').forEach(tl => {
   tl.querySelectorAll('.tl-chip[data-g]').forEach(chip => chip.addEventListener('click', () => {
     const on = chip.getAttribute('aria-pressed') !== 'true';
     chip.setAttribute('aria-pressed', on ? 'true' : 'false');

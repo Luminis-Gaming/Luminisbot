@@ -335,34 +335,26 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     lanes += [_group('🧪 Your potion', 'bracket: potion → priority add appearing'),
               ('<div class="tl-lab f-cds">Potion</div>', 'f-cds', pots, None)]
 
-    # Your cooldowns / buffs from others: a chip toggles the group, the picker each ability (PAGE_JS)
+    # What's drawn, like the raid timeline: a dropdown per group (an All box, a box per thing - PAGE_JS) -
+    # Targets (every enemy: its lanes, spawns and spawn lines), your cooldowns, buffs from others. A box's
+    # data-name is the thing's name (remembered per browser), its value the lanes' data-k.
+    target_items = [(key, 't:' + target, _swatch(color_of.get(target, OTHER_COLOR), npc_icons.get(target)),
+                     target, len(next(k['spawns'] for k in kinds if k['target'] == target)) if target in add_kinds else None,
+                     None, None, key in on) for target, key in keys.items()]
     groups = [(cat, label, picks) for cat, label, picks in (('cds', '⚔️ Your cooldowns', cd_picks),
                                                            ('ext', '🤝 Buffs from others', ext_picks)) if picks]
-    on |= {cat for cat, _, _ in groups} | {key for _, _, picks in groups for key, *_ in picks}
+    on |= {key for _, _, picks in groups for key, *_ in picks}
     spells.offer([sid for _, _, picks in groups for *_, sid, _ in picks])  # their tooltips may be looked up
-    menu = ''.join(
-        f'<div><h5>{label}</h5>' + ''.join(
-            f'<label data-spell="{sid}" data-tip="{esc(tip)}"><input type="checkbox" value="{key}" data-cat="{cat}" '
-            f'data-name="{esc(cat + ":" + name)}" checked>{_icon(icon)}{esc(name)} <span class="muted">×{count}</span></label>'
-            for key, name, icon, count, sid, tip in picks) + '</div>'
+    chips = _dropdown('targets', '🎯 Targets', target_items) + ''.join(
+        _dropdown(cat, label, [(key, f'{cat}:{name}', _icon(icon), name, count, sid, tip, True)
+                               for key, name, icon, count, sid, tip in picks])
         for cat, label, picks in groups)
-    chips = ''.join(f'<button type="button" class="tl-chip" data-cat="{cat}" aria-pressed="true">{label}</button>'
-                    for cat, label, _ in groups)
-    if groups:
-        chips += (f'<details class="tl-pick"><summary>🎛️ Pick cooldowns & buffs ▾</summary>'
-                  f'<div class="tl-pick-menu">{menu}</div></details>')
-    chips += ''.join(
-        f'<button type="button" class="tl-chip" data-g="{key}" data-name="{esc("t:" + target)}" '
-        f'aria-pressed="{"true" if key in on else "false"}" '
-        f'style="--c:{color_of.get(target, OTHER_COLOR)}">{_chip_mark(npc_icons.get(target))}{esc(target)}'
-        f'{" ×" + str(len(next(k["spawns"] for k in kinds if k["target"] == target))) if target in add_kinds else ""}'
-        f'</button>' for target, key in keys.items())
     phase_lines = ''.join(f'<i class="tl-phase al" style="left:{_at(p["start"], duration)}"></i>'
                           for p in phases[1:] if p.get('start'))
     # Each spawn as a dashed line in its add's colour, top to bottom: do your cooldowns, buffs and potion line
-    # up with it? (Shown with the add's chip.)
+    # up with it? (Shown with the add's box in Targets.)
     phase_lines += ''.join(
-        f'<i class="tl-phase fspawnline" data-g="{keys[k["target"]]}"{"" if keys[k["target"]] in on else " hidden"} '
+        f'<i class="tl-phase fspawnline" data-k="{keys[k["target"]]}"{"" if keys[k["target"]] in on else " hidden"} '
         f'style="left:{_at(w["start"], duration)};--c:{color_of.get(k["target"], OTHER_COLOR)}"></i>'
         for k in kinds for w in k['spawns'])
     every = 30000 if duration <= 240000 else 60000
@@ -373,11 +365,13 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                             'meta': '', 'desc': ''} for a in boss_meta.values() if safe_icon(a.get('icon'))}
 
     def attrs(key):
-        return f' data-g="{key}"' + (' hidden' if key not in on else '') if key and key != 'abilities' else ''
+        if key in ('cds', 'ext'):  # a group's header: hidden with its dropdown's last box (PAGE_JS)
+            return f' data-kgroup="{key}"'
+        return f' data-k="{key}"' + (' hidden' if key not in on else '') if key and key != 'abilities' else ''
     labels = ''.join(label.replace('<div ', f'<div{attrs(key)} ', 1) for label, _, _, key in lanes)
     tracks = ''.join(f'<div class="tl-row {cls}"{attrs(key)}>{body}</div>' for _, cls, body, key in lanes)
     return f"""<div class="tl focus-tl" data-duration="{duration}" data-remember="focus">
-        <div class="tl-chips"><span class="chips-label">Show</span>{chips}</div>
+        <div class="tl-chips tl-dds">{chips}</div>
         <div class="tl-tools">
             <span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom · hover anything</span>
             <button type="button" data-zoom="out" title="Zoom out">−</button>
@@ -473,8 +467,20 @@ def _spawn_pane(w, k, color, potions, cooldowns, wins):
         {f'<div class="fmetric"><span>Cooldowns during it</span><div class="fcds">{icons}</div></div>' if icons else ''}"""
 
 
-def _chip_mark(icon):
-    return npc_portrait(icon) or '<i></i>'
+def _dropdown(key, label, items):
+    """
+    A group as a dropdown chip - the raid timeline's (consumables.py), same look and PAGE_JS: an All box,
+    then a box per item. items: [(lane key, name to remember it by, mark html, label, count, spell id, tip, on)].
+    """
+    def row(k, name, mark, text, count, sid, tip, on):
+        attrs = (f' data-spell="{int(sid)}"' if sid else '') + (f' data-tip="{esc(tip)}"' if tip else '')
+        times = f' <span class="muted">×{count}</span>' if count else ''
+        return (f'<label{attrs}><input type="checkbox" value="{esc(k)}" data-name="{esc(name)}"{" checked" if on else ""}>'
+                f'{mark}<span>{esc(text)}</span>{times}</label>')
+    return (f'<details class="tl-dd" data-dd="{key}"><summary><span>{label}</span><b class="tl-dd-n"></b>'
+            f'<span class="tl-dd-caret">▾</span></summary><div class="tl-dd-menu">'
+            f'<label class="tl-dd-all"><input type="checkbox" data-all>All</label>{"".join(row(*i) for i in items)}'
+            f'</div></details>')
 
 
 def _card_mark(name, color, icon, href, size=''):
