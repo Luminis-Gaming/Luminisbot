@@ -249,6 +249,67 @@ tr.muted-row td { opacity: 0.7; }
 .tl-pick-menu h5 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .tl-pick-menu label { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 12px; cursor: pointer; }
 .tl-pick-menu .ability-icon { width: 16px; height: 16px; }
+/* Raid timeline: a dropdown chip per category (consumables.toolbar) - the menu floats over the timeline */
+.tl-dd { position: relative; }
+.tl-dd summary { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); font-size: 12px; cursor: pointer; list-style: none;
+    user-select: none; }
+.tl-dd summary::-webkit-details-marker { display: none; }
+.tl-dd summary:hover, .tl-dd[open] summary { color: var(--text); border-color: var(--border-strong); }
+.tl-dd.on summary { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+.tl-dd[open] summary { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.tl-dd-n { font-weight: 600; font-size: 11px; color: var(--muted); }
+.tl-dd.on .tl-dd-n { color: var(--accent); }
+.tl-dd-caret { font-size: 10px; color: var(--faint); transition: transform .15s; }
+.tl-dd[open] .tl-dd-caret { transform: rotate(180deg); }
+.tl-dd-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 240px; max-width: min(340px, 90vw);
+    max-height: 360px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 10px;
+    background: var(--surface-2); box-shadow: 0 12px 30px rgba(0,0,0,0.45); }
+.tl-dd-menu label { display: flex; align-items: center; gap: 7px; padding: 4px 4px; border-radius: 6px; font-size: 12px;
+    cursor: pointer; white-space: nowrap; }
+.tl-dd-menu label:hover { background: var(--surface-3); }
+.tl-dd-menu label > span:not(.muted) { overflow: hidden; text-overflow: ellipsis; }
+.tl-dd-menu .tl-dd-all { font-weight: 600; border-bottom: 1px solid var(--border); border-radius: 6px 6px 0 0;
+    margin-bottom: 4px; padding-bottom: 6px; }
+.tl-dd-menu .ability-icon, .tl-dd-menu .npc-icon { width: 18px; height: 18px; }
+.tl-dd-menu .fsw { flex-shrink: 0; }
+@media (max-width: 600px) { .tl-dd-menu { position: fixed; left: 16px; right: 16px; top: auto; max-width: none; } }
+/* Legend marks in the dropdowns: the same shapes as on the timeline */
+.tl-key { display: inline-block; flex-shrink: 0; width: 14px; height: 6px; border-radius: 2px; }
+.tl-key.k-potion { background: var(--potion); }
+.tl-key.k-mana { background: var(--mana); }
+.tl-key.k-healthstone { width: 8px; height: 8px; margin: 0 3px; background: var(--defensive); transform: rotate(45deg); border-radius: 1px; }
+.tl-key.k-healing { width: 9px; height: 9px; margin: 0 2px; background: var(--defensive); border-radius: 50%; }
+.tl-key.k-phase { width: 14px; height: 10px; background: rgba(116,132,236,0.30); box-shadow: inset 1px 0 rgba(255,255,255,0.5); }
+.tl-key.k-tick { width: 3px; height: 12px; margin: 0 5px; background: var(--c); }
+/* Enemy portraits (npcs.py), ringed in their timeline colour */
+.npc-icon { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+    box-shadow: 0 0 0 2px var(--c, var(--border-strong)); background: var(--surface-3); }
+.fcard-head .npc-icon { width: 26px; height: 26px; }
+.tl-chip .chip-icon { border-radius: 50%; }
+/* Raid timeline's Boss lanes: phases, then a lane per kind of add */
+.cons-tl .tl-row.c-lane::before { display: none; }
+.cons-tl .tl-lab.c-phase, .cons-tl .tl-row.c-phase { height: 24px; }
+.cons-tl .tl-lab.c-phase { color: var(--text); font-weight: 600; }
+.cons-tl .tl-lab.c-add, .cons-tl .tl-row.c-add { height: 28px; }
+.cons-tl .tl-lab.c-add { justify-content: space-between; gap: 6px; padding-left: 2px; color: var(--text); }
+.cons-tl .tl-lab.c-add small { color: var(--faint); flex-shrink: 0; }
+.cons-tl .tl-lab.c-add .pill { font-size: 9px; padding: 1px 6px; flex-shrink: 0; }
+.cons-tl .tl-lab.c-add .npc-icon { width: 18px; height: 18px; }
+.cons-tl .tl-row.c-add .fspawn { top: 6px; bottom: 6px; }
+.tl .tl-phase.fspawnline { border-left: 2px dashed var(--c); opacity: 0.85; z-index: 1; }
+/* Potion bars start with the potion's icon; a healing potion is a dot (a healthstone a diamond) */
+.m.bar > b { position: absolute; left: 0; top: 50%; width: 16px; height: 16px; transform: translate(-50%, -50%);
+    border-radius: 4px; background-size: cover; background-color: var(--surface);
+    box-shadow: 0 0 0 1.5px var(--surface), 0 0 0 3px var(--kc, transparent); }
+.m.bar.k-potion > b { --kc: var(--potion); }
+.m.bar.k-mana > b { --kc: var(--mana); }
+.m.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--defensive); box-shadow: 0 0 0 1.5px var(--surface); }
+.m.dot:hover { box-shadow: 0 0 0 1.5px #fff; }
+.castbar-wrap.compact { padding: 6px 0 12px; gap: 6px; }
+.castbar-wrap.compact .cb-icon { width: 30px; height: 30px; }
+.castbar-wrap.compact .cb-bar { height: 22px; }
+.castbar-wrap.compact .cb-name, .castbar-wrap.compact .cb-time { line-height: 22px; }
 /* Editor-style zoomable timeline (deaths_strip) */
 .tl { margin: 6px 0 18px; }
 .tl-tools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -286,7 +347,7 @@ tr.muted-row td { opacity: 0.7; }
 .tl.dragging .tl-scroll { cursor: grabbing; user-select: none; }
 .tl [hidden] { display: none !important; }
 /* HTML timeline (consumables): rows of absolutely placed marks, positioned in % of the track */
-.cons-tl { --label-w: 150px; }
+.cons-tl { --label-w: 190px; }
 .cons-tl .tl-body { grid-template-columns: var(--label-w) minmax(0, 1fr); }
 .cons-tl .tl-scroll { padding: 0 10px; }  /* room for marks right at the start / end of the pull */
 .tl-lab { height: 22px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding-right: 10px;
@@ -302,7 +363,6 @@ tr.muted-row td { opacity: 0.7; }
 .tl-grid { position: absolute; inset: 0 0 20px 0; pointer-events: none; }
 .tl-grid i, .tl-phase { position: absolute; top: 0; bottom: 0; border-left: 1px solid rgba(255,255,255,0.06); }
 .tl-phase { bottom: 20px; border-left: 1px dashed rgba(255,255,255,0.3); pointer-events: none; }
-.focus-tl .tl-phase.fspawnline { border-left: 2px dashed var(--c); opacity: 0.85; z-index: 1; }
 .tl .m { position: absolute; top: 50%; transform: translate(-50%, -50%); }
 .tl .m:hover { z-index: 3; }
 .m.tick { width: 2px; height: 10px; background: #9aa1b9; border-radius: 1px; }
@@ -827,27 +887,36 @@ document.querySelectorAll('.mech-wrap').forEach(wrap => {
   });
   apply();
 });
-// Consumables timeline: the chips and the Abilities checkboxes choose what's drawn.
+// Raid timeline: a dropdown per category (an All box, a box per thing) and the Deaths chip choose what's
+// drawn - everything on it carries a data-k, shown while its box / chip is on.
 document.querySelectorAll('.cons-tl').forEach(tl => {
-  const boxes = [...tl.querySelectorAll('.tl-pick input')];
-  const marks = [...tl.querySelectorAll('.tl-inner [data-f]')];
+  const dds = [...tl.querySelectorAll('.tl-dd')];
+  const boxes = [...tl.querySelectorAll('.tl-dd-menu input[value]')];
+  const els = [...tl.querySelectorAll('.tl-labels [data-k], .tl-inner [data-k]')];
   const apply = () => {
-    const on = new Set([...tl.querySelectorAll('.tl-chip[data-f][aria-pressed=true]')].map(b => b.dataset.f));
-    const picked = new Set(boxes.filter(b => b.checked).map(b => b.value));
-    marks.forEach(el => { el.hidden = !(el.dataset.f === 'cd' ? picked.has(el.dataset.ab) : on.has(el.dataset.f)); });
-    tl.querySelectorAll('.tl-chip[data-cat]').forEach(chip => {
-      const mine = boxes.filter(b => b.dataset.cat === chip.dataset.cat), n = mine.filter(b => b.checked).length;
-      chip.setAttribute('aria-pressed', n && n === mine.length ? 'true' : 'false');
-      chip.classList.toggle('partial', n > 0 && n < mine.length);
+    const on = new Set(boxes.filter(b => b.checked).map(b => b.value));
+    tl.querySelectorAll('.tl-chip[data-k][aria-pressed=true]').forEach(c => on.add(c.dataset.k));
+    els.forEach(el => { el.hidden = !on.has(el.dataset.k); });
+    dds.forEach(dd => {
+      const mine = [...dd.querySelectorAll('input[value]')], n = mine.filter(b => b.checked).length;
+      const all = dd.querySelector('input[data-all]');
+      all.checked = n === mine.length; all.indeterminate = n > 0 && n < mine.length;
+      dd.querySelector('.tl-dd-n').textContent = n === mine.length ? 'All' : n ? n + '/' + mine.length : 'Off';
+      dd.classList.toggle('on', n > 0);
     });
   };
-  tl.querySelectorAll('.tl-chip').forEach(chip => chip.addEventListener('click', () => {
-    if (chip.dataset.cat) {
-      const mine = boxes.filter(b => b.dataset.cat === chip.dataset.cat), all = mine.every(b => b.checked);
-      mine.forEach(b => { b.checked = !all; });
-    } else {
-      chip.setAttribute('aria-pressed', chip.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
-    }
+  dds.forEach(dd => {
+    const all = dd.querySelector('input[data-all]');
+    all.addEventListener('change', () => {
+      dd.querySelectorAll('input[value]').forEach(b => { b.checked = all.checked; });
+      apply();
+    });
+    dd.addEventListener('toggle', () => { if (dd.open) dds.forEach(o => { if (o !== dd) o.open = false; }); });
+  });
+  document.addEventListener('click', e => { dds.forEach(dd => { if (dd.open && !dd.contains(e.target)) dd.open = false; }); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') dds.forEach(dd => { dd.open = false; }); });
+  tl.querySelectorAll('.tl-chip[data-k]').forEach(chip => chip.addEventListener('click', () => {
+    chip.setAttribute('aria-pressed', chip.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
     apply();
   }));
   boxes.forEach(b => b.addEventListener('change', apply));
@@ -880,7 +949,7 @@ document.querySelectorAll('[data-focus-load]').forEach(box => {
   };
   const url = new URL(location.href);
   url.hash = '';
-  url.searchParams.set('focus_load', '1');
+  url.searchParams.set('focus_load', box.dataset.focusLoad || '1');
   fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
     .then(r => r.ok ? r.json() : Promise.reject())
     .then(res => {
@@ -1191,7 +1260,7 @@ def player_name(name, cls='', role=None):
 
 
 _ICON_FILE = __import__('re').compile(r'^[A-Za-z0-9_.-]{1,120}$')
-_ICON_HOSTS = ('https://assets.rpglogs.com/', 'https://wow.zamimg.com/')
+_ICON_HOSTS = ('https://assets.rpglogs.com/', 'https://wow.zamimg.com/', 'https://render.worldofwarcraft.com/')
 
 
 def safe_icon(icon):

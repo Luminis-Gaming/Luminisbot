@@ -1,20 +1,27 @@
 """
 Consumables in detail: which potion / healthstone each player used, when, for
-how long and how much it healed - plus a WCL-style timeline with the boss's
-abilities on top and every player's consumables (and deaths) underneath.
+how long and how much it healed - plus a WCL-style timeline with the boss on top
+(its phases, a lane per kind of add with a dashed line per spawn through everyone,
+its abilities) and every player's consumables, cooldowns (and deaths) underneath.
 
 Needs analyses from ANALYSIS_VERSION 4+ ('consumables', 'boss_casts');
 older nights only have counts until they're re-analyzed.
 """
 from .. import benchmarks, cooldowns
 from ..spells import icon_url
+from . import focusview
 from .render import ROLE_ICONS, esc, fmt_amount, fmt_duration, player_name, safe_icon, spell_data_json
 
 # What the timeline colors encode is the *kind* of consumable (validated with the
 # dataviz palette checker on the card surface, all pairs); the exact potion is in
-# the tooltip, the legend text and the tables.
+# the tooltip, the legend text and the tables. Healthstones and healing potions share
+# the defensive colour and differ in shape (a fourth hue failed the colourblind checks):
+# a diamond for a healthstone, a dot for a healing potion.
 KIND_COLORS = {'potion': '#7484ec', 'mana': '#2f9e8f', 'defensive': '#cc7f3c'}
 KIND_LABELS = {'potion': 'Combat potion', 'mana': 'Mana potion', 'defensive': 'Healthstone / healing potion'}
+# The timeline's finer kinds (timeline_kind): what the Potions dropdown picks between
+TIMELINE_KINDS = (('potion', 'Combat potion'), ('mana', 'Mana potion'), ('healthstone', 'Healthstone'),
+                  ('healing', 'Healing potion'))
 BOSS_TICK = '#9aa1b9'
 DEATH = '#ff6b6b'
 POTION_BUFF_FALLBACK_MS = 30000
@@ -26,6 +33,14 @@ def kind(use):
     if use['kind'] == 'defensive':
         return 'defensive'
     return 'mana' if 'mana' in (use.get('ability') or '').lower() else 'potion'
+
+
+def timeline_kind(use):
+    """kind(), with the defensives split: 'healthstone' (Healthstones, Demonic ones included) or 'healing'."""
+    k = kind(use)
+    if k != 'defensive':
+        return k
+    return 'healthstone' if 'healthstone' in (use.get('ability') or '').lower() else 'healing'
 
 
 def has_details(analyses):
@@ -79,40 +94,63 @@ def cooldowns_by_pull(pulls, spell_lookup=None, majors=None):
     return out
 
 
-def toolbar(pulls, single, cds):
+def _cd_key(cd):
+    return f'cd:{cd["category"]}:{cd["ability"]}'
+
+
+def _dropdown(key, label, items):
     """
-    Toggle chips for what the timeline shows (they double as its legend): each consumable kind,
-    deaths, each cooldown group - and an Abilities dropdown to pick single cooldowns. Only raid
-    cooldowns (DEFAULT_ON) start visible, to keep the default view calm. PAGE_JS does the toggling.
+    One category as a dropdown chip: an All box, then a box per item (it shows / hides everything on the
+    timeline with that data-k). items: [(data-k, mark html, name, count, spell id or None, tip, on)].
+    The summary says how many are on (PAGE_JS keeps it current).
     """
-    chips = [f'<button type="button" class="tl-chip" data-f="{k}" aria-pressed="true">'
-             f'<i style="--c:{KIND_COLORS[k]}"></i>{KIND_LABELS[k]}</button>' for k in ('potion', 'mana', 'defensive')]
-    if single:
-        chips.append(f'<button type="button" class="tl-chip" data-f="death" aria-pressed="true">'
-                     f'<i style="--c:{DEATH}"></i>Deaths</button>')
+    def row(k, mark, name, count, sid, tip, on):
+        attrs = (f' data-spell="{int(sid)}"' if sid else '') + (f' data-tip="{esc(tip)}"' if tip else '')
+        times = f' <span class="muted">×{count}</span>' if count else ''
+        return (f'<label{attrs}><input type="checkbox" value="{esc(k)}"{" checked" if on else ""}>{mark}'
+                f'<span>{esc(name)}</span>{times}</label>')
+    rows = ''.join(row(*item) for item in items)
+    return (f'<details class="tl-dd" data-dd="{key}"><summary><span>{label}</span><b class="tl-dd-n"></b>'
+            f'<span class="tl-dd-caret">▾</span></summary><div class="tl-dd-menu">'
+            f'<label class="tl-dd-all"><input type="checkbox" data-all>All</label>{rows}</div></details>')
+
+
+def toolbar(pulls, single, cds, boss_items=()):
+    """
+    What the timeline shows, a dropdown per category (they double as its legend): Boss (phases, each kind
+    of add, the enemy's abilities), Potions & healthstones (each kind), and each cooldown group with its
+    abilities - plus a Deaths chip. Only raid cooldowns (DEFAULT_ON) start visible among the cooldowns, to
+    keep the default view calm. PAGE_JS does the toggling.
+    """
+    dds = []
+    if boss_items:
+        dds.append(_dropdown('boss', '👹 Boss', boss_items))
+    counts = {}
+    for p in pulls:
+        for use in p['analysis'].get('consumables') or []:
+            counts[timeline_kind(use)] = counts.get(timeline_kind(use), 0) + 1
+    dds.append(_dropdown('cons', '🧪 Potions & healthstones',
+                         [(k, f'<i class="tl-key k-{k}"></i>', label, counts.get(k, 0), None, None, True)
+                          for k, label in TIMELINE_KINDS]))
     used = {}
     for p in pulls:
         for cd in cds[id(p)]:
-            entry = used.setdefault((cd['category'], cd['ability']), {'icon': cd.get('icon'), 'count': 0})
+            entry = used.setdefault((cd['category'], cd['ability']),
+                                    {'icon': cd.get('icon'), 'count': 0, 'sid': cd['ability_id'], 'key': _cd_key(cd)})
             entry['count'] += 1
-    groups = []
     for key, label, emoji in TIMELINE_CATEGORIES:
         abilities = sorted(((name, e) for (cat, name), e in used.items() if cat == key), key=lambda x: -x[1]['count'])
-        if not abilities:
-            continue
-        total = sum(e['count'] for _, e in abilities)
-        chips.append(f'<button type="button" class="tl-chip" data-cat="{key}" aria-pressed="{"true" if key in DEFAULT_ON else "false"}">{emoji} {label} '
-                     f'<span class="muted">{total}</span></button>')
-        boxes = ''.join(f'<label><input type="checkbox" data-cat="{key}" value="{esc(name)}"{" checked" if key in DEFAULT_ON else ""}>{_icon(e["icon"])}'
-                        f'{esc(name)} <span class="muted">×{e["count"]}</span></label>' for name, e in abilities)
-        groups.append(f'<div><h5>{emoji} {label}</h5>{boxes}</div>')
-    if groups:
-        chips.append(f'<details class="tl-pick"><summary>Abilities ▾</summary>'
-                     f'<div class="tl-pick-menu">{"".join(groups)}</div></details>')
-    elif not any('cooldowns' in p['analysis'] for p in pulls):
-        chips.append('<span class="muted small">Re-analyze to see cooldowns (defensives, externals, raid CDs).</span>')
-    chips.append(f'<span class="tl-static"><i style="--c:{BOSS_TICK}"></i>Enemy ability cast</span>')
-    return f'<div class="tl-chips">{"".join(chips)}</div>'
+        if abilities:
+            dds.append(_dropdown(key, f'{emoji} {label}', [
+                (e['key'], _icon(e['icon']), name, e['count'], e['sid'], None, key in DEFAULT_ON)
+                for name, e in abilities]))
+    chips = ''.join(dds)
+    if single:
+        chips += (f'<button type="button" class="tl-chip" data-k="death" aria-pressed="true">'
+                  f'<i style="--c:{DEATH}"></i>Deaths</button>')
+    if not used and not any('cooldowns' in p['analysis'] for p in pulls):
+        chips += '<span class="muted small">Re-analyze to see cooldowns (defensives, externals, raid CDs).</span>'
+    return f'<div class="tl-chips tl-dds">{chips}</div>'
 
 
 # ============================================================================
@@ -131,11 +169,53 @@ def reference_pull(pulls):
     return max(with_casts, key=lambda p: (bool(p.get('kill')), p['analysis'].get('_duration') or 0))
 
 
-def timeline(pulls, roster, spell_lookup=None, majors=None):
+def adds_pull(pulls):
+    """The pull whose adds and phases the Boss lanes show: reference_pull(), else the longest kill or pull."""
+    return reference_pull(pulls) or max(pulls, key=lambda p: (bool(p.get('kill')), p['analysis'].get('_duration') or 0),
+                                        default=None)
+
+
+def _boss_section(source, adds, phase_names, npc_icons, at, longest):
     """
-    pulls: [{'number', 'kill', 'analysis' (with _duration), 'phases': [ms]}]. One pull = exact
-    WCL-style timeline with the enemy's casts and deaths; several = every use from every pull on one
-    axis (habits show up as clusters) under the enemy casts of reference_pull(), deaths left out.
+    The Boss lanes over the source pull: its phases (labelled stretches) and a lane per kind of add (a bar
+    per spawn), each with a dashed line per spawn across every player's row. Returns (labels, rows, lines,
+    dropdown items) - every piece keyed (data-k) so the Boss dropdown shows / hides it.
+    """
+    labels, rows, lines, items = [], [], [], []
+    phases = (source or {}).get('phase_list') or []
+    if len(phases) > 1:
+        labels.append('<div class="tl-lab c-phase" data-k="phases">Phases</div>')
+        rows.append(f'<div class="tl-row c-lane c-phase" data-k="phases">'
+                    f'{focusview.phase_lane(phases, phase_names or {}, longest)}</div>')
+        lines += [f'<i class="tl-phase" data-k="phases" style="left:{at(p["start"])}"></i>'
+                  for p in phases[1:] if p.get('start')]
+        items.append(('phases', '<i class="tl-key k-phase"></i>', 'Phases', len(phases), None, None, True))
+    for i, kind_ in enumerate(adds or []):
+        key, target = f'add{i}', kind_['target']
+        color = focusview.COLORS[i] if i < len(focusview.COLORS) else focusview.OTHER_COLOR
+        prio = ('<span class="pill pill-kill" data-tip="A priority: the top DPS pile into it">★</span>'
+                if kind_['priority'] else '')
+        mark = focusview._swatch(color, npc_icons.get(target))
+        labels.append(f'<div class="tl-lab c-add" data-k="{key}" title="{esc(target)}"><span class="flab">{mark}'
+                      f'<span>{esc(target)}</span></span><small>×{len(kind_["spawns"])}</small>{prio}</div>')
+        rows.append(f'<div class="tl-row c-lane c-add" data-k="{key}">'
+                    f'{focusview.spawn_lane(kind_, color, longest, you=False)}</div>')
+        lines += [f'<i class="tl-phase fspawnline" data-k="{key}" style="left:{at(w["start"])};--c:{color}"></i>'
+                  for w in kind_['spawns']]
+        items.append((key, mark, target, len(kind_['spawns']), None,
+                      'A priority: the top DPS pile into it' if kind_['priority'] else None, kind_['priority']))
+    return labels, rows, lines, items
+
+
+def timeline(pulls, roster, spell_lookup=None, majors=None, adds=None, phase_names=None, npc_icons=None, loading=''):
+    """
+    pulls: [{'number', 'kill', 'analysis' (with _duration), 'phases': [ms], 'phase_list': [{'id', 'start'}]}].
+    One pull = exact WCL-style timeline with the enemy's casts and deaths; several = every use from every
+    pull on one axis (habits show up as clusters) under the enemy casts, phases and adds of reference_pull()
+    / adds_pull(), deaths left out.
+    adds: focus.add_types() of adds_pull() (focus.raid_adds), None when not loaded - loading: the cast bar
+    fetching them; phase_names: {phase id: {'name', 'intermission'}} for this encounter; npc_icons: {enemy:
+    portrait url} (npcs.icons).
 
     Drawn as an editor-style timeline (see render.deaths_strip and PAGE_JS): names pinned on the
     left, marks placed in % of the track so zooming keeps icons their size, drag to pan. Every
@@ -147,6 +227,9 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
     reference = reference_pull(pulls)
     spells = {}  # spell id -> (name, rpglogs icon file or icon URL)
     cds = cooldowns_by_pull(pulls, spell_lookup, majors)
+    for uses in cds.values():  # every ability in the dropdowns has its Wowhead tooltip
+        for cd in uses:
+            spells.setdefault(cd['ability_id'], (cd['ability'], cd.get('icon')))
 
     def at(t):
         return f'{100 * max(0, min(t, longest)) / longest:.3f}%'
@@ -154,7 +237,7 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
     def prefix(pull):
         return '' if single else f'Pull {pull["number"]} · '
 
-    labels, rows = [], []
+    labels, rows, lines, boss_items = _boss_section(adds_pull(pulls), adds, phase_names, npc_icons or {}, at, longest)
     if reference:
         # One lane per ability *name* - bosses often cast the same ability under several spell IDs.
         analysis = reference['analysis']
@@ -168,11 +251,14 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
             for _, guid in casts:
                 spells.setdefault(guid, (name, meta[guid].get('icon')))
             first = casts[0][1]
-            labels.append(f'<div class="tl-lab boss" data-spell="{first}" data-tip="Cast {len(casts)}× this pull">'
-                          f'{_icon(meta[first].get("icon"))}<span>{esc(name)}</span></div>')
+            labels.append(f'<div class="tl-lab boss" data-k="abilities" data-spell="{first}" '
+                          f'data-tip="Cast {len(casts)}× this pull">{_icon(meta[first].get("icon"))}<span>{esc(name)}</span></div>')
             ticks = ''.join(f'<i class="m tick" style="left:{at(t)}" data-spell="{guid}" '
                             f'data-tip="{fmt_duration(t)}{source}"></i>' for t, guid in sorted(casts))
-            rows.append(f'<div class="tl-row boss">{ticks}</div>')
+            rows.append(f'<div class="tl-row boss" data-k="abilities">{ticks}</div>')
+        if by_name:
+            boss_items.append(('abilities', f'<i class="tl-key k-tick" style="--c:{BOSS_TICK}"></i>', 'Enemy abilities',
+                               len(by_name), None, 'A lane per ability, a tick per cast', True))
 
     for i, player in enumerate(roster):
         sep = ' sep' if i == 0 and rows else ''
@@ -181,26 +267,27 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
             for use in pull['analysis'].get('consumables') or []:
                 if use['name'] != player['name']:
                     continue
-                k = kind(use)
+                k = timeline_kind(use)
                 spells.setdefault(use['ability_id'], (use['ability'], use.get('icon')))
                 tip = f'{prefix(pull)}{fmt_duration(use["t"])}{" (pre-pot)" if use.get("prepot") else ""}'
-                if k == 'defensive':
+                if k in ('healthstone', 'healing'):
                     tip += f' · healed {fmt_amount(use.get("healing") or 0)}'
-                    marks.append(f'<i class="m dia" data-f="{k}" style="left:{at(use["t"])}" '
-                                 f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}"></i>')
+                    marks.append(f'<i class="m {"dia" if k == "healthstone" else "dot"}" data-k="{k}" '
+                                 f'style="left:{at(use["t"])}" data-spell="{use["ability_id"]}" data-tip="{esc(tip)}"></i>')
                 else:
                     end = use.get('end') or (use['t'] + POTION_BUFF_FALLBACK_MS)
                     tip += f' · {fmt_duration(end - use["t"])} buff'
                     width = 100 * (min(end, longest) - max(0, use['t'])) / longest
-                    marks.append(f'<i class="m bar k-{k}" data-f="{k}" style="left:{at(use["t"])};width:{width:.3f}%" '
-                                 f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}"></i>')
+                    marks.append(f'<i class="m bar k-{k}" data-k="{k}" style="left:{at(use["t"])};width:{width:.3f}%" '
+                                 f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}">'
+                                 f'<b class="sp{int(use["ability_id"])}"></b></i>')
             for cd in cds[id(pull)]:
                 if cd['name'] != player['name']:
                     continue
                 spells.setdefault(cd['ability_id'], (cd['ability'], cd.get('icon')))
                 tip = (f'{prefix(pull)}{"→ " + cd["target"] + " · " if cd.get("target") else ""}'
                        f'{fmt_duration(cd["t"])}')
-                marks.append(f'<i class="m cd sp{cd["ability_id"]}" data-f="cd" data-ab="{esc(cd["ability"])}" '
+                marks.append(f'<i class="m cd sp{cd["ability_id"]}" data-k="{esc(_cd_key(cd))}" '
                              f'style="left:{at(cd["t"])}" data-spell="{cd["ability_id"]}" data-tip="{esc(tip)}" hidden></i>')
         if single:
             for d in pulls[0]['analysis'].get('deaths') or []:
@@ -208,13 +295,15 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
                     continue
                 if d.get('ability_id'):
                     spells.setdefault(d['ability_id'], (d['ability'], d.get('icon')))
-                marks.append(f'<i class="m death{" early" if d.get("early") else ""}" data-f="death" '
+                marks.append(f'<i class="m death{" early" if d.get("early") else ""}" data-k="death" '
                              f'style="left:{at(d["t"])}" data-spell="{d.get("ability_id") or ""}" '
                              f'data-tip="Died at {fmt_duration(d["t"])} · {esc(_death_text(d))}">✕</i>')
         labels.append(f'<div class="tl-lab{sep}">{esc(player["name"])}</div>')
         rows.append(f'<div class="tl-row{sep}">{"".join(marks)}</div>')
 
-    phases = ''.join(f'<i class="tl-phase" style="left:{at(start)}"></i>' for start in (reference or {}).get('phases') or [])
+    if not any(k == 'phases' for k, *_ in boss_items):  # no phase lane: the other pulls' phase changes as lines
+        lines.append(''.join(f'<i class="tl-phase" style="left:{at(start)}"></i>'
+                             for start in (reference or {}).get('phases') or []))
     grid = ''.join(f'<i style="left:{at(t)}"></i>' for t in range(0, longest + 1, 60000))
     ruler = ''.join(f'<span{" class=first" if not t else ""} style="left:{at(t)}">{fmt_duration(t)}</span>'
                     for t in range(0, longest + 1, 60000))
@@ -223,7 +312,8 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
     return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}"
         style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']}">
         <style>{icon_css}</style>
-        {toolbar(pulls, single, cds)}
+        {toolbar(pulls, single, cds, boss_items)}
+        {loading}
         <div class="tl-tools"><span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom</span>
             <button type="button" data-zoom="out" title="Zoom out">−</button>
             <input type="range" min="0" max="100" value="0" aria-label="Zoom">
@@ -232,7 +322,7 @@ def timeline(pulls, roster, spell_lookup=None, majors=None):
         <div class="tl-body">
             <div class="tl-labels">{"".join(labels)}<div class="tl-ruler-gap"></div></div>
             <div class="tl-scroll"><div class="tl-inner">
-                <div class="tl-grid">{grid}</div>{phases}
+                <div class="tl-grid">{grid}</div>{"".join(lines)}
                 {"".join(rows)}
                 <div class="tl-ruler">{ruler}</div>
                 <div class="tl-head" hidden><span></span></div>

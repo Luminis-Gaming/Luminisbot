@@ -66,7 +66,7 @@ SECURITY_HEADERS = {
     'Content-Security-Policy': (
         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
-        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com; "
+        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com https://render.worldofwarcraft.com; "
         "frame-src https://www.mythictrap.com; connect-src 'self'; "
         "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"),
     'X-Content-Type-Options': 'nosniff',
@@ -748,37 +748,62 @@ def _roster_names(analysis):
     return pname
 
 
-def _consumables_card(insight_pulls, roster, boss=None):
-    """The raid timeline: enemy casts on top; every player's potions, healthstones, cooldowns and deaths below."""
+def _consumables_card(code, insight_pulls, roster, boss=None, phase_names=None):
+    """
+    The raid timeline: the boss's phases, adds and casts on top; every player's potions, healthstones,
+    cooldowns and deaths below. The adds come from the pull's raid sample (focus.raid_adds) - not stored
+    yet, a cast bar fetches it (?focus_load=adds, _load_adds) and the page reloads with them.
+    """
+    from .. import focus, npcs
+    from . import focusview
     analyses = [p['analysis'] for p in insight_pulls]
     if not consumables.has_details(analyses):
         return ('<div class="card">' + section_head('🕒', 'Raid timeline') + insights.REANALYZE_HINT + '</div>')
     single = len(insight_pulls) == 1
     reference = consumables.reference_pull(insight_pulls)
     majors = benchmarks.spec_majors(*boss, spells.lookup) if boss else {}
+    source = consumables.adds_pull(insight_pulls)
+    adds = focus.raid_adds(code, source) if source else None
+    loading = ''
+    if adds is None and source and ((source['analysis'].get('extras') or {}).get('players')):
+        loading = focusview.loader(text=f"Summoning the adds of pull #{source['number']}", what='adds', compact=True)
+    names = [k['target'] for k in adds or []]
+    npcs.ensure(code, names)
     if single:
-        hint = ('Boss casts on top; underneath, each player\'s potions (bar = buff duration), healthstones / '
-                'healing potions (diamonds), deaths and cooldowns - damage &amp; healing cooldowns, defensives, '
-                'externals, raid cooldowns and utility. Toggle what to show with the chips, pick single abilities '
-                'under Abilities, hover anything for details.')
+        hint = ('The boss on top - its phases, adds (a bar per spawn, a dashed line down through everyone) and '
+                'casts; underneath, each player\'s potions (bar = buff duration), healthstones (diamonds), healing '
+                'potions (dots), deaths and cooldowns - damage &amp; healing cooldowns, defensives, externals, raid '
+                'cooldowns and utility. Pick what to show in the dropdowns, hover anything for details.')
     else:
         hint = ('Every pull on one axis: potions, healthstones and cooldowns from all of them - clusters show '
                 'each player\'s habits (e.g. always potting at the pull and again around 5:00, or saving a '
-                'cooldown for the same moment every pull). Toggle what to show with the chips.')
-        if reference:
-            which = 'the kill' if reference.get('kill') else 'the longest pull'
-            hint += (f' Enemy casts on top are from pull #{reference["number"]} ({which}); boss timers are mostly '
-                     'the same every pull, but shift when a phase is pushed faster or slower. Open a single pull '
-                     'for its exact timeline.')
+                'cooldown for the same moment every pull). Pick what to show in the dropdowns.')
+        if source:
+            which = 'the kill' if source.get('kill') else 'the longest pull'
+            hint += (f' The boss\'s phases, adds and casts on top are from pull #{source["number"]} ({which}); boss '
+                     'timers are mostly the same every pull, but shift when a phase is pushed faster or slower. Open '
+                     'a single pull for its exact timeline.')
+    encounter = (phase_names or {}).get(str(boss[0])) if boss else None
     return (f'<div class="card">{section_head("🕒", "Raid timeline", hint)}'
-            f'{consumables.timeline(insight_pulls, roster, spells.lookup, majors)}</div>')
+            f'{consumables.timeline(insight_pulls, roster, spells.lookup, majors, adds, encounter or {}, npcs.icons(names), loading)}'
+            f'</div>')
+
+
+async def _load_adds(code, insight_pulls):
+    """?focus_load=adds: the raid timeline's cast bar - the adds' pull's raid sample from WCL. {'ok', 'why'}."""
+    from .. import focus
+    source = consumables.adds_pull(insight_pulls)
+    ok, why = await focus.load_raid(code, source) if source else (False, 'No pull to load.')
+    return web.json_response({'ok': ok, 'why': why}, headers=SECURITY_HEADERS)
 
 
 def _insight_pulls(numbered, enrage_ids=()):
     return [{'number': number, 'kill': pull['kill'], 'analysis': _with_duration(pull),
              'fight_id': pull['fight_id'], 'fight_pct': pull.get('fight_pct'),
              'reason': _pull_reason(pull, enrage_ids),
-             'phases': [p['start'] for p in (pull.get('phases') or [])[1:]]} for number, pull in numbered]
+             'phases': [p['start'] for p in (pull.get('phases') or [])[1:]],
+             'phase_list': pull.get('phases') or [], 'start_ms': pull['start_ms'], 'end_ms': pull['end_ms']}
+            for number, pull in numbered]
 
 
 async def handle_night(request):
@@ -825,12 +850,13 @@ async def handle_night(request):
                                        lambda player: players.player_url(code, player, selected)))
         return _page(f"Players · {name}", session, body)
 
+    enrage_ids = _enrage_ids(encounter_id, guide_for)
+    insight_pulls = _insight_pulls(numbered, enrage_ids)
+    if request.query.get('focus_load') == 'adds':  # the raid timeline's cast bar
+        return await _load_adds(code, insight_pulls)
     by_target = await _damage_by_target(request, code, numbered, f'all {len(numbered)} pulls tonight')
     if isinstance(by_target, web.Response):  # ?focus_load=1: the cast bar's request
         return by_target
-
-    enrage_ids = _enrage_ids(encounter_id, guide_for)
-    insight_pulls = _insight_pulls(numbered, enrage_ids)
     reasons = {p['number']: p['reason'] for p in insight_pulls}
     points = [{'pct': p['fight_pct'], 'kill': p['kill'], 'href': f"/admin/raids/report/{code}/{p['fight_id']}",
                'tip': f"Pull {i}: {_result_text(p)}"
@@ -883,7 +909,7 @@ async def handle_night(request):
                       'interrupts &amp; dispels and consumables. Open any line for the details.')}
         {insights.build(insight_pulls, tags, guide_for, code)}
     </div>
-    {_consumables_card(insight_pulls, merged['players'], (encounter_id, difficulty))}
+    {_consumables_card(code, insight_pulls, merged['players'], (encounter_id, difficulty), phase_names)}
     <div class="card">
         {section_head('💀', 'Deaths in every pull', 'One row per pull, along its own length: red ticks are early '
                       'deaths by mistake (one of the first 4 deaths, not part of a mass death), grey ones the rest; '
@@ -939,6 +965,8 @@ async def handle_pull(request):
                                        lambda player: players.player_url(code, player, selected, fight_id)))
         return _page(f"Players · {pull['encounter_name']} pull {number}", session, body)
 
+    if request.query.get('focus_load') == 'adds':  # the raid timeline's cast bar
+        return await _load_adds(code, _insight_pulls([(number, pull)]))
     by_target = await _damage_by_target(request, code, [(number, pull)], f'pull #{number}')
     if isinstance(by_target, web.Response):  # ?focus_load=1: the cast bar's request
         return by_target
@@ -973,7 +1001,7 @@ async def handle_pull(request):
                       'interrupts &amp; dispels and consumables. Open any line for the details.')}
         {insights.build(pull_insights, tags, guide_for, code)}
     </div>
-    {_consumables_card(pull_insights, analysis.get('players') or [], (encounter_id, difficulty))}
+    {_consumables_card(code, pull_insights, analysis.get('players') or [], (encounter_id, difficulty), phase_names)}
     <div class="card">
         {section_head('💀', 'Deaths', 'In order. Only early deaths by mistake count against anyone.')}
         <div class="table-wrapper"><table class="compact"><tr><th class="num">Time</th><th>Player</th>
@@ -1139,6 +1167,10 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     if not data or focus.by_target_cached(code, pull['fight_id']) is None:
         return picker + focusview.loader(number), None
     order, color_of = focusview.colors(data)
+    from .. import npcs
+    enemies = sorted(set(data.get('raid') or {}) | set(data.get('you') or {}))
+    npcs.ensure(code, enemies)
+    npc_icons = npcs.icons(enemies)
     potions = [u for u in analysis.get('consumables') or [] if u['name'] == name and u.get('kind') == 'potion']
     compare_data = benchmarks.for_player(whole_night, name) or {}
     top_share = {}
@@ -1162,8 +1194,8 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
            (light - an add that was up; outlined while it was the raid's priority) next to when you were (solid).
            Your potion and major cooldowns are at the bottom. Hover anything for the numbers.</p>
         {focusview.timeline(data, pull, name, color_of, order, cooldowns, potions, pull.get('phases') or [],
-                            (db.get_report(code) or {}).get('phase_names'))}
-        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label)}""", pull_focus
+                            (db.get_report(code) or {}).get('phase_names'), npc_icons)}
+        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_icons)}""", pull_focus
 
 
 async def handle_spell(request):

@@ -1107,6 +1107,53 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('Off target', cards)
         self.assertIn('died 2:45', cards)
         self.assertIn('never hit', cards)
+        icons = {'Venomous Heart': 'https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-1.jpg'}
+        with_icons = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [], None, icons)
+        self.assertIn('class="npc-icon" src="https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-1.jpg"',
+                      with_icons)
+        self.assertIn('creature-display-1.jpg', focusview.cards(d, color_of, potions, [], {}, {}, 'x', icons))
+        self.assertNotIn('evil.example', focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [], None,
+                                                            {'Venomous Heart': 'https://evil.example/x.jpg'}))
+
+    def test_raid_timeline_boss_lanes_and_dropdowns(self):
+        """The heart's spawns get their own lane and a dashed line through everyone; categories are dropdowns."""
+        from raidanalysis import focus
+        from raidanalysis.web import consumables
+        adds = focus.add_types(focus.windows(self.data(my_heart=False)))
+        analysis = {'_duration': 300000, 'players': [{'name': 'Boops', 'class': 'Hunter', 'role': 'dps'}],
+                    'boss_casts': [[5000, 77]], 'boss_abilities': [{'id': 77, 'name': 'Venom Spit', 'icon': 'a.jpg'}],
+                    'consumables': [
+                        {'t': 130000, 'end': 160000, 'name': 'Boops', 'ability_id': 431932, 'ability': 'Tempered Potion',
+                         'icon': 'potion.jpg', 'kind': 'potion'},
+                        {'t': 200000, 'name': 'Boops', 'ability_id': 6262, 'ability': 'Healthstone', 'icon': 'hs.jpg',
+                         'kind': 'defensive', 'healing': 100},
+                        {'t': 210000, 'name': 'Boops', 'ability_id': 431416, 'ability': 'Algari Healing Potion',
+                         'icon': 'hp.jpg', 'kind': 'defensive', 'healing': 200}],
+                    'cooldowns': [{'t': 1000, 'name': 'Boops', 'ability_id': 97462, 'ability': 'Rallying Cry',
+                                   'icon': 'rc.jpg', 'category': 'raid', 'target': None}]}
+        pull = {'number': 1, 'kill': True, 'analysis': analysis, 'phases': [120000],
+                'phase_list': [{'id': 1, 'start': 0}, {'id': 2, 'start': 120000}]}
+        html = consumables.timeline([pull], analysis['players'], adds=adds,
+                                    phase_names={'2': {'name': 'Stage Two', 'intermission': False}})
+        self.assertIn('<span>Stage Two</span>', html)                               # the phase lane
+        self.assertIn('class="tl-row c-lane c-add" data-k="add0"', html)            # the heart's own lane
+        self.assertIn('class="tl-phase fspawnline" data-k="add0"', html)            # ...and its line through everyone
+        self.assertIn('Venomous Heart #1 · appeared 2:20.0, died 2:45 (25 s) · a priority', html)
+        self.assertNotIn('you never hit', html)                                     # the raid's view, not a player's
+        self.assertIn('data-dd="boss"', html)
+        self.assertIn('data-dd="cons"', html)
+        self.assertIn('data-dd="raid"', html)
+        self.assertNotIn('Abilities ▾', html)                                       # the old picker is gone
+        self.assertIn('class="m dia" data-k="healthstone"', html)                   # told apart: diamond...
+        self.assertIn('class="m dot" data-k="healing"', html)                       # ...and dot
+        self.assertIn('<b class="sp431932"></b>', html)                             # the potion's icon on its bar
+        self.assertIn('data-spell="97462"', html)                                   # the dropdown entry has its tooltip
+        self.assertIn('value="cd:raid:Rallying Cry" checked', html)                 # raid cooldowns on by default
+        self.assertIn('class="m cd sp97462" data-k="cd:raid:Rallying Cry"', html)
+        loading = consumables.timeline([pull], analysis['players'], loading='<div class="castbar-wrap"></div>')
+        self.assertIn('castbar-wrap', loading)                                      # adds not loaded yet
+        self.assertNotIn('value="add0"', loading)
+        self.assertIn('value="phases"', loading)                                    # phases don't need them
 
 
 class TestDamageByTarget(unittest.TestCase):

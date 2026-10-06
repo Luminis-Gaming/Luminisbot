@@ -401,21 +401,28 @@ def key_pull(numbered, name):
                                      -(np[1]['end_ms'] - np[1]['start_ms']))) if have else None
 
 
-def priority_targets(code, pulls):
+def raid_adds(code, pull):
     """
-    The kinds of add that were a priority in any of these pulls - from the raid samples focus views stored
-    (no WCL request; a pull nobody opened the focus view of says nothing).
+    The pull's kinds of add (add_types(): spawns, priority) from the raid sample stored for it - by a focus
+    view or the raid timeline (load_raid) - or None when it isn't stored. No WCL request.
     """
     from . import db
+    raid = db.get_focus(code, pull['fight_id'], RAID_KEY)
+    if not raid or raid.get('v') != FOCUS_VERSION:
+        return None
+    n = max(1, -(-(pull['end_ms'] - pull['start_ms']) // BIN_MS))
+    targets = ((pull.get('analysis') or {}).get('extras') or {}).get('targets') or []
+    return add_types(windows(build({}, raid, n, targets, you_in_sample=True)))
+
+
+def priority_targets(code, pulls):
+    """
+    The kinds of add that were a priority in any of these pulls - from the raid samples stored (no WCL
+    request; a pull whose sample nobody loaded says nothing).
+    """
     out = set()
     for pull in pulls:
-        raid = db.get_focus(code, pull['fight_id'], RAID_KEY)
-        if not raid or raid.get('v') != FOCUS_VERSION:
-            continue
-        n = max(1, -(-(pull['end_ms'] - pull['start_ms']) // BIN_MS))
-        targets = ((pull.get('analysis') or {}).get('extras') or {}).get('targets') or []
-        data = build({}, raid, n, targets, you_in_sample=True)
-        out |= {k['target'] for k in add_types(windows(data)) if k['priority']}
+        out |= {k['target'] for k in raid_adds(code, pull) or [] if k['priority']}
     return out
 
 
@@ -523,6 +530,49 @@ async def load_by_target(code, pulls):
     return True, None
 
 
+async def _fetch_raid(session, code, pull, extras, enemies):
+    """Fetch and store the pull's raid sample (RAID_KEY): its top DPS's damage, binned, and the enemies' deaths."""
+    from . import db, wcl
+    fight_id, start = pull['fight_id'], pull['start_ms']
+    n = max(1, -(-(pull['end_ms'] - start) // BIN_MS))
+    targets = extras.get('targets') or []
+    sample = raid_sample(pull, extras)
+    events = await wcl.get_events(session, code, fight_id, 'DamageDone', _sources_filter(sample),
+                                  max_events=RAID_MAX_EVENTS) if sample else []
+    deaths = await wcl.get_events(session, code, fight_id, 'Deaths', 'type = "death"', hostility='Enemies')
+    raid = {'v': FOCUS_VERSION, 'main': targets[0]['name'] if targets else None, 'sample': sample,
+            'b': bin_damage(events, start, n, enemies), 'appear': first_hits(events, start, enemies),
+            'deaths': deaths_by_target(deaths, start, enemies)}
+    db.save_focus(code, fight_id, RAID_KEY, raid)
+    return raid
+
+
+async def load_raid(code, pull):
+    """
+    Just the pull's raid sample (when its adds spawned and died - the raid timeline's Boss lanes), from WCL
+    if not stored yet. Returns (ok, why-not message or None).
+    """
+    import aiohttp
+    from . import db, sync, wcl
+    raid = db.get_focus(code, pull['fight_id'], RAID_KEY)
+    if raid and raid.get('v') == FOCUS_VERSION:
+        return True, None
+    extras = (pull.get('analysis') or {}).get('extras') or {}
+    if not extras.get('players'):
+        return False, "This pull's throughput isn't synced yet - the adds show once it is."
+    if sync._paused() or wcl.v2_blocked():
+        return False, "Warcraft Logs' hourly budget is used up - the adds load once it resets."
+    try:
+        async with aiohttp.ClientSession() as session:
+            actors = await wcl.get_report_actors(session, code)
+            enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
+            await _fetch_raid(session, code, pull, extras, enemies)
+    except wcl.WCLError as e:
+        logger.warning(f'[RAIDS] Raid sample for {code}#{pull["fight_id"]} failed: {e}')
+        return False, "Couldn't load the adds from Warcraft Logs right now - try again in a bit."
+    return True, None
+
+
 def cached(code, fight_id, name):
     """The stored focus data for one player in one pull, or None when it still has to come from WCL."""
     from . import db
@@ -562,14 +612,7 @@ async def load(code, pull, name, extras, cooldown_names=()):
             abilities = await wcl.get_report_abilities(session, code) if buffs else {}
             raid = db.get_focus(code, fight_id, RAID_KEY)
             if not raid or raid.get('v') != FOCUS_VERSION:
-                sample = raid_sample(pull, extras)
-                events = await wcl.get_events(session, code, fight_id, 'DamageDone', _sources_filter(sample),
-                                              max_events=RAID_MAX_EVENTS) if sample else []
-                deaths = await wcl.get_events(session, code, fight_id, 'Deaths', 'type = "death"', hostility='Enemies')
-                raid = {'v': FOCUS_VERSION, 'main': targets[0]['name'] if targets else None, 'sample': sample,
-                        'b': bin_damage(events, start, n, enemies), 'appear': first_hits(events, start, enemies),
-                        'deaths': deaths_by_target(deaths, start, enemies)}
-                db.save_focus(code, fight_id, RAID_KEY, raid)
+                raid = await _fetch_raid(session, code, pull, extras, enemies)
     except wcl.WCLError as e:
         logger.warning(f'[RAIDS] Focus events for {code}#{fight_id} {name} failed: {e}')
         return None, "Couldn't load the timeline from Warcraft Logs right now - try again in a bit."

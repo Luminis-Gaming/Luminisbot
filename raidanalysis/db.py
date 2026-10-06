@@ -142,6 +142,16 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (report_code, fight_id, name)
         );
     """)
+    # Enemies' portraits for the timelines (npcs.py): Blizzard's creature render, by name (NULL: none found)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_npcs (
+            name TEXT PRIMARY KEY,
+            game_id BIGINT,
+            icon TEXT,
+            status TEXT NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
     # Spells the game's Cooldown Manager tracks as buffs (gamedata.py), from wago.tools
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_tracked_spells (
@@ -638,6 +648,29 @@ def character_owners():
     return resolve_owners([(r['character_name'], r['discord_id'], r['n']) for r in signups],
                           [(r['character_name'], r['discord_id']) for r in linked],
                           {r['discord_id']: r['display'] for r in displays})
+
+
+# ============================================================================
+# ENEMY PORTRAITS (npcs.py)
+# ============================================================================
+
+def get_npcs(names):
+    """{name: icon url or None} for the enemies looked up already (failed lookups retried after a day)."""
+    if not names:
+        return {}
+    rows = _run("""
+        SELECT name, icon FROM raid_npcs
+        WHERE name = ANY(%s) AND (status = 'ok' OR fetched_at > NOW() - INTERVAL '1 day')
+    """, (list(names),), fetch='all')
+    return {r['name']: r['icon'] for r in rows}
+
+
+def save_npc(name, game_id, icon, status):
+    _run("""
+        INSERT INTO raid_npcs (name, game_id, icon, status, fetched_at) VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (name) DO UPDATE SET game_id = EXCLUDED.game_id, icon = EXCLUDED.icon, status = EXCLUDED.status,
+            fetched_at = NOW()
+    """, (name, game_id, icon, status))
 
 
 # ============================================================================
