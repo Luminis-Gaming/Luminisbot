@@ -14,7 +14,10 @@ from .players import throughput_label
 from .render import (ICON_BASE, boss_portrait, esc, fmt_amount, fmt_duration, per_pull_columns, safe_icon, section_head,
                      stat_tiles, subsection)
 
-VERDICT_PILLS = {'good': ('pill-kill', 'On par'), 'ok': ('pill', 'A bit low'), 'off': ('pill-wipe', 'Low')}
+VERDICT_PILLS = {'good': ('pill-kill', 'On par'), 'ok': ('pill', 'A bit low'), 'off': ('pill-wipe', 'Low'),
+                 'over': ('pill-mostly', 'More than top'), 'way_over': ('pill-wipe', 'Way too often')}
+OVERUSE_TIP = ("Pressed far more often than the top players press it - usually it's taking the place of a "
+               "higher-priority spell")
 NO_EXTRAS = ('<p class="muted">Not fetched for these pulls yet - the sync picks up throughput, parses and uptime '
              'for recent nights by itself (older ones: <strong>🔄 Re-analyze</strong> on the night page).</p>')
 
@@ -31,7 +34,8 @@ def _pill(verdict):
     if not verdict:
         return '<span class="muted small">—</span>'
     cls, text = VERDICT_PILLS[verdict]
-    return f'<span class="pill {cls}">{text}</span>'
+    tip = f' title="{OVERUSE_TIP}"' if verdict in ('over', 'way_over') else ''
+    return f'<span class="pill {cls}"{tip}>{text}</span>'
 
 
 def _pct(share):
@@ -397,8 +401,9 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
             {_resource_tiles(resources)}"""))
     if cpm:
         sections.append(subsection('Casts per minute', f"""
-            <p class="muted small">Every ability you or the top {label} cast, most-pressed first. Greyed-out rows
-               aren't judged: most of them don't use it or barely do (under 0.5 a minute), or you never cast it (a talent or
+            <p class="muted small">Every ability you or the top {label} cast, most-pressed first. Pressing one
+               far more often than they do is flagged too - it's usually taking the place of a higher-priority
+               spell. Greyed-out rows aren't judged: most of them don't use it or barely do (under 0.5 a minute), or you never cast it (a talent or
                trinket choice).</p>{_cpm_table(cpm, len(top), by_name)}"""))
     if no_detail:
         sections.append('<p class="warn-text small">⏳ None of your pulls on this boss has the full detail yet (casts, '

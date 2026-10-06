@@ -650,14 +650,22 @@ def proc_rows(numbered, name, top, tracked=frozenset()):
 
 
 CPM_GOOD, CPM_OK = 0.9, 0.75  # your casts per minute as a share of the top players'
+# ...and the other way: an ability pressed far more often than the top players press it is usually taking the
+# place of a higher-priority one (4.6 Slams a minute where they press 1.7) - 'over' from this share, 'way_over'
+# from the next, when it's also at least CPM_OVER_MIN_GAP more casts a minute (0.3 against 0.6 is noise).
+CPM_OVER, CPM_WAY_OVER = 1.5, 2.0
+CPM_OVER_MIN_GAP = 1.0
 MIN_CPM = 0.1                 # pressed less than this by you and the top players: left out of the table
 JUDGE_MIN_CPM = 0.5           # the top players press it less than this: downtime filler or situational, not judged
 
 
-def _cpm_verdict(ours, top):
+def _cpm_verdict(ours, top, overuse=False):
+    """How your casts per minute compare; overuse: also flag pressing it far more than the top players."""
     if not top:
         return None
     ratio = ours / top
+    if overuse and ratio >= CPM_OVER and ours - top >= CPM_OVER_MIN_GAP:
+        return 'way_over' if ratio >= CPM_WAY_OVER else 'over'
     return 'good' if ratio >= CPM_GOOD else 'ok' if ratio >= CPM_OK else 'off'
 
 
@@ -665,7 +673,8 @@ def cpm(numbered, name, top, items=frozenset()):
     """
     Casts per minute, overall and for every ability either side cast, next to the top players'
     (median): {'ours', 'top', 'verdict', 'abilities': [{'name', 'ours', 'top', 'top_users', 'casts',
-    'verdict'}]} most-pressed first - or None without cast data on either side. Items (trinkets,
+    'verdict'}]} most-pressed first - an ability's verdict can also be 'over' / 'way_over' (pressed far more
+    than they do), the overall one can't (more casts in total isn't a problem) - or None without cast data on either side. Items (trinkets,
     potions: is_item(), plus the names in items) are left out - they're gear, not rotation.
     """
     mine = [(me.get('casts'), ex.get('duration') or 0) for _, _, me, ex in detail_pulls(numbered, name)
@@ -707,7 +716,7 @@ def cpm(numbered, name, top, items=frozenset()):
                   and ability not in situational)
         abilities.append({'name': ability, 'ours': our_rate, 'top': top_rate, 'top_users': len(rates),
                           'casts': ours.get(ability, 0),
-                          'verdict': _cpm_verdict(our_rate, top_rate) if judged else None})
+                          'verdict': _cpm_verdict(our_rate, top_rate, overuse=True) if judged else None})
     abilities.sort(key=lambda a: (-a['top'], -a['ours'], a['name']))
     overall_top = median(sum(p['cast_names'].values()) / (p['duration'] / 60000) for p in top)
     overall = sum(ours.values()) / minutes

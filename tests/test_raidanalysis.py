@@ -753,6 +753,28 @@ class TestNeverCastVsNotFetched(unittest.TestCase):
         self.assertEqual((shiv(not_fetched)['known'], shiv(not_fetched)['verdict']), (False, None))
 
 
+class TestCastsPerMinuteOveruse(unittest.TestCase):
+    """4.6 Slams a minute where the top Arms Warriors press 1.7: not "on par" - it's crowding out better spells."""
+
+    def test_pressed_far_more_than_the_top(self):
+        from raidanalysis import throughput
+        minute = 60000
+        pull = (1, {'analysis': {'extras': {'detail': True, 'duration': 10 * minute, 'players': {
+            'Aedrios': {'casts': {'Slam': 46, 'Mortal Strike': 50, 'Overpower': 30, 'Execute': 26}}}}}})
+        top = [{'duration': 10 * minute, 'cast_names': {'Slam': 17, 'Mortal Strike': 50, 'Overpower': 18,
+                                                        'Execute': 17}}] * 5
+        rows = {a['name']: a for a in throughput.cpm([pull], 'Aedrios', top)['abilities']}
+        self.assertEqual(rows['Slam']['verdict'], 'way_over')                       # 2.7x, +2.9 a minute
+        self.assertEqual(rows['Overpower']['verdict'], 'over')                      # 1.7x, +1.2 a minute
+        self.assertEqual(rows['Execute']['verdict'], 'good')                        # 1.5x but only +0.9 a minute
+        self.assertEqual(rows['Mortal Strike']['verdict'], 'good')
+
+    def test_small_rates_are_noise(self):
+        from raidanalysis import throughput
+        self.assertEqual(throughput._cpm_verdict(0.6, 0.3, overuse=True), 'good')   # 2x, but only +0.3 a minute
+        self.assertEqual(throughput._cpm_verdict(4.6, 1.7), 'good')                 # overall: more is never bad
+
+
 class TestDisciplineRamp(unittest.TestCase):
     """Evangelism / Ultimate Penitence are a Disc Priest's own cooldowns, not raid assignments."""
 

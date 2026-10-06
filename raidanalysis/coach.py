@@ -108,7 +108,15 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
                 out.append(_insight('bad', 60 * (1 - a['ours'] / a['top']), 'rotation',
                                     f"{a['name']}: {a['ours']:.1f} casts a minute - the top {label} {a['top']:.1f}. "
                                     f"Press it whenever it's ready."))
-            elif cpm['verdict'] == 'good':
+            # ...or the other way: a filler pressed far more than they do is in the place of something better
+            over = [a for a in cpm['abilities'] if a['verdict'] in ('over', 'way_over')
+                    and a['top'] >= ROTATION_MIN_CPM]
+            if over:
+                a = max(over, key=lambda a: a['ours'] / a['top'])
+                out.append(_insight('bad', 40 * min(1.0, (a['ours'] / a['top'] - 1) / 2), 'rotation',
+                                    f"{a['name']}: {a['ours']:.1f} casts a minute - the top {label} {a['top']:.1f}. "
+                                    f"Pressing it this much usually means a higher-priority spell is waiting."))
+            if not low and not over and cpm['verdict'] == 'good':
                 out.append(_insight('good', 15, 'rotation', f"Casts per minute on par with the top {label}"))
         for u in throughput.uptime(numbered, name, top, tracked):
             if u['verdict'] == 'off':
