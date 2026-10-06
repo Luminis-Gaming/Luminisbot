@@ -635,13 +635,13 @@ CHEVRON = ('<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-wi
            'stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>')
 
 # Filter groups for the mechanics table, in chip order: (key, label, shown by default).
-MECH_GROUPS = (('avoidable', '🔴 Avoidable', True), ('nontank', '🟠 Non-tanks', True),
+MECH_GROUPS = (('avoidable', '🔴 Avoidable', True), ('nontank', '🟠 Non-tanks', True), ('death_only', '💀 Deaths only', True),
                ('untagged', '⚪ Untagged', True), ('expected', '🟢 Expected', False), ('ignored', '⚫ Ignored', False))
 
 
 def _mech_group(tag):
     return {analyzer.TAG_AVOIDABLE: 'avoidable', analyzer.TAG_AVOIDABLE_NON_TANK: 'nontank',
-            guides.EXPECTED: 'expected', analyzer.TAG_IGNORE: 'ignored'}.get(tag, 'untagged')
+            analyzer.TAG_DEATH_ONLY: 'death_only', guides.EXPECTED: 'expected', analyzer.TAG_IGNORE: 'ignored'}.get(tag, 'untagged')
 
 
 def _mech_detail(a, counts, pname, per_pull, pull_href, timeline, avoidable=False):
@@ -838,6 +838,7 @@ async def handle_night(request):
     here = f'/admin/raids/report/{code}?boss={encounter_id}-{difficulty}'
 
     tags, sources = _effective_tags(encounter_id)
+    guides.apply_death_only(encounter_id, tags, [p.get('analysis') for p in boss_pulls])  # deaths to "deaths only" ones count
     guide_for = _guide_lookup(encounter_id)
     analyses = [_with_duration(p) for p in boss_pulls]
     merged = analyzer.merge_pulls(analyses)
@@ -951,6 +952,7 @@ async def handle_pull(request):
     phase_names = pull['phase_names'] or {}
     encounter_id, difficulty = pull['encounter_id'], pull['difficulty']
     tags, sources = _effective_tags(encounter_id)
+    guides.apply_death_only(encounter_id, tags, [analysis])
     guide_for = _guide_lookup(encounter_id)
     pname = _roster_names(analysis)
     here = f'/admin/raids/report/{code}/{fight_id}'
@@ -1075,6 +1077,7 @@ async def handle_player(request):
         fight_id = None
 
     tags, _ = _effective_tags(selected[0])
+    guides.apply_death_only(selected[0], tags, [p.get('analysis') for _, p in numbered])
     guide_for = _guide_lookup(selected[0])
     player = next((p for p in analyzer.player_report(_insight_pulls(numbered), tags) if p['name'] == name), None)
     if not player:
@@ -1393,6 +1396,7 @@ async def handle_boss(request):
             raise web.HTTPFound(base + _team_query(None) + '&error=' + quote(f'No {teams.label(team)} pulls on that boss yet.'))
         raise web.HTTPFound('/admin/raids?error=' + quote('No pulls for that boss yet.'))
     tags, sources = _effective_tags(encounter_id)
+    guides.apply_death_only(encounter_id, tags, [p.get('analysis') for p in pulls])
     guide_for = _guide_lookup(encounter_id)
     name = pulls[-1]['encounter_name']
     here = base + _team_query(team)
@@ -1482,7 +1486,7 @@ async def handle_boss(request):
     # Anything Mythic Trap or an officer already decided on isn't up for suggestion.
     suggested = {i for s in analyzer.suggest_avoidable(
         [p['analysis'] for p in pulls if p.get('analysis')], set(tags) | set(sources)) for i in s['ids']}
-    order = {analyzer.TAG_AVOIDABLE: 0, analyzer.TAG_AVOIDABLE_NON_TANK: 0, None: 1,
+    order = {analyzer.TAG_AVOIDABLE: 0, analyzer.TAG_AVOIDABLE_NON_TANK: 0, analyzer.TAG_DEATH_ONLY: 0, None: 1,
              guides.EXPECTED: 2, analyzer.TAG_IGNORE: 3}
     mech_rows = []
     for ability_id, m in sorted(((m['id'], m) for m in mechanics.values()),
@@ -1661,6 +1665,7 @@ def _night_data(nights, encounter_id, tags, guide_for):
     enrage_ids = _enrage_ids(encounter_id, guide_for)
     out = []
     for code, night in nights.items():
+        guides.apply_death_only(encounter_id, tags, [p.get('analysis') for p in night])
         night_pulls = _insight_pulls(list(enumerate(night, 1)), enrage_ids)
         out.append({'code': code, 'pulls': night, 'insight_pulls': night_pulls,
                     'label': _short_date(night[0]['report_start']),

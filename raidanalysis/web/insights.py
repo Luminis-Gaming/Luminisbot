@@ -130,6 +130,24 @@ def build(pulls, tags, guide_for, code):
         groups['Boss mechanics'].append(_row(mech.icon, sentence, body, 'bad'))
 
     # --- Avoidable mechanics ----------------------------------------------------
+    # "Deaths only" ones (guides.apply_death_only): taking them is fine, dying to them is the mistake
+    for ability in merged['abilities']:
+        if tags.get(ability['id']) != analyzer.TAG_DEATH_ONLY:
+            continue
+        ids = set(ability.get('ids') or [ability['id']])
+        died = [d for a in analyses for d in a.get('deaths') or []
+                if d.get('death_only') and d.get('early') and (d.get('ability_id') in ids or d.get('ability') == ability['name'])]
+        clip = guide_button(guide_for(ability['id'], ability['name']), ability['name'])
+        label = f'<strong>{esc(ability["name"])}</strong>{clip}'
+        if not died:
+            groups['Avoidable mechanics'].append(_row('💀', f'Nobody died to {label}', '', 'good'))
+            continue
+        who = {}
+        for d in died:
+            who[d['name']] = who.get(d['name'], 0) + 1
+        sentence = (f'Died to {label} <strong>{_plural(len(died), "time")}</strong> — {_plural(len(who), "player")} '
+                    f'<span class="muted small">(taking it is fine - dying to it isn\'t)</span>')
+        groups['Avoidable mechanics'].append(_row('💀', sentence, players_bars(who, 'Deaths'), 'bad'))
     for ability in merged['abilities']:
         tag = tags.get(ability['id'])
         if tag not in analyzer.AVOIDABLE_TAGS:

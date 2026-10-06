@@ -469,6 +469,40 @@ class TestSuggestions(unittest.TestCase):
         self.assertEqual(suggested, {AURA})
 
 
+class TestDeathsOnlyMechanics(unittest.TestCase):
+    """Gravebound: picking up soul fragments hurts (fine) - dying to it is the mistake, whenever it happens."""
+
+    def analysis(self):
+        deaths = [{'t': t, 'name': n, 'ability': a, 'ability_id': i} for t, n, a, i in [
+            (10000, 'Tanky', 'Melee', 1), (11000, 'P2', 'Melee', 1), (12000, 'P3', 'Melee', 1), (13000, 'P4', 'Melee', 1),
+            (200000, 'Aedrios', 'Gravebound', 777),                        # 5th death: wouldn't count on its own
+            (260000, 'P6', 'Gravebound', 777)]]                            # after the wipe was called
+        deaths[-1]['after_wipe'] = True
+        players = [{'name': n, 'class': 'Warrior', 'role': 'dps'} for n in ('Tanky', 'P2', 'P3', 'P4', 'Aedrios', 'P6')]
+        return {'_duration': 300000, 'players': players, 'deaths': deaths, 'abilities': [
+            {'id': 776, 'name': 'Gravebound', 'total': 9000, 'events': 9, 'complete': True,
+             'players': {'Aedrios': {'damage': 9000, 'hits': 3}}}]}
+
+    def test_deaths_count_hits_dont(self):
+        from raidanalysis import analyzer
+        a = analyzer.mark_death_only(self.analysis(), {776}, {'Gravebound'})            # death logged under another id
+        early = {d['name']: d['early'] for d in a['deaths']}
+        self.assertTrue(early['Aedrios'])                                          # 5th death, but deaths only: a mistake
+        self.assertFalse(early['P6'])                                              # after the wipe: not
+        self.assertEqual(analyzer.death_note(a['deaths'][4]), 'died to it - for this mechanic only dying is the mistake')
+        self.assertEqual(analyzer.avoidable_by_player(a, {776: analyzer.TAG_DEATH_ONLY}), {})  # its hits aren't mistakes
+        self.assertTrue(analyzer.annotate_deaths(a)['deaths'][4]['early'])         # survives re-annotating
+
+    def test_night_summary(self):
+        from raidanalysis import analyzer
+        from raidanalysis.web import insights
+        a = analyzer.mark_death_only(self.analysis(), {776}, {'Gravebound'})
+        html = insights.build([{'number': 1, 'fight_id': 1, 'kill': False, 'reason': None, 'phases': [], 'analysis': a}],
+                              {776: analyzer.TAG_DEATH_ONLY}, lambda i, n: None, 'x')
+        self.assertIn('Died to <strong>Gravebound</strong> <strong>1 time</strong> — 1 player', html)
+        self.assertNotIn('Hit by <strong>Gravebound', html)
+
+
 class TestMushroomBounce(unittest.TestCase):
     """The Lost Explorers: two pulls from the log - Naautilus alone 0.5 s after it appeared; the raid 23 s later."""
     MUSHROOM = 99

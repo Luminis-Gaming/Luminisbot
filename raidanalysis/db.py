@@ -12,11 +12,11 @@ from psycopg2.extras import Json, RealDictCursor
 from mythicplus.db import get_db_connection
 
 from . import teams
-from .analyzer import TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK, TAG_IGNORE
+from .analyzer import TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK, TAG_DEATH_ONLY, TAG_IGNORE
 
 logger = logging.getLogger(__name__)
 
-TAGS = (TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK, TAG_IGNORE)
+TAGS = (TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK, TAG_DEATH_ONLY, TAG_IGNORE)
 
 
 def ensure_schema(cursor):

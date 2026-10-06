@@ -676,6 +676,7 @@ table.bars td.bar-cell { width: 55%; }
     cursor: pointer; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .tag-form button:hover { color: var(--text); border-color: var(--border-strong); }
 .tag-form button.on-avoidable, .tag-form button.on-avoidable_nontank { background: #c92a2a; color: #fff; border-color: #c92a2a; }
+.tag-form button.on-death_only { background: #5c1a1a; color: #fff; border-color: #c92a2a; }
 .tag-form button.on-ignore { background: var(--surface-3); color: var(--text); }
 .inline-form { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .inline-form input[type=text], .inline-form input[type=number] { width: auto; margin: 0; padding: 8px 12px; font-size: 14px; }
@@ -1464,6 +1465,9 @@ def tag_pill(tag, source=None):
     if tag == 'avoidable_nontank':
         return (f'<span class="pill pill-avoidable" title="Avoidable for everyone except tanks{why}">'
                 f'avoidable (non-tanks){auto}</span>')
+    if tag == 'death_only':
+        return (f'<span class="pill pill-avoidable" title="Taking damage from it is fine - dying to it is a mistake, '
+                f'whenever in the pull{why}">deaths only 💀</span>')
     if tag == 'expected':
         return (f'<span class="pill pill-ignore" title="Part of the mechanic - soak, tankbuster or raid damage{why}">'
                 f'expected{auto}</span>')
@@ -1666,12 +1670,13 @@ def killers_table(rows, limit=8, guide_for=lambda ability_id, name: None):
 
 def tag_buttons(encounter_id, difficulty, ability_id, ability_name, current, source, back):
     """
-    Avoidable / Non-tanks / Ignore toggles; clicking the active one clears the tag.
+    Avoidable / Non-tanks / Deaths only / Ignore toggles; clicking the active one clears the tag.
     Any click is an officer override; ↺ drops the override and returns to the automatic tag.
     """
     buttons = []
     for tag, label, hint in (('avoidable', 'Avoidable', 'Every hit is a mistake'),
                              ('avoidable_nontank', 'Non-tanks', 'A mistake for everyone except tanks'),
+                             ('death_only', 'Deaths only', 'Taking damage from it is fine - only dying to it is a mistake'),
                              ('ignore', 'Ignore', 'Hide from the damage tables')):
         on = current == tag
         buttons.append(f'<button name="tag" value="{"none" if on else tag}" '

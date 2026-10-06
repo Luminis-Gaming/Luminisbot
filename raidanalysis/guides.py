@@ -234,6 +234,29 @@ def effective_tags(encounter_id):
                      {i: info.get('name') for i, info in shares.items()}, db.get_tag_rows(encounter_id))
 
 
+def apply_death_only(encounter_id, tags, analyses):
+    """
+    Mark the deaths to this boss's "deaths only" mechanics in these analyses (analyzer.mark_death_only) - by id, and
+    by name for an id we haven't seen it logged under (the death itself can be another spell than the damage).
+    """
+    from . import db
+    from .analyzer import TAG_DEATH_ONLY, mark_death_only
+    ids = {i for i, t in tags.items() if t == TAG_DEATH_ONLY}
+    if not ids:
+        return
+    names, decided = set(), set()
+    if ids:
+        for row in db.get_tag_rows(encounter_id):  # newest first: the officer's latest call per name
+            name = row.get('ability_name')
+            if name and name not in decided:
+                decided.add(name)
+                if row['tag'] == TAG_DEATH_ONLY:
+                    names.add(name)
+    for analysis in analyses:
+        if analysis:
+            mark_death_only(analysis, ids, names)
+
+
 def name_tags(auto, names, overrides):
     """
     Officers' overrides (newest first: [{'ability_id', 'ability_name', 'tag'}]) on top of the automatic tags,

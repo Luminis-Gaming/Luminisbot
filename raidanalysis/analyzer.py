@@ -12,6 +12,8 @@ ANALYSIS_VERSION = 7
 TAG_AVOIDABLE = 'avoidable'                   # any hit is a mistake
 TAG_AVOIDABLE_NON_TANK = 'avoidable_nontank'  # tanks are meant to take it
 TAG_IGNORE = 'ignore'                         # hide from tables
+TAG_DEATH_ONLY = 'death_only'                         # taking it is fine (Gravebound's soul fragments) - dying to it is
+                                              # a mistake, whenever in the pull (mark_death_only)
 AVOIDABLE_TAGS = {TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK}
 
 # Combat/mana potions whose names don't say "potion" (Midnight). Names containing
@@ -154,7 +156,8 @@ def merge_same_name(abilities):
 def annotate_deaths(analysis):
     """
     Mark every death in a pull with 'order' (1-based), 'mass' (died together with 2+ others) and
-    'early' (counts as a personal mistake: one of the first 4 deaths and not part of a mass death) - and
+    'early' (counts as a personal mistake: one of the first 4 deaths and not part of a mass death - or
+    killed by a mechanic tagged "deaths only" (mark_death_only) before the wipe was called, whenever it was) - and
     merge abilities logged under several spell ids into one per name (merge_same_name): every page reads
     a pull through here. Idempotent; works on stored analyses of any version.
     """
@@ -163,15 +166,28 @@ def annotate_deaths(analysis):
         together = sum(1 for other in deaths if abs(other['t'] - death['t']) <= MASS_DEATH_WINDOW_MS)
         death['order'] = i + 1
         death['mass'] = together >= MASS_DEATH_SIZE
-        death['early'] = i < EARLY_DEATH_LIMIT and not death['mass']
+        death['early'] = (i < EARLY_DEATH_LIMIT and not death['mass']) or \
+            bool(death.get('death_only') and not death.get('after_wipe'))
     analysis['deaths'] = deaths
     if analysis.get('abilities'):
         analysis['abilities'] = merge_same_name(analysis['abilities'])
     return analysis
 
 
+def mark_death_only(analysis, ids, names):
+    """
+    Flag the deaths to a mechanic tagged "deaths only" (by spell id or name: the death can be logged under another id
+    than the damage) and re-annotate - those count as mistakes wherever in the pull they came.
+    """
+    for death in analysis.get('deaths') or []:
+        death['death_only'] = death.get('ability_id') in ids or death.get('ability') in names
+    return annotate_deaths(analysis)
+
+
 def death_note(death):
     """Why a death does or doesn't count, for tables and tooltips."""
+    if death.get('death_only') and death.get('early'):
+        return 'died to it - for this mechanic only dying is the mistake'
     if death.get('early'):
         return 'early death by mistake'
     if death.get('mass'):

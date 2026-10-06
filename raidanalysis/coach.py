@@ -303,10 +303,11 @@ def night(code, character_names, load=True):
     bosses = []
     for key, boss_pulls in groups.items():
         numbered = list(enumerate(boss_pulls, 1))
+        tags, _ = guides.effective_tags(key[0])
+        guides.apply_death_only(key[0], tags, [p.get('analysis') for p in boss_pulls])  # deaths to "deaths only" ones count
         insight_pulls = [{'number': i, 'kill': p['kill'],
                           'analysis': dict(p['analysis'] or {}, _duration=p['end_ms'] - p['start_ms'])}
                          for i, p in numbered]
-        tags, _ = guides.effective_tags(key[0])
         row = next((r for r in analyzer.player_report(insight_pulls, tags) if r['name'] == character), None)
         if not row:
             continue
