@@ -674,6 +674,48 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
     .ch-initial { width: 110px; height: 110px; font-size: 50px; }
     .ch-name { font-size: 28px; }
 }
+/* Item tooltips (items.py): the game's look - deep blue glass, a silver edge, quality colours */
+#item-tip { position: fixed; z-index: 1200; width: max-content; max-width: 340px; pointer-events: none;
+    padding: 9px 11px 10px; border-radius: 5px; border: 1px solid #5d6577;
+    background: linear-gradient(180deg, rgba(14, 22, 44, 0.97), rgba(5, 9, 22, 0.97));
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.85), inset 0 0 0 1px rgba(255,255,255,0.06), 0 12px 32px rgba(0,0,0,0.6);
+    font: 12.5px/1.45 Verdana, 'Inter', sans-serif; color: #fff; }
+#item-tip[hidden] { display: none; }
+#item-tip .it-head { display: flex; gap: 9px; align-items: flex-start; }
+#item-tip .it-icon { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 4px; border: 1px solid var(--q, #a335ee);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--q, #a335ee) 45%, transparent); }
+#item-tip table { border-collapse: collapse; width: 100%; background: none; margin: 0; }
+#item-tip td, #item-tip th { padding: 0; border: 0; background: none; text-align: left; vertical-align: top;
+    font: inherit; color: inherit; letter-spacing: 0; text-transform: none; }
+#item-tip th { text-align: right; padding-left: 16px; }
+#item-tip b { font-size: 14px; font-weight: 700; }
+#item-tip .tt-img { height: 14px; vertical-align: middle; }
+#item-tip .indent { padding-left: 12px; }
+#item-tip .q { color: #ffd100; } #item-tip .q0 { color: #9d9d9d; } #item-tip .q1 { color: #fff; }
+#item-tip .q2 { color: #1eff00; } #item-tip .q3 { color: #0070dd; } #item-tip .q4 { color: #a335ee; }
+#item-tip .q5 { color: #ff8000; } #item-tip .q6 { color: #e6cc80; } #item-tip .q7 { color: #00ccff; }
+#item-tip .q8 { color: #ffff98; } #item-tip .q9 { color: #71d5ff; }
+#item-tip [class^="socket-"], #item-tip [class*=" socket-"] { padding-left: 18px; background-repeat: no-repeat;
+    background-position: 0 2px; background-size: 14px 14px; }
+#item-tip .it-loading { color: #9d9d9d; font-style: italic; }
+/* The character sheet under the gear */
+.ar-sheet { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 18px 0 4px; }
+.ar-panel { padding: 12px 14px; border-radius: 10px; border: 1px solid #39405a;
+    background: linear-gradient(180deg, rgba(14, 22, 44, 0.85), rgba(8, 12, 26, 0.85)); }
+.ar-panel h4 { margin: 0 0 8px; color: #ffd100; font-size: 13.5px; font-weight: 700; letter-spacing: 0; text-transform: none;
+    display: flex; justify-content: space-between; gap: 8px; }
+.ar-srow { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px;
+    border-bottom: 1px dashed rgba(255,255,255,0.06); }
+.ar-srow:last-child { border-bottom: 0; }
+.ar-srow span { color: var(--muted); }
+.ar-srow b { color: #fff; font-variant-numeric: tabular-nums; }
+.ar-set { grid-column: span 2; }
+.ar-setn { color: #ffff98; font-variant-numeric: tabular-nums; }
+.ar-bonus { font-size: 12.5px; line-height: 1.45; color: #9d9d9d; padding: 3px 0; }
+.ar-bonus b { color: inherit; }
+.ar-bonus.on { color: #1eff00; }
+.ar-note { margin: 8px 0 0; }
+@media (max-width: 760px) { .ar-set { grid-column: auto; } }
 /* Soft navigation (data-swap): the part being replaced fades while its new version loads */
 #swap-bar { position: fixed; top: 0; left: 0; z-index: 1000; height: 3px; width: 0; opacity: 0; pointer-events: none;
     background: linear-gradient(90deg, var(--accent), #b98cff); box-shadow: 0 0 10px var(--accent);
@@ -1679,6 +1721,69 @@ onEach('[data-ch-find]', box => {
     apply();
   }));
 });
+// Item tooltips (the character panels): the game's tooltip for the item as worn - fetched from /raids/item
+// (Wowhead, sanitized on our side) the first time, then kept. Touch: the first tap shows it, the second opens Wowhead.
+(() => {
+  const tip = document.createElement('div');
+  tip.id = 'item-tip'; tip.hidden = true;
+  document.body.appendChild(tip);
+  const got = new Map();
+  const load = el => {
+    const key = el.dataset.item + '?' + (el.dataset.itemQ || '');
+    if (!got.has(key)) {
+      got.set(key, fetch('/raids/item/' + key).then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(data => { got.set(key, data); return data; }));
+    }
+    return got.get(key);
+  };
+  let current = null, lastX = 0, lastY = 0;
+  const place = () => {
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = lastX + 16, y = lastY + 16;
+    if (x + w > innerWidth - 8) x = Math.max(8, lastX - w - 16);
+    if (y + h > innerHeight - 8) y = Math.max(8, innerHeight - h - 8);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  };
+  const render = (el, data) => {
+    if (current !== el) return;
+    const q = getComputedStyle(el).getPropertyValue('--q');
+    if (!data) { tip.hidden = true; return; }
+    tip.innerHTML = '<div class="it-head"></div>';
+    const head = tip.firstChild;
+    if (data.icon) { const img = document.createElement('img'); img.className = 'it-icon'; img.src = data.icon; img.alt = ''; head.appendChild(img); }
+    const body = document.createElement('div');
+    body.innerHTML = data.html;  // rebuilt from an allow-list on the server (items.sanitize)
+    head.appendChild(body);
+    if (q) tip.style.setProperty('--q', q);
+    tip.hidden = false;
+    place();
+  };
+  const show = el => {
+    current = el;
+    const data = load(el);
+    if (data instanceof Promise) {
+      tip.innerHTML = '<span class="it-loading">Loading tooltip…</span>'; tip.hidden = false; place();
+      data.then(d => render(el, d));
+    } else render(el, data);
+  };
+  const hide = () => { tip.hidden = true; current = null; };
+  document.addEventListener('pointerover', e => {
+    if (e.pointerType === 'touch') return;
+    const el = e.target.closest && e.target.closest('[data-item]');
+    lastX = e.clientX; lastY = e.clientY;
+    if (el) { if (el !== current) show(el); } else if (current) hide();
+  });
+  document.addEventListener('pointermove', e => { lastX = e.clientX; lastY = e.clientY; if (!tip.hidden) place(); });
+  let touched = null;
+  document.addEventListener('pointerdown', e => { touched = e.pointerType === 'touch' ? e : null; });
+  document.addEventListener('click', e => {
+    const el = e.target.closest && e.target.closest('[data-item]');
+    if (!touched) return;
+    if (el && current !== el) { e.preventDefault(); lastX = touched.clientX; lastY = touched.clientY; show(el); }
+    else if (!el) hide();
+  }, true);
+  document.addEventListener('scroll', hide, true);
+})();
 window.addEventListener('popstate', () => location.reload());
 """
 

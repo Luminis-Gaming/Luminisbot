@@ -45,8 +45,28 @@ def _rio(data):
 
 
 def items(data):
-    """{slot: {'slot', 'name', 'ilvl', 'quality' (0-7), 'icon', 'enchant' (text, True or None), 'gems', 'sockets',
-    'item_id', 'tier'}} - Blizzard's equipment, else Raider.IO's gear."""
+    """
+    {slot: {'slot', 'name', 'ilvl', 'quality' (0-7), 'icon', 'enchant' (text, True or None), 'gems', 'sockets',
+    'item_id', 'tier', 'tooltip' (items.query() for its Wowhead tooltip: as worn, set pieces lit)}} - Blizzard's
+    equipment, else Raider.IO's gear.
+    """
+    out = _items(data)
+    from . import items as tooltips
+    spec = tooltips.spec_id(*_class_spec(data))
+    pcs = [it['item_id'] for it in out.values() if it.get('set_piece') and it['item_id']]
+    for it in out.values():
+        it['tooltip'] = tooltips.query(it.pop('bonus', ()), it['ilvl'], it.pop('ench_id', None), it.pop('gem_ids', ()),
+                                       pcs if it.pop('set_piece', False) else (), spec)
+    return out
+
+
+def _class_spec(data):
+    rio = _rio(data)
+    return (data.get('character_class') or rio.get('class') or '',
+            data.get('active_spec') or rio.get('active_spec_name') or '')
+
+
+def _items(data):
     out = {}
     for it in data.get('equipped_items') or []:
         slot = (it.get('slot') or {}).get('type')
@@ -55,22 +75,33 @@ def items(data):
         enchants = [e.get('display_string', '').replace('Enchanted: ', '').split('|')[0].strip()
                     for e in it.get('enchantments') or [] if e.get('display_string')]
         sockets = it.get('sockets') or []
+        permanent = next((e for e in it.get('enchantments') or []
+                          if (e.get('enchantment_slot') or {}).get('type') in (None, 'PERMANENT')), {})
         out[slot] = {'slot': slot, 'name': it.get('name') or '?', 'ilvl': (it.get('level') or {}).get('value'),
                      'quality': QUALITY.get((it.get('quality') or {}).get('type'), 4), 'icon': it.get('icon_url'),
                      'enchant': ', '.join(enchants) or None,
                      'gems': [s['item'].get('name') for s in sockets if s.get('item')], 'sockets': len(sockets),
-                     'item_id': (it.get('item') or {}).get('id'), 'tier': bool(it.get('set'))}
+                     'item_id': (it.get('item') or {}).get('id'), 'tier': bool(it.get('set')),
+                     'set_piece': bool(it.get('set')), 'bonus': it.get('bonus_list') or (),
+                     'ench_id': permanent.get('enchantment_id'),
+                     'gem_ids': [s['item']['id'] for s in sockets if (s.get('item') or {}).get('id')]}
     if out:
         return out
     for key, it in ((_rio(data).get('gear') or {}).get('items') or data.get('rio_gear') or {}).items():
         slot = RIO_SLOTS.get(key)
         if not slot or not isinstance(it, dict):
             continue
+        enchant = it.get('enchant') if isinstance(it.get('enchant'), int) else None
+        names = [re.sub(r'^Enchant [^-]+ - ', '', e['name']) for e in it.get('enchants_detail') or []
+                 if isinstance(e, dict) and e.get('name')]
         out[slot] = {'slot': slot, 'name': it.get('name') or '?', 'ilvl': it.get('item_level'),
                      'quality': it.get('item_quality') or 4,
                      'icon': ICON_URL.format(icon=it['icon']) if it.get('icon') else None,
-                     'enchant': True if it.get('enchant') else None, 'gems': list(it.get('gems') or []),
-                     'sockets': len(it.get('gems') or []), 'item_id': it.get('item_id'), 'tier': bool(it.get('tier'))}
+                     'enchant': ', '.join(names) or (True if it.get('enchant') else None),
+                     'gems': [g.get('name') for g in it.get('gems_detail') or [] if isinstance(g, dict)] or list(it.get('gems') or []),
+                     'sockets': len(it.get('gems') or []), 'item_id': it.get('item_id'), 'tier': bool(it.get('tier')),
+                     'set_piece': bool(it.get('tier')), 'bonus': [b for b in it.get('bonuses') or () if isinstance(b, int)],
+                     'ench_id': enchant, 'gem_ids': [g for g in it.get('gems') or () if isinstance(g, int)]}
     return out
 
 
@@ -99,6 +130,126 @@ def summary(data):
             'class': data.get('character_class') or rio.get('class'), 'race': data.get('race') or rio.get('race'),
             'realm': rio.get('realm') or data.get('realm'), 'guild': (rio.get('guild') or {}).get('name'),
             'mplus': mplus, 'raids': raids[:2], 'raiderio_url': data.get('raiderio_url') or rio.get('profile_url')}
+
+
+def stats(data):
+    """
+    The character sheet's stats, from Blizzard's armory (statistics), or None without them:
+    {'primary': (name, value), 'stamina', 'health', 'armor', 'power': (name, value) or None,
+     'secondary': [(name, percent, rating)], 'tertiary': [(name, percent, rating)]} - tertiary only when > 0.
+    """
+    st = data.get('statistics')
+    if not isinstance(st, dict) or not st.get('health'):
+        return None
+
+    def eff(key):
+        v = st.get(key)
+        return (v.get('effective') or 0) if isinstance(v, dict) else (v or 0)
+
+    def rated(key):
+        v = st.get(key) or {}
+        return (v.get('value') or 0, v.get('rating') or 0) if isinstance(v, dict) else (0, 0)
+
+    primary = max((('Strength', eff('strength')), ('Agility', eff('agility')), ('Intellect', eff('intellect'))),
+                  key=lambda p: p[1])
+    caster = primary[0] == 'Intellect'
+    crit, haste = rated('spell_crit' if caster else 'melee_crit'), rated('spell_haste' if caster else 'melee_haste')
+    secondary = [('Critical Strike', *crit), ('Haste', *haste), ('Mastery', *rated('mastery')),
+                 ('Versatility', st.get('versatility_damage_done_bonus') or 0, st.get('versatility') or 0)]
+    tertiary = []
+    for name, key in (('Leech', 'lifesteal'), ('Avoidance', 'avoidance'), ('Speed', 'speed')):
+        v = st.get(key) or {}
+        pct = (v.get('value') or v.get('rating_bonus') or 0) if isinstance(v, dict) else 0
+        if pct > 0:
+            tertiary.append((name, pct, v.get('rating') or 0))
+    power = (st.get('power_type') or {}).get('name')
+    return {'primary': primary, 'stamina': eff('stamina'), 'health': st.get('health') or 0, 'armor': eff('armor'),
+            'power': (power, st.get('power') or 0) if power and st.get('power') else None,
+            'secondary': secondary, 'tertiary': tertiary}
+
+
+def tier_set(data):
+    """
+    The item set they wear: {'name', 'worn', 'size', 'bonuses': [{'count', 'text', 'active'}]} or None -
+    Blizzard's equipment says it all; otherwise the Wowhead copy kept at load() ('tier_set').
+    """
+    for it in data.get('equipped_items') or []:
+        s = it.get('set')
+        if not s or not s.get('effects'):
+            continue
+        pieces = s.get('items') or []
+        bonuses = []
+        for e in s['effects']:
+            text = re.sub(r'^\(\d+\) Set:?\s*', '', e.get('display_string') or '').strip()
+            bonuses.append({'count': e.get('required_count') or 0, 'text': text, 'active': bool(e.get('is_active'))})
+        return {'name': (s.get('item_set') or {}).get('name') or 'Tier set',
+                'worn': sum(1 for p in pieces if p.get('is_equipped')), 'size': len(pieces), 'bonuses': bonuses}
+    kept = data.get('tier_set')
+    return kept if isinstance(kept, dict) and kept.get('bonuses') else None
+
+
+_WH_SET_NAME = re.compile(r'<a href="/item-set=\d+[^"]*"[^>]*>([^<]+)</a> \((\d+)/(\d+)\)')
+_WH_BONUS = re.compile(r'<span(?: class="q\d")?>\((\d+)\) Set(?: [^:<]*)?: (.*?)</span>(?:<!--itemeffectspec-->)?<br', re.S)
+
+
+def _set_from_wowhead(raw, worn, spec):
+    """The set block of a Wowhead item tooltip -> tier_set()'s shape (their spec's bonuses only), or None."""
+    from . import items as tooltips
+    name = _WH_SET_NAME.search(raw)
+    if not name:
+        return None
+    lines = tooltips._SPEC_LINE.findall(raw)
+    if lines:
+        bodies = [body for s, body in lines if spec and int(s) == spec] or [body for _, body in lines]
+        block = ''.join(body + '<br' for body in bodies)
+    else:
+        block = raw
+    bonuses = []
+    for count, text in _WH_BONUS.findall(block):
+        clean = re.sub(r'<[^>]+>', '', text)
+        clean = re.sub(r'<!--.*?-->', '', clean).strip()
+        bonuses.append({'count': int(count), 'text': clean, 'active': int(count) <= worn})
+    return {'name': name.group(1), 'worn': worn, 'size': int(name.group(3)), 'bonuses': bonuses} if bonuses else None
+
+
+async def _wowhead_set(data):
+    """No Blizzard set info: read the set from one worn tier piece's Wowhead tooltip."""
+    import aiohttp
+    from . import items as tooltips
+    gear = _items(data)
+    pieces = [it for it in gear.values() if it.get('set_piece') and it.get('item_id')]
+    if not pieces:
+        return None
+    try:
+        async with aiohttp.ClientSession(headers=tooltips.HEADERS) as session:
+            async with session.get(tooltips.TOOLTIP_URL.format(id=int(pieces[0]['item_id'])),
+                                   params={'dataEnv': 1, 'locale': 0}, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                raw = (await resp.json(content_type=None)).get('tooltip') or '' if resp.status == 200 else ''
+    except Exception as e:
+        logger.warning(f'[RAIDS] Tier set from Wowhead failed: {e}')
+        return None
+    return _set_from_wowhead(raw, len(pieces), tooltips.spec_id(*_class_spec(data)))
+
+
+async def _statistics(realm, name):
+    """Blizzard's character statistics (the stat sheet), or None - e.g. without API credentials."""
+    import aiohttp
+    try:
+        from character_enrichment import BLIZZARD_CLIENT_ID, CharacterEnricher
+        if not BLIZZARD_CLIENT_ID:
+            return None
+        token = await CharacterEnricher().get_blizzard_token()
+        if not token:
+            return None
+        url = f'https://{REGION}.api.blizzard.com/profile/wow/character/{realm}/{name.lower()}/statistics'
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers={'Authorization': f'Bearer {token}'},
+                                   params={'namespace': f'profile-{REGION}', 'locale': 'en_US'},
+                                   timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return await resp.json() if resp.status == 200 else None
+    except Exception as e:
+        logger.warning(f'[RAIDS] Statistics of {name}-{realm} failed: {e}')
+        return None
 
 
 # ============================================================================
@@ -131,7 +282,16 @@ def cached(name, realm=None):
     slug = realm_slug(realm) if realm else None
     linked = _linked(name, slug)
     if linked and linked.get('enrichment_cache') and items(linked['enrichment_cache']):
-        return linked['enrichment_cache'], not _fresh(linked.get('last_enriched'))
+        data = dict(linked['enrichment_cache'])
+        stale = not _fresh(linked.get('last_enriched'))
+        own = db.get_armory(name, slug)  # the stat sheet and set bonuses come with our own copy
+        if own and isinstance(own['data'], dict):
+            for key in ('statistics', 'tier_set'):
+                if own['data'].get(key) and not data.get(key):
+                    data[key] = own['data'][key]
+        if not own or not _fresh(own['fetched_at']):
+            stale = True
+        return data, stale
     row = db.get_armory(name, slug)
     if row:
         return row['data'], not _fresh(row['fetched_at'])
@@ -160,11 +320,13 @@ async def load(code, name, realm=None):
         realm = realm_slug((actor or {}).get('server'))
     if not realm:
         return None, f"Don't know {name}'s realm - link the character with /connectwow to show it here."
+    import asyncio
     try:
-        data = await CharacterEnricher().enrich_character(realm, name, REGION)
+        data, statistics = await asyncio.gather(CharacterEnricher().enrich_character(realm, name, REGION),
+                                                _statistics(realm, name))
     except Exception:
         logger.exception(f'[RAIDS] Character {name}-{realm} failed')
-        data = None
+        data = statistics = None
     if not data or not items(data):
         return None, f"Couldn't find {name}-{realm} on Blizzard's armory or Raider.IO right now."
     rio = (data.get('sources') or {}).get('raiderio') or {}
@@ -172,5 +334,9 @@ async def load(code, name, realm=None):
     keep['raiderio'] = {k: rio.get(k) for k in ('gear', 'thumbnail_url', 'profile_url', 'realm', 'guild', 'class',
                                                 'race', 'active_spec_name', 'raid_progression',
                                                 'mythic_plus_scores_by_season') if rio.get(k) is not None}
+    if statistics:
+        keep['statistics'] = statistics
+    if not tier_set(keep):
+        keep['tier_set'] = await _wowhead_set(keep)
     db.save_armory(name, realm, keep)
     return keep, None

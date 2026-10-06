@@ -742,8 +742,8 @@ def list_characters(zone_id=None, difficulty=None, team=None):
                COUNT(*) AS pulls, COUNT(*) FILTER (WHERE p.kill) AS kills,
                COUNT(DISTINCT r.code) AS nights, MAX(r.start_time) AS last_seen
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
-        {_EVENT_JOIN},
-        jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
+        {_EVENT_JOIN}
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
         LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = x->>'name'
         WHERE r.source <> 'manual' AND COALESCE(x->>'name', '') <> '' {where}
         GROUP BY x->>'name', rr.realm

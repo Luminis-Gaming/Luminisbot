@@ -2,9 +2,11 @@
 The player page's Character tab: the in-game character panel - gear down both sides of the character's
 render (on a glow in their class colour), weapons underneath - with item level, M+ score and raid progress
 on top. Items are quality-coloured tiles with their item level, enchant (or a red "No enchant" where the
-logs say one belongs) and gems; each opens on Wowhead. Data: armory.py.
+logs say one belongs) and gems; hovering one shows its tooltip as in game (items.py, as worn: stats, enchant,
+gems, set bonuses lit), clicking opens it on Wowhead. Under the gear, the character sheet: attributes,
+enhancements and the tier set's bonuses. Data: armory.py.
 """
-from .. import armory
+from .. import armory, items as tooltips
 from .render import CLASS_COLORS, esc
 
 QUALITY_COLORS = {0: '#9d9d9d', 1: '#ffffff', 2: '#1eff00', 3: '#0070dd', 4: '#a335ee', 5: '#ff8000',
@@ -34,16 +36,54 @@ def _item(item, slot, missing, right=False):
     elif label in missing:
         meta.append('<span class="ar-bad" title="The logs show this slot unenchanted">No enchant</span>')
     if item['sockets']:
-        gems = ''.join('<i class="ar-gem"></i>' for _ in item['gems']) + \
+        gems = ''.join(f'<i class="ar-gem" title="{esc(g) if isinstance(g, str) else "Gem"}"></i>' for g in item['gems']) + \
             ''.join('<i class="ar-gem empty"></i>' for _ in range(max(0, item['sockets'] - len(item['gems']))))
         meta.append(f'<span class="ar-gems" title="{len(item["gems"])} of {item["sockets"]} sockets filled">{gems}</span>')
     icon = f'<img src="{esc(item["icon"])}" alt="" loading="lazy">' if item['icon'] else ''
-    href = f'https://www.wowhead.com/item={int(item["item_id"])}' if item['item_id'] else '#'
-    return (f'<a class="ar-item{" right" if right else ""}" style="--q:{color}" href="{href}" target="_blank" rel="noopener" '
-            f'title="{esc(item["name"])} · item level {item["ilvl"] or "?"}">'
+    href, tip = '#', ''
+    if item['item_id']:
+        q = item.get('tooltip') or ''
+        tooltips.offer(item['item_id'], q)
+        wowhead_q = '&'.join(p for p in q.split('&') if p.split('=')[0] in ('bonus', 'ilvl', 'ench', 'gems', 'pcs'))
+        href = f'https://www.wowhead.com/item={int(item["item_id"])}' + (f'?{wowhead_q}' if wowhead_q else '')
+        tip = f' data-item="{int(item["item_id"])}" data-item-q="{esc(q)}"'
+    return (f'<a class="ar-item{" right" if right else ""}" style="--q:{color}" href="{esc(href)}" target="_blank" rel="noopener"{tip} '
+            f'aria-label="{esc(item["name"])} · item level {item["ilvl"] or "?"}">'
             f'<span class="ar-icon">{icon}<b class="ar-ilvl">{item["ilvl"] or ""}</b></span>'
             f'<span class="ar-text"><span class="ar-name">{esc(item["name"])}</span>'
             f'<span class="ar-meta">{" · ".join(meta)}</span></span></a>')
+
+
+def _num(value):
+    return f'{value:,.0f}'.replace(',', '\u2009')  # thin-space thousands, like the game's tooltips
+
+
+def sheet(data):
+    """The character sheet under the gear: attributes, enhancements, the set's bonuses - each part only when known."""
+    st = armory.stats(data)
+    tier = armory.tier_set(data)
+    parts = []
+    if st:
+        rows = [(st['primary'][0], _num(st['primary'][1]), ''), ('Stamina', _num(st['stamina']), ''),
+                ('Health', _num(st['health']), '')]
+        if st['power']:
+            rows.append((st['power'][0], _num(st['power'][1]), ''))
+        rows.append(('Armor', _num(st['armor']), ''))
+        attributes = ''.join(f'<div class="ar-srow"><span>{esc(n)}</span><b>{v}</b></div>' for n, v, _ in rows)
+        enh = ''.join(f'<div class="ar-srow" title="{esc(n)}: {_num(r)} rating"><span>{esc(n)}</span><b>{p:.2f}%</b></div>'
+                      for n, p, r in st['secondary'] + st['tertiary'])
+        parts.append(f'<div class="ar-panel"><h4>Attributes</h4>{attributes}</div>')
+        parts.append(f'<div class="ar-panel"><h4>Enhancements</h4>{enh}</div>')
+    if tier:
+        bonuses = ''.join(f'<div class="ar-bonus{" on" if b["active"] else ""}"><b>({b["count"]}) Set</b> {esc(b["text"])}</div>'
+                          for b in tier['bonuses'])
+        parts.append(f'<div class="ar-panel ar-set"><h4>{esc(tier["name"])} <span class="ar-setn">'
+                     f'{tier["worn"]}/{tier["size"]}</span></h4>{bonuses}</div>')
+    if not parts:
+        return ''
+    note = '' if st else ('<p class="muted small ar-note">The stat sheet comes from Blizzard\'s armory, which '
+                          'hasn\'t answered for this character yet.</p>')
+    return f'<div class="ar-sheet">{"".join(parts)}</div>{note}'
 
 
 def tab(data, player, stale=False):
@@ -88,6 +128,7 @@ def tab(data, player, stale=False):
             <div class="ar-model">{model}<div class="ar-weapons">{weapons}</div></div>
             <div class="ar-col">{right}</div>
         </div>
+        {sheet(data)}
         <div class="ar-foot">{''.join(links)}
             <span class="muted small">{'Refreshing in the background - reload in a bit for the latest gear. ' if stale else ''}
             From Blizzard's armory and Raider.IO; kept {armory.FRESH_HOURS} hours.</span></div>

@@ -49,6 +49,7 @@ def register_routes(app):
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
     app.router.add_get('/raids', _public(handle_overview))
     app.router.add_get('/raids/spell/{spell_id}', handle_spell)
+    app.router.add_get('/raids/item/{item_id}', handle_item)
     app.router.add_get('/raids/favicon.png', handle_favicon)
     app.router.add_get('/raids/report/{code}', _public(handle_night))
     app.router.add_get('/raids/report/{code}/{fight_id}', _public(handle_pull))
@@ -1447,6 +1448,27 @@ async def handle_spell(request):
     return web.json_response({'name': info['name'], 'icon': spells.icon_url(info['icon']),
                               'meta': info['meta'] or '', 'desc': info['description'] or ''},
                              headers={'Cache-Control': 'public, max-age=86400', **SECURITY_HEADERS})
+
+
+async def handle_item(request):
+    """
+    GET /raids/item/{id}?bonus=&ilvl=&ench=&gems=&pcs=&spec= - an item's tooltip as a character wears it
+    (items.py: from Wowhead, sanitized). Only items our pages showed, rate limited: this endpoint is public.
+    """
+    from .. import items
+    try:
+        item_id = int(request.match_info['item_id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    q = items.parse_query(request.query)
+    if q is None:
+        raise web.HTTPBadRequest()
+    info = items.cached(item_id, q)
+    if info is None and items.may_fetch(item_id, q):
+        info = await items.tooltip(item_id, q)
+    if not info:
+        raise web.HTTPNotFound()
+    return web.json_response(info, headers={'Cache-Control': 'public, max-age=86400', **SECURITY_HEADERS})
 
 
 def compare_url(code, selected, name, fight_id=None):

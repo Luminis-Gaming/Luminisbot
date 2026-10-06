@@ -1877,3 +1877,104 @@ class TestCharacterPage(unittest.TestCase):
         self.assertIn('Search 1 characters', html)
         self.assertEqual(routes._home_href({'tier': '3'}, 'bosses'), '/admin/raids?tier=3')
         self.assertEqual(routes._home_href({}, 'characters'), '/admin/raids?tab=characters')
+
+
+class TestItemTooltips(unittest.TestCase):
+    """items.py: the tooltip query, the item set as the game shows it, sanitizing; armory's stat sheet."""
+
+    RAW_SET = ('<b class="q4">Fangs</b><br>+167 [Agility or Intellect]<br><br />'
+               '<span class="q"><a href="/item-set=2059/x" class="q">Viper Set</a> (0/5)</span>'
+               '<div class="q0 indent"><span><!--si1--><a href="/item=1">Head</a></span><br />'
+               '<span><!--si2--><a href="/item=2">Hands</a></span><br />'
+               '<span><!--si3--><a href="/item=3">Legs</a></span></div><br />'
+               '<span class="q0"><!--itemeffectspec253:0--><span>(2) Set Beast Mastery: <a href="/spell=1">BM two</a></span>'
+               '<!--itemeffectspec--><br /><!--itemeffectspec254:0--><span>(2) Set Marksmanship: <a href="/spell=2">MM two</a>'
+               '</span><!--itemeffectspec--><br /><!--itemeffectspec254:0--><span>(4) Set Marksmanship: <a href="/spell=3">'
+               'MM four</a></span><!--itemeffectspec--></span>')
+
+    def test_query_is_canonical(self):
+        from raidanalysis import items
+        q = items.query(bonus=[2, 1], ilvl=321, ench=8017, gems=[5], pcs=[9, 3, 9], spec=254)
+        self.assertEqual(q, 'bonus=2:1&ilvl=321&ench=8017&gems=5&pcs=3:9&spec=254')
+        self.assertEqual(items.parse_query({'spec': '254', 'bonus': '2:1', 'ilvl': '321', 'ench': '8017',
+                                            'gems': '5', 'pcs': '3:9'}), q)
+        self.assertIsNone(items.parse_query({'bonus': '1;DROP'}))
+        self.assertEqual(items.spec_id('Death Knight', 'Frost'), 251)
+        self.assertEqual(items.spec_id('Hunter', 'BeastMastery'), 253)
+
+    def test_set_lit_like_in_game(self):
+        from raidanalysis import items
+        html = items.sanitize(items.with_primary(items.with_set(self.RAW_SET, {'1', '2', '9'}, 254), 254))
+        self.assertIn('(2/5)', html)
+        self.assertEqual(html.count('class="q8"'), 2)      # the two pieces worn
+        self.assertIn('<span class="q2">(2) Set Marksmanship', html)
+        self.assertIn('<span class="q0">(4) Set Marksmanship', html)
+        self.assertNotIn('Beast Mastery', html)           # another spec's bonus
+        self.assertIn('+167 Agility', html)
+        self.assertNotIn('<a', html)
+        self.assertNotIn('<!--', html)
+
+    def test_sanitize_keeps_only_the_allow_list(self):
+        from raidanalysis import items
+        dirty = ('<div class="q2 evil" onclick="x()">Hi<script>alert(1)</script></div>'
+                 '<img src="https://evil.example/x.png" onerror="x()"><img src="https://wow.zamimg.com/a/b.png">'
+                 '<span style="background-image:url(https://wow.zamimg.com/i/g.gif);position:fixed">gem</span>'
+                 '<a href="javascript:alert(1)">link</a><div class="whtt-sellprice">Sell Price: 5</div>'
+                 '<span style="color: #00FF00; background:url(javascript:x)">ok</span>')
+        html = items.sanitize(dirty)
+        for bad in ('onclick', 'onerror', 'evil', '<script', 'javascript', 'position', 'Sell Price'):
+            self.assertNotIn(bad, html)
+        self.assertIn('<div class="q2">Hi', html)  # the script tag is gone, its text is inert
+        self.assertIn('src="https://wow.zamimg.com/a/b.png"', html)
+        self.assertIn('background-image:url(https://wow.zamimg.com/i/g.gif)', html)
+        self.assertIn('<span>link</span>', html)
+        self.assertIn('style="color:#00FF00"', html)
+
+    def test_gear_gets_its_tooltip_query(self):
+        from raidanalysis import armory
+        data = {'raiderio': {'class': 'Hunter', 'active_spec_name': 'Marksmanship', 'gear': {'items': {
+            'head': {'item_id': 1, 'item_level': 321, 'enchant': 8017, 'gems': [], 'tier': 36, 'bonuses': [7, 8],
+                     'enchants_detail': [{'name': 'Enchant Helm - Rune of Avoidance'}], 'name': 'Fangs', 'icon': 'x'},
+            'hands': {'item_id': 2, 'item_level': 308, 'gems': [], 'tier': 36, 'bonuses': [], 'name': 'Grips', 'icon': 'y'},
+            'neck': {'item_id': 3, 'item_level': 321, 'gems': [240914], 'bonuses': [9], 'name': 'Neck', 'icon': 'z',
+                     'gems_detail': [{'name': '16 Vers'}]}}}}}
+        gear = armory.items(data)
+        self.assertEqual(gear['HEAD']['tooltip'], 'bonus=7:8&ilvl=321&ench=8017&pcs=1:2&spec=254')
+        self.assertEqual(gear['HEAD']['enchant'], 'Rune of Avoidance')
+        self.assertEqual(gear['NECK']['tooltip'], 'bonus=9&ilvl=321&gems=240914&spec=254')  # not a set piece
+        self.assertEqual(gear['NECK']['gems'], ['16 Vers'])
+
+    def test_stat_sheet_from_blizzard(self):
+        from raidanalysis import armory
+        from raidanalysis.web import armory as view
+        data = {'statistics': {'health': 1800000, 'power': 100, 'power_type': {'name': 'Focus'},
+                               'strength': {'effective': 900}, 'agility': {'effective': 41000},
+                               'intellect': {'effective': 1200}, 'stamina': {'effective': 90000},
+                               'melee_crit': {'rating': 6000, 'value': 27.9}, 'spell_crit': {'value': 5},
+                               'melee_haste': {'rating': 3000, 'value': 9.1}, 'mastery': {'rating': 11000, 'value': 44.8},
+                               'versatility': 4000, 'versatility_damage_done_bonus': 7.9,
+                               'lifesteal': {'value': 0}, 'avoidance': {'rating': 800, 'rating_bonus': 2.6},
+                               'armor': {'effective': 24000}}}
+        st = armory.stats(data)
+        self.assertEqual(st['primary'], ('Agility', 41000))
+        self.assertEqual([s[0] for s in st['secondary']], ['Critical Strike', 'Haste', 'Mastery', 'Versatility'])
+        self.assertEqual(st['secondary'][0][1], 27.9)  # melee crit for an agility user
+        self.assertEqual([t[0] for t in st['tertiary']], ['Avoidance'])
+        html = view.sheet(data)
+        self.assertIn('Attributes', html)
+        self.assertIn('27.90%', html)
+        self.assertIsNone(armory.stats({}))
+
+    def test_tier_set_from_blizzard_and_wowhead(self):
+        from raidanalysis import armory
+        data = {'equipped_items': [{'slot': {'type': 'HEAD'}, 'set': {
+            'item_set': {'name': 'Viper Set'}, 'items': [{'is_equipped': True}, {'is_equipped': True}, {}],
+            'effects': [{'display_string': '(2) Set: Two piece.', 'required_count': 2, 'is_active': True},
+                        {'display_string': '(4) Set: Four piece.', 'required_count': 4, 'is_active': False}]}}]}
+        tier = armory.tier_set(data)
+        self.assertEqual((tier['name'], tier['worn'], tier['size']), ('Viper Set', 2, 3))
+        self.assertEqual([(b['count'], b['active']) for b in tier['bonuses']], [(2, True), (4, False)])
+        wh = armory._set_from_wowhead(self.RAW_SET, 2, 254)
+        self.assertEqual((wh['name'], wh['worn'], wh['size']), ('Viper Set', 2, 5))
+        self.assertEqual([(b['count'], b['text'], b['active']) for b in wh['bonuses']],
+                         [(2, 'MM two', True), (4, 'MM four', False)])
