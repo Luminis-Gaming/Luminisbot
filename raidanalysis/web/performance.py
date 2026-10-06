@@ -343,6 +343,7 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
     top = (data or {}).get('top') or []
     label = esc((data or {}).get('label') or 'players')
     have_extras = bool(throughput.player_pulls(numbered, name))
+    no_detail = have_extras and not throughput.detail_pulls(numbered, name)
     active, raid_active = throughput.active_time(numbered, name, role)
     # Trinkets and potions the cooldown comparison knows from Wowhead: not part of the rotation.
     items = {r['name'] for r in (data or {}).get('rows') or [] if r['category'] in ('trinket', 'potion')}
@@ -399,6 +400,10 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
             <p class="muted small">Every ability you or the top {label} cast, most-pressed first. Greyed-out rows
                aren't judged: most of them don't use it or barely do (under 0.5 a minute), or you never cast it (a talent or
                trinket choice).</p>{_cpm_table(cpm, len(top), by_name)}"""))
+    if no_detail:
+        sections.append('<p class="warn-text small">⏳ None of your pulls on this boss has the full detail yet (casts, '
+                        'buffs, resources and procs - fetched for the kill and the furthest wipes, and for each '
+                        "player's own furthest pull when they weren't in those). The next sync fills it in.</p>")
     if not sections:
         body = NO_EXTRAS if not have_extras else '<p class="muted">Nothing to compare yet - the top players for ' \
                                                  'this spec are fetched over the next syncs.</p>'

@@ -260,6 +260,29 @@ def fight_ids_missing_extras(code, version):
     return {r['fight_id'] for r in rows}
 
 
+def players_missing_detail(code, min_ms):
+    """
+    Whether someone in a report has throughput but no pull with the per-player detail on a boss (sync.
+    detail_fight_ids: a late joiner gets their own furthest pull) - counting pulls of min_ms or more only, the
+    ones that can get it, so a player only in short wipes doesn't keep the night coming back.
+    """
+    row = _run("""
+        WITH p AS (
+            SELECT encounter_id, difficulty, analysis->'players' AS players, kill,
+                   COALESCE((analysis->'extras'->>'detail')::boolean, TRUE) AS detail
+            FROM raid_pulls
+            WHERE report_code = %s AND analysis ? 'extras' AND NOT analysis ? 'archived'
+              AND (kill OR end_ms - start_ms >= %s)
+        )
+        SELECT EXISTS (
+            SELECT 1 FROM p, jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
+            GROUP BY p.encounter_id, p.difficulty, x->>'name'
+            HAVING NOT bool_or(p.detail)
+        ) AS missing
+    """, (code, min_ms), fetch='one')
+    return bool(row and row['missing'])
+
+
 def get_focus(code, fight_id, name):
     row = _run("SELECT data FROM raid_focus WHERE report_code = %s AND fight_id = %s AND name = %s",
                (code, fight_id, name), fetch='one')

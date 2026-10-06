@@ -187,7 +187,7 @@ def timeline(data, pull, boss=None, spell_lookup=None):
     # Boss abilities from your pull on top (one lane per ability name, like the consumables timeline).
     boss_spells = {}
     if boss_aligned:
-        chips.append('<button type="button" class="tl-chip" data-g="boss" aria-pressed="true">'
+        chips.append('<button type="button" class="tl-chip" data-g="boss" data-name="boss" aria-pressed="true">'
                      '👹 Boss abilities</button>')
         labels.append(f'<div class="tl-lab grp" data-g="boss"><span>👹 Boss · your pull #{pull["number"]}</span></div>')
         tracks.append('<div class="tl-row grp" data-g="boss"></div>')
@@ -214,7 +214,8 @@ def timeline(data, pull, boss=None, spell_lookup=None):
         if info.get('icon'):
             icons[r['icon_id']] = icon_url(info['icon'])
         chip_icon = icons.get(r['icon_id'])
-        chips.append(f'<button type="button" class="tl-chip" data-g="{g}" aria-pressed="{"true" if judged else "false"}">'
+        chips.append(f'<button type="button" class="tl-chip" data-g="{g}" data-name="{esc(r["name"])}" '
+                     f'aria-pressed="{"true" if judged else "false"}">'
                      + (f'<img class="chip-icon" src="{esc(chip_icon)}" alt="">' if chip_icon else '')
                      + f'{esc(r["name"])}</button>')
         weak_at = {m['ref_at'] for m in r.get('weak') or []}
@@ -261,12 +262,13 @@ def timeline(data, pull, boss=None, spell_lookup=None):
         spell_json[sid] = {'name': info.get('name') or name, 'icon': f'{ICON_BASE}{icon}' if icon else icon_url(info.get('icon')),
                            'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
     has_phases = len(ref) > 1
-    return f"""<div class="tl cmp-tl" data-duration="{longest}">
+    return f"""<div class="tl cmp-tl" data-duration="{longest}" data-remember="cooldowns">
         <style>{icon_css}</style>
         <div class="tl-chips">{''.join(chips)}</div>
         <div class="tl-tools">
-            {'<span class="seg"><button type="button" data-mode="aligned" aria-pressed="true">Align phases</button>'
-             '<button type="button" data-mode="real" aria-pressed="false">Real time</button></span>' if has_phases else ''}
+            {'<span class="seg"><button type="button" data-mode="aligned" data-name="mode:aligned" aria-pressed="true">'
+             'Align phases</button><button type="button" data-mode="real" data-name="mode:real" aria-pressed="false">'
+             'Real time</button></span>' if has_phases else ''}
             <span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom</span>
             <button type="button" data-zoom="out" title="Zoom out">−</button>
             <input type="range" min="0" max="100" value="0" aria-label="Zoom">

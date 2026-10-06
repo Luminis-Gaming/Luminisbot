@@ -1022,6 +1022,30 @@ document.querySelectorAll('.cmp-tl, .focus-tl').forEach(tl => {
     tl.querySelectorAll('.m[data-a]').forEach(m => { m.style.left = real ? m.dataset.r : m.dataset.a; });
   }));
 });
+// Timelines remember the viewer's filters (in this browser, per kind of timeline - raid, cooldowns, focus), so
+// switching pull or night keeps them: every toggle with a data-name (an ability's or add's name, never its
+// position) is saved when it changes, and restored by clicking it - the timeline's own handlers do the rest.
+document.querySelectorAll('[data-remember]').forEach(tl => {
+  const key = 'tl-filters:' + tl.dataset.remember;
+  const isOn = el => el.matches('input') ? el.checked : el.getAttribute('aria-pressed') === 'true';
+  const load = () => {
+    try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { return {}; }
+  };
+  const saved = load();
+  tl.querySelectorAll('[data-name]').forEach(el => {
+    const want = saved[el.dataset.name];
+    if (typeof want !== 'boolean' || want === isOn(el)) return;
+    if (el.matches('input')) { el.checked = want; el.dispatchEvent(new Event('change', {bubbles: true})); }
+    else el.click();
+  });
+  const save = () => {  // merged into what's stored: toggles this page doesn't have keep their saved state
+    const all = load();
+    tl.querySelectorAll('[data-name]').forEach(el => { all[el.dataset.name] = isOn(el); });
+    try { localStorage.setItem(key, JSON.stringify(all)); } catch (e) { /* private mode / full: just not kept */ }
+  };
+  tl.addEventListener('change', save);
+  tl.addEventListener('click', e => { if (e.target.closest('button')) setTimeout(save); });
+});
 // Editor-style timelines: drag to pan, Ctrl/Cmd/Alt + scroll (or pinch) zooms around the pointer, the
 // slider and -/+/Fit zoom around the middle, a playhead shows the time under the mouse.
 document.querySelectorAll('.tl').forEach(tl => {

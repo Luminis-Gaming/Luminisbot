@@ -753,6 +753,33 @@ class TestNeverCastVsNotFetched(unittest.TestCase):
         self.assertEqual((shiv(not_fetched)['known'], shiv(not_fetched)['verdict']), (False, None))
 
 
+class TestDisciplineRamp(unittest.TestCase):
+    """Evangelism / Ultimate Penitence are a Disc Priest's own cooldowns, not raid assignments."""
+
+    def test_judged_as_major_cooldowns(self):
+        from raidanalysis import benchmarks
+        evangelism = {'name': 'Evangelism', 'meta': 'Instant · 1.5 min cooldown'}
+        penitence = {'name': 'Ultimate Penitence', 'meta': '6 sec cast · 4 min cooldown'}
+        self.assertEqual(benchmarks.category(246287, evangelism), benchmarks.THROUGHPUT)
+        self.assertEqual(benchmarks.category(421453, penitence), benchmarks.THROUGHPUT)
+        self.assertEqual(benchmarks.category(200183, {'name': 'Apotheosis', 'meta': 'Instant · 2 min cooldown'}),
+                         benchmarks.THROUGHPUT)
+        self.assertIn(benchmarks.THROUGHPUT, benchmarks.JUDGED)
+        self.assertEqual(benchmarks.category(1, {'name': 'Power Word: Barrier', 'meta': '3 min cooldown'}), 'raid')
+
+    def test_timeline_reclassifies_stored_uses(self):
+        """Pulls analyzed while Evangelism was a raid cooldown: it moves to the Disc's major cooldowns."""
+        from raidanalysis.web import consumables
+        analysis = {'players': [{'name': 'Disc', 'class': 'Priest', 'spec': 'Discipline', 'role': 'healer'}],
+                    'cooldowns': [{'t': 1000, 'name': 'Disc', 'ability_id': 246287, 'ability': 'Evangelism',
+                                   'icon': 'e.jpg', 'category': 'raid', 'target': None}],
+                    'casts': {'Disc': [[1000, 246287]]}}
+        pull = {'analysis': analysis}
+        lookup = lambda ids: {246287: {'name': 'Evangelism', 'meta': 'Instant · 1.5 min cooldown', 'icon': 'e'}}
+        uses = consumables.cooldowns_by_pull([pull], lookup)[id(pull)]
+        self.assertEqual([(u['ability'], u['category']) for u in uses], [('Evangelism', 'throughput')])
+
+
 class TestMajorVsRotational(unittest.TestCase):
     """Immolation Aura / Death and Decay are pressed on cooldown or on procs: judged on how often, not when."""
     SPELLS = {20: {'name': 'Death and Decay', 'meta': 'Instant · 30 sec cooldown'},
@@ -890,6 +917,10 @@ class TestThroughputAndUptime(unittest.TestCase):
         pulls = [f(1, False, 90, 40), f(2, False, 60, 120), f(3, False, 30, 200), f(4, False, 45, 180),
                  f(5, False, 20, 50), f(6, False, 25, 240), f(7, True, 0, 300)]
         self.assertEqual(sync.detail_fight_ids(pulls), {7, 6, 3, 4})       # the kill + 3 furthest 1 min+ wipes
+        # A late joiner (11) in none of those: their own furthest pull too - one pull for both late joiners
+        raid = [1, 2, 3]
+        late = [dict(p, friendlyPlayers=raid + ([11, 12] if p['id'] in (1, 2) else [])) for p in pulls]
+        self.assertEqual(sync.detail_fight_ids(late), {7, 6, 3, 4, 2})
         # Uptime and casts per minute only count pulls with the detail; a cheap pull doesn't dilute them.
         numbered = [self.pull(1, True, 0.1, 0.6, 50)]
         cheap = self.pull(2, False, 0.1, 0.0, 0)
@@ -1080,6 +1111,9 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('Your cooldowns', html)
         self.assertIn('Power Infusion from Priestly', html)
         self.assertIn('Trueshot pressed · 0:05.0', html)
+        self.assertIn('data-remember="focus"', html)
+        self.assertIn('data-name="cds:Trueshot"', html)                             # pickers remembered by name
+        self.assertIn('data-name="t:Venomous Heart"', html)
 
     def test_view_renders_potion_timing(self):
         from raidanalysis.web import focusview
@@ -1150,8 +1184,13 @@ class TestFocusTimeline(unittest.TestCase):
         html = consumables.timeline([pull], analysis['players'], adds=adds,
                                     phase_names={'2': {'name': 'Stage Two', 'intermission': False}})
         self.assertIn('<span>Stage Two</span>', html)                               # the phase lane
-        self.assertIn('class="tl-row c-lane c-add" data-k="add0"', html)            # the heart's own lane
-        self.assertIn('class="tl-phase fspawnline" data-k="add0"', html)            # ...and its line through everyone
+        self.assertIn('class="tl-row c-lane c-add" data-k="add:Venomous Heart"', html)  # the heart's own lane
+        self.assertIn('class="tl-phase fspawnline" data-k="add:Venomous Heart"', html)  # ...and its line through everyone
+        # Remembered across pulls by name (localStorage, PAGE_JS): never by position
+        self.assertIn('data-remember="raid"', html)
+        self.assertIn('value="add:Venomous Heart" data-name="add:Venomous Heart" checked', html)
+        self.assertIn('data-name="cd:raid:Rallying Cry"', html)
+        self.assertIn('data-k="death" data-name="death"', html)
         self.assertIn('Venomous Heart #1 · appeared 2:20.0, died 2:45 (25 s) · a priority', html)
         self.assertNotIn('you never hit', html)                                     # the raid's view, not a player's
         self.assertIn('data-dd="boss"', html)
@@ -1162,11 +1201,11 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('class="m dot" data-k="healing"', html)                       # ...and dot
         self.assertIn('<b class="sp431932"></b>', html)                             # the potion's icon on its bar
         self.assertIn('data-spell="97462"', html)                                   # the dropdown entry has its tooltip
-        self.assertIn('value="cd:raid:Rallying Cry">', html)                        # cooldowns off by default
+        self.assertIn('value="cd:raid:Rallying Cry" data-name="cd:raid:Rallying Cry">', html)  # off by default
         self.assertIn('class="m cd sp97462" data-k="cd:raid:Rallying Cry"', html)
         loading = consumables.timeline([pull], analysis['players'], loading='<div class="castbar-wrap"></div>')
         self.assertIn('castbar-wrap', loading)                                      # adds not loaded yet
-        self.assertNotIn('value="add0"', loading)
+        self.assertNotIn('value="add:', loading)
         self.assertIn('value="phases"', loading)                                    # phases don't need them
 
 

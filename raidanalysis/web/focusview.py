@@ -333,7 +333,7 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     menu = ''.join(
         f'<div><h5>{label}</h5>' + ''.join(
             f'<label data-spell="{sid}" data-tip="{esc(tip)}"><input type="checkbox" value="{key}" data-cat="{cat}" '
-            f'checked>{_icon(icon)}{esc(name)} <span class="muted">×{count}</span></label>'
+            f'data-name="{esc(cat + ":" + name)}" checked>{_icon(icon)}{esc(name)} <span class="muted">×{count}</span></label>'
             for key, name, icon, count, sid, tip in picks) + '</div>'
         for cat, label, picks in groups)
     chips = ''.join(f'<button type="button" class="tl-chip" data-cat="{cat}" aria-pressed="true">{label}</button>'
@@ -342,7 +342,8 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
         chips += (f'<details class="tl-pick"><summary>🎛️ Pick cooldowns & buffs ▾</summary>'
                   f'<div class="tl-pick-menu">{menu}</div></details>')
     chips += ''.join(
-        f'<button type="button" class="tl-chip" data-g="{key}" aria-pressed="{"true" if key in on else "false"}" '
+        f'<button type="button" class="tl-chip" data-g="{key}" data-name="{esc("t:" + target)}" '
+        f'aria-pressed="{"true" if key in on else "false"}" '
         f'style="--c:{color_of.get(target, OTHER_COLOR)}">{_chip_mark(npc_icons.get(target))}{esc(target)}'
         f'{" ×" + str(len(next(k["spawns"] for k in kinds if k["target"] == target))) if target in add_kinds else ""}'
         f'</button>' for target, key in keys.items())
@@ -365,7 +366,7 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
         return f' data-g="{key}"' + (' hidden' if key not in on else '') if key and key != 'abilities' else ''
     labels = ''.join(label.replace('<div ', f'<div{attrs(key)} ', 1) for label, _, _, key in lanes)
     tracks = ''.join(f'<div class="tl-row {cls}"{attrs(key)}>{body}</div>' for _, cls, body, key in lanes)
-    return f"""<div class="tl focus-tl" data-duration="{duration}">
+    return f"""<div class="tl focus-tl" data-duration="{duration}" data-remember="focus">
         <div class="tl-chips"><span class="chips-label">Show</span>{chips}</div>
         <div class="tl-tools">
             <span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom · hover anything</span>

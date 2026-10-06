@@ -92,16 +92,29 @@ DETAIL_MIN_MS = 60000
 
 
 def detail_fight_ids(pulls):
-    """Which of a report's pulls get the per-player detail: kills, and the DETAIL_WIPES furthest wipes per boss."""
+    """
+    Which of a report's pulls get the per-player detail: kills, and the DETAIL_WIPES furthest wipes per boss -
+    plus, for anyone in none of those (joined late, sat out the kill), their own furthest pull, so everyone has
+    one to show their rotation from. One such pull usually covers several of them (friendlyPlayers: who was in it).
+    """
     groups, out = {}, set()
     for f in pulls:
         groups.setdefault((f.get('encounterID'), f.get('difficulty')), []).append(f)
+
+    def furthest(f):
+        return (not f.get('kill'), f.get('fightPercentage') if f.get('fightPercentage') is not None else 100,
+                -(f['endTime'] - f['startTime']))
     for fights in groups.values():
-        out |= {f['id'] for f in fights if f.get('kill')}
-        wipes = [f for f in fights if not f.get('kill') and f['endTime'] - f['startTime'] >= DETAIL_MIN_MS]
-        wipes.sort(key=lambda f: (f.get('fightPercentage') if f.get('fightPercentage') is not None else 100,
-                                  -(f['endTime'] - f['startTime'])))
-        out |= {f['id'] for f in wipes[:DETAIL_WIPES]}
+        chosen = {f['id'] for f in fights if f.get('kill')}
+        wipes = sorted((f for f in fights if not f.get('kill') and f['endTime'] - f['startTime'] >= DETAIL_MIN_MS),
+                       key=furthest)
+        chosen |= {f['id'] for f in wipes[:DETAIL_WIPES]}
+        covered = {p for f in fights if f['id'] in chosen for p in f.get('friendlyPlayers') or []}
+        for f in wipes:  # furthest first: the best pull left for whoever isn't covered yet
+            if f['id'] not in chosen and set(f.get('friendlyPlayers') or []) - covered:
+                chosen.add(f['id'])
+                covered |= set(f['friendlyPlayers'])
+        out |= chosen
     return out
 
 
@@ -340,12 +353,14 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                 # A log someone asked about (Discord recap): kept for a week like an import, unless it's a
                 # recent guild log anyway (then the guild list below upgrades it).
                 codes += [(c, 'manual', False) for c in extra_codes if c not in force_codes]
-                # Finished nights too, while their pulls lack throughput / uptime (fetched since).
+                # Finished nights too, while their pulls lack throughput / uptime (fetched since) - or someone
+                # has no pull with the per-player detail (picked for late joiners since: detail_fight_ids).
                 from .throughput import EXTRAS_VERSION
                 codes += [(r['code'], 'guild', False) for r in listed
                           if r['code'] not in force_codes and r['code'] not in extra_codes
                           and (not db.report_is_final(r['code'])
-                               or db.fight_ids_missing_extras(r['code'], EXTRAS_VERSION))]
+                               or db.fight_ids_missing_extras(r['code'], EXTRAS_VERSION)
+                               or db.players_missing_detail(r['code'], DETAIL_MIN_MS))]
                 queued = {code for code, _, _ in codes}
                 codes += [(c, 'event', False) for c in _event_codes_to_sync(queued)]
                 for i, (code, source, force) in enumerate(codes):

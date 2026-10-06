@@ -73,7 +73,10 @@ def cooldowns_by_pull(pulls, spell_lookup=None, majors=None):
     the ones their spec's top players use as majors on this boss (majors = benchmarks.spec_majors),
     else anything with a 60 s+ cooldown. Spells not looked up on Wowhead yet just don't show.
     """
-    tracked = {cd['ability_id'] for p in pulls for cd in p['analysis'].get('cooldowns') or []}
+    def still_tracked(p):  # stored with the list as it was then: a cooldown taken off it comes from the casts
+        return [dict(cd, category=cooldowns.COOLDOWNS[cd['ability']]) for cd in p['analysis'].get('cooldowns') or []
+                if cd['ability'] in cooldowns.COOLDOWNS]
+    tracked = {cd['ability_id'] for p in pulls for cd in still_tracked(p)}
     consumed = {u['ability_id'] for p in pulls for u in p['analysis'].get('consumables') or []}
     ids = {sid for p in pulls for casts in (p['analysis'].get('casts') or {}).values() for _, sid in casts}
     ids -= tracked | consumed
@@ -81,7 +84,7 @@ def cooldowns_by_pull(pulls, spell_lookup=None, majors=None):
     majors = majors or {}
     out = {}
     for p in pulls:
-        uses = list(p['analysis'].get('cooldowns') or [])
+        uses = still_tracked(p)
         roster = {pl['name']: pl for pl in p['analysis'].get('players') or []}
         for player, casts in (p['analysis'].get('casts') or {}).items():
             who = roster.get(player, {})
@@ -107,7 +110,7 @@ def _dropdown(key, label, items):
     def row(k, mark, name, count, sid, tip, on):
         attrs = (f' data-spell="{int(sid)}"' if sid else '') + (f' data-tip="{esc(tip)}"' if tip else '')
         times = f' <span class="muted">×{count}</span>' if count else ''
-        return (f'<label{attrs}><input type="checkbox" value="{esc(k)}"{" checked" if on else ""}>{mark}'
+        return (f'<label{attrs}><input type="checkbox" value="{esc(k)}" data-name="{esc(k)}"{" checked" if on else ""}>{mark}'
                 f'<span>{esc(name)}</span>{times}</label>')
     rows = ''.join(row(*item) for item in items)
     return (f'<details class="tl-dd" data-dd="{key}"><summary><span>{label}</span><b class="tl-dd-n"></b>'
@@ -146,7 +149,7 @@ def toolbar(pulls, single, cds, boss_items=()):
                 for name, e in abilities]))
     chips = ''.join(dds)
     if single:
-        chips += (f'<button type="button" class="tl-chip" data-k="death" aria-pressed="true">'
+        chips += (f'<button type="button" class="tl-chip" data-k="death" data-name="death" aria-pressed="true">'
                   f'<i style="--c:{DEATH}"></i>Deaths</button>')
     if not used and not any('cooldowns' in p['analysis'] for p in pulls):
         chips += '<span class="muted small">Re-analyze to see cooldowns (defensives, externals, raid CDs).</span>'
@@ -191,16 +194,17 @@ def _boss_section(source, adds, phase_names, npc_icons, at, longest):
                   for p in phases[1:] if p.get('start')]
         items.append(('phases', '<i class="tl-key k-phase"></i>', 'Phases', len(phases), None, None, True))
     for i, kind_ in enumerate(adds or []):
-        key, target = f'add{i}', kind_['target']
+        target = kind_['target']
+        key = f'add:{target}'  # by name: the same add keeps its toggle from pull to pull
         color = focusview.COLORS[i] if i < len(focusview.COLORS) else focusview.OTHER_COLOR
         prio = ('<span class="pill pill-kill" data-tip="A priority: the top DPS pile into it">★</span>'
                 if kind_['priority'] else '')
         mark = focusview._swatch(color, npc_icons.get(target))
-        labels.append(f'<div class="tl-lab c-add" data-k="{key}" title="{esc(target)}"><span class="flab">{mark}'
+        labels.append(f'<div class="tl-lab c-add" data-k="{esc(key)}" title="{esc(target)}"><span class="flab">{mark}'
                       f'<span>{esc(target)}</span></span><small>×{len(kind_["spawns"])}</small>{prio}</div>')
-        rows.append(f'<div class="tl-row c-lane c-add" data-k="{key}">'
+        rows.append(f'<div class="tl-row c-lane c-add" data-k="{esc(key)}">'
                     f'{focusview.spawn_lane(kind_, color, longest, you=False)}</div>')
-        lines += [f'<i class="tl-phase fspawnline" data-k="{key}" style="left:{at(w["start"])};--c:{color}"></i>'
+        lines += [f'<i class="tl-phase fspawnline" data-k="{esc(key)}" style="left:{at(w["start"])};--c:{color}"></i>'
                   for w in kind_['spawns']]
         items.append((key, mark, target, len(kind_['spawns']), None,
                       'A priority: the top DPS pile into it' if kind_['priority'] else None, True))
@@ -309,7 +313,7 @@ def timeline(pulls, roster, spell_lookup=None, majors=None, adds=None, phase_nam
                     for t in range(0, longest + 1, 60000))
     icon_css = ''.join(f'.sp{int(sid)}{{background-image:url({_icon_src(icon)})}}'
                        for sid, (_, icon) in spells.items() if icon and _icon_src(icon))
-    return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}"
+    return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}" data-remember="raid"
         style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']}">
         <style>{icon_css}</style>
         {toolbar(pulls, single, cds, boss_items)}

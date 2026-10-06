@@ -18,7 +18,10 @@ _BY_CATEGORY = {
     'raid': (
         'Anti-Magic Zone', 'Darkness', 'Rallying Cry', 'Commanding Shout', 'Aura Mastery', 'Spirit Link Totem',
         'Healing Tide Totem', 'Earthen Wall Totem', 'Ancestral Guidance', 'Power Word: Barrier', 'Divine Hymn',
-        'Vampiric Embrace', 'Evangelism', 'Ultimate Penitence', 'Apotheosis', 'Tranquility', 'Revival', 'Restoral',
+        # Not Evangelism / Ultimate Penitence (a Discipline Priest's ramp) or Apotheosis (a Holy Priest's
+        # burst): a healer's own cooldowns, judged as their major ones (benchmarks: a 30 s+ cooldown that
+        # isn't listed here), not raid assignments
+        'Vampiric Embrace', 'Tranquility', 'Revival', 'Restoral',
         'Rewind', 'Dream Flight', 'Zephyr', 'Mass Barrier',
     ),
     'external': (
