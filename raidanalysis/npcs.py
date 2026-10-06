@@ -48,6 +48,18 @@ def icons(names):
         return {}
 
 
+def wowhead_links(names):
+    """{name: Wowhead URL}: the NPC's page when a lookup found its id, else a Wowhead search for the name."""
+    from urllib.parse import quote
+    from . import db
+    try:
+        ids = db.get_npc_ids(sorted(set(names)))
+    except Exception:
+        ids = {}
+    return {n: NPC_PAGE.format(id=int(ids[n])) if n in ids else f'https://www.wowhead.com/search?q={quote(n)}'
+            for n in names}
+
+
 def ensure(code, names):
     """Look up the portraits of these enemies (from report `code`'s actors) not cached yet, in the background."""
     from . import db

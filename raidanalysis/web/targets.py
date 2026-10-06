@@ -6,7 +6,7 @@ and inline under a row of a player's "Where your damage went" (you highlighted, 
 Data: throughput.target_ranking() - everyone's damage per target (focus.load_by_target), else the pulls'
 DamageDone tables.
 """
-from .render import CLASS_COLORS, ROLE_ICONS, esc, fmt_amount, npc_portrait
+from .render import CLASS_COLORS, ROLE_ICONS, esc, fmt_amount, npc_zoom
 
 ROWS_SHOWN = 8  # per target card; the rest behind "Show all"
 
@@ -65,19 +65,21 @@ def _order(ranked, priority):
     return sorted(ranked, key=lambda t: (t['name'] not in priority, not t['main'], -t['total']))
 
 
-def section(ranked, priority=(), scope='', loading='', npc_icons=None):
+def section(ranked, priority=(), scope='', loading='', npc_icons=None, npc_links=None):
     """The Mechanics tab's card: one ranking per target; loading: a cast bar while everyone's damage still
-    comes from WCL (the cards show the top-5 lists meanwhile); npc_icons: {target: portrait url} (npcs.icons)."""
+    comes from WCL (the cards show the top-5 lists meanwhile); npc_icons: {target: portrait url} (npcs.icons),
+    npc_links: {target: Wowhead URL} (npcs.wowhead_links) - the name opens it in a new tab."""
     if not ranked:
         return ''
-    npc_icons = npc_icons or {}
+    npc_icons, npc_links = npc_icons or {}, npc_links or {}
     cards = []
     for t in _order(ranked, set(priority)):
         pills = ('<span class="pill pill-kill">priority</span>' if t['name'] in priority else '') + \
                 ('<span class="pill pill-muted">boss</span>' if t['main'] or t['type'] == 'Boss' else '')
         cards.append(f"""
             <div class="dt-card">
-                <div class="dt-head">{npc_portrait(npc_icons.get(t['name']), size='lg')}<b>{esc(t['name'])}</b>{pills}
+                <div class="dt-head">{npc_zoom(t['name'], npc_icons.get(t['name']), npc_links.get(t['name']))}
+                    {_name(t['name'], npc_links.get(t['name']))}{pills}
                     <span class="muted small">{fmt_amount(t['total'])} · {sum(1 for p in t['players'] if p['damage'] > 0)} players</span></div>
                 {ranking(t)}
             </div>""")
@@ -93,3 +95,11 @@ def section(ranked, priority=(), scope='', loading='', npc_icons=None):
         {loading}
         <div class="dt-cards">{''.join(cards)}</div>
     </div>"""
+
+
+def _name(name, href):
+    """The target's name - a link to its Wowhead page (new tab) when there is one."""
+    if not href or not href.startswith('https://www.wowhead.com/'):
+        return f'<b>{esc(name)}</b>'
+    return (f'<a class="dt-npc" href="{esc(href)}" target="_blank" rel="noopener" title="{esc(name)} on Wowhead">'
+            f'<b>{esc(name)}</b><span aria-hidden="true">↗</span></a>')

@@ -11,7 +11,7 @@ compact card each.
 Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from data-tip / data-spell).
 """
 from .. import focus, spells
-from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, npc_portrait, safe_icon
+from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, npc_portrait, npc_zoom, safe_icon
 
 # Categorical slots, dark steps, in fixed order (validated on the card surface #161a2c: all checks pass).
 COLORS = ('#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#8f6ce0')
@@ -303,10 +303,18 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                       _target_lane(target, mine.get(target) or [], None if main else raid_rows.get(target),
                                    [w for w in wins if w['target'] == target], color, step, duration, peak,
                                    always_up), keys[target]))
+    def pot_icon(p):  # the potion's own icon, like the raid timeline's (🧪 when the log gave none)
+        src = safe_icon(p.get('icon') if not p.get('icon') or p['icon'].startswith('http') else ICON_BASE + p['icon'])
+        return f'<b style="background-image:url({src})"></b>' if src else '<span>🧪</span>'
+    spells.offer([p['ability_id'] for p in potions if p.get('ability_id')])  # their Wowhead tooltips
+
+    def pot_spell(p):
+        return f'data-spell="{int(p["ability_id"])}" ' if p.get('ability_id') else ''
     pots = ''.join(
         f'<i class="fpot" style="left:{_at(p["t"], duration)};width:{100 * max(1000, (p.get("end") or p["t"] + 30000) - p["t"]) / duration:.3f}%" '
+        f'{pot_spell(p)}'
         f'data-tip="{esc(p.get("ability") or "Potion")} · {_clock(p["t"])}–{fmt_duration(p.get("end") or p["t"] + 30000)}">'
-        f'<span>🧪</span></i>' for p in potions)
+        f'{pot_icon(p)}</i>' for p in potions)
     for w in wins:
         pot = potion_lead(potions, w, wins)
         if pot:
@@ -467,7 +475,12 @@ def _chip_mark(icon):
     return npc_portrait(icon) or '<i></i>'
 
 
-def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, idx, wins, icon=None):
+def _card_mark(name, color, icon, href, size=''):
+    """An add card's portrait - a button showing it bigger (npc_zoom) - or its colour swatch."""
+    return npc_zoom(name, icon, href, color, size) or _swatch(color)
+
+
+def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, idx, wins, icon=None, href=None):
     cls, text = VERDICTS.get(kind['verdict'], ('pill-muted', '—'))
     spawns = kind['spawns']
     rows = ''.join(
@@ -498,7 +511,7 @@ def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, 
                     for i, (t, _, body) in enumerate(tabs))
     return f"""
         <div class="fcard prio" style="--c:{color}" id="fcard-{idx}">
-            <div class="fcard-head">{_swatch(color, icon, 'md')}<b>{esc(kind['target'])}</b>
+            <div class="fcard-head">{_card_mark(kind['target'], color, icon, href, 'md')}<b>{esc(kind['target'])}</b>
                 <span class="muted small">{len(spawns)} spawn{'s' if len(spawns) != 1 else ''}</span>
                 <span class="pill {cls}">{text}</span></div>
             <div class="ftabs" role="tablist">{buttons}</div>
@@ -506,7 +519,7 @@ def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, 
         </div>"""
 
 
-def _compact_card(kind, color, icon=None):
+def _compact_card(kind, color, icon=None, href=None):
     """A kind of add that isn't a priority: your share against the top DPS's, a square per spawn."""
     def square(k, w):
         band = ('bad' if w['first_hit'] is None else
@@ -517,7 +530,7 @@ def _compact_card(kind, color, icon=None):
     squares = ''.join(square(k, w) for k, w in enumerate(kind['spawns'], 1))
     return f"""
         <div class="fcard compact" style="--c:{color}">
-            <div class="fcard-head">{_swatch(color, icon)}<b>{esc(kind['target'])}</b>
+            <div class="fcard-head">{_card_mark(kind['target'], color, icon, href, 'md')}<b>{esc(kind['target'])}</b>
                 <span class="muted small">×{len(kind['spawns'])}</span></div>
             {_share_bar(kind['you_share'], kind['raid_share'], color)}
             <div class="fcompact-meta"><span>you {_pct(kind['you_share'])} · top DPS {_pct(kind['raid_share'])}</span>
@@ -527,12 +540,13 @@ def _compact_card(kind, color, icon=None):
         </div>"""
 
 
-def cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_icons=None):
+def cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_icons=None, npc_links=None):
     """
     One card per kind of add: priorities (Overall + a tab per spawn) first, then the rest compactly.
-    top_share / my_share: {target: share of all damage over the top players' kill / this pull}.
+    top_share / my_share: {target: share of all damage over the top players' kill / this pull}; npc_icons /
+    npc_links: {target: portrait / Wowhead URL} - a portrait opens bigger on a click.
     """
-    npc_icons = npc_icons or {}
+    npc_icons, npc_links = npc_icons or {}, npc_links or {}
     wins = focus.windows(data)
     kinds = focus.add_types(wins)
     prio = [k for k in kinds if k['priority']]
@@ -542,13 +556,13 @@ def cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_ic
         out += ('<h4>Priority adds</h4><p class="muted small">The ones the top DPS pile into. Overall first; a tab per '
                 'spawn for its reaction, potion timing and cooldowns.</p><div class="fcards prio">'
                 + ''.join(_priority_card(k, color_of.get(k['target'], OTHER_COLOR), potions, cooldowns, top_share,
-                                         my_share, label, i, wins, npc_icons.get(k['target']))
+                                         my_share, label, i, wins, npc_icons.get(k['target']), npc_links.get(k['target']))
                          for i, k in enumerate(prio)) + '</div>')
     if rest:
         out += ('<h4>Other adds</h4><p class="muted small">Your share of your damage while they were up (the tick: the '
                 'top DPS\'s), and a square per spawn - green on it, amber partly, red never hit.</p>'
                 '<div class="fcards compact">' + ''.join(_compact_card(k, color_of.get(k['target'], OTHER_COLOR),
-                                                                       npc_icons.get(k['target']))
+                                                                       npc_icons.get(k['target']), npc_links.get(k['target']))
                                                          for k in rest) + '</div>')
     return out
 

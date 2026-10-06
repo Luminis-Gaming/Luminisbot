@@ -285,11 +285,25 @@ tr.muted-row td { opacity: 0.7; }
 .tl-key.k-tick { width: 3px; height: 12px; margin: 0 5px; background: var(--c); }
 /* Enemy portraits (npcs.py), ringed in their timeline colour */
 .npc-icon { display: inline-block; width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
-    background-color: var(--surface-3); background-repeat: no-repeat; background-size: 170%;
+    background-color: #000; background-repeat: no-repeat; background-size: 170%;
     background-position: center 45%; box-shadow: 0 0 0 2px var(--c, var(--border-strong)); }
 .npc-icon.md { width: 28px; height: 28px; }
-.npc-icon.lg { width: 44px; height: 44px; border-radius: 10px; background-size: 150%;
-    background-color: color-mix(in srgb, var(--c, #7484ec) 14%, var(--surface-3)); }
+.npc-icon.lg { width: 44px; height: 44px; border-radius: 10px; background-size: 150%; }
+/* Damage by target: the portrait opens a bigger view (#npc-modal), the name its Wowhead page */
+.npc-zoom { display: inline-flex; padding: 0; border: 0; background: none; border-radius: 10px; cursor: zoom-in;
+    flex-shrink: 0; transition: transform .15s; }
+.npc-zoom:hover, .npc-zoom:focus-visible { transform: scale(1.08); }
+.npc-zoom:hover .npc-icon, .npc-zoom:focus-visible .npc-icon { box-shadow: 0 0 0 2px var(--accent); }
+.npc-zoom:focus-visible { outline: none; }
+.dt-npc { display: inline-flex; align-items: baseline; gap: 4px; color: var(--text); text-decoration: none; }
+.dt-npc span { font-size: 11px; color: var(--faint); opacity: 0; transition: opacity .15s; }
+.dt-npc:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.dt-npc:hover span, .dt-npc:focus-visible span { opacity: 1; }
+.clip-box.npc-box { width: min(380px, 100%); text-align: center; }
+.npc-box .clip-head { text-align: left; }
+.npc-box img { display: block; width: 100%; max-width: 300px; aspect-ratio: 1; margin: 12px auto 8px; border-radius: 12px;
+    background: #000; object-fit: contain; }
+@media (prefers-reduced-motion: reduce) { .npc-zoom, .dt-npc span { transition: none; } }
 .tl-chip .npc-icon { width: 16px; height: 16px; box-shadow: none; }
 /* Raid timeline's Boss lanes: phases, then a lane per kind of add */
 .cons-tl .tl-row.c-lane::before { display: none; }
@@ -461,6 +475,9 @@ tr.muted-row td { opacity: 0.7; }
 .fpot { position: absolute; top: 5px; bottom: 5px; border-radius: 4px; background: rgba(81,207,102,0.22);
     box-shadow: inset 0 0 0 1px rgba(81,207,102,0.7); cursor: help; }
 .fpot span { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); font-size: 11px; }
+.fpot > b { position: absolute; left: 0; top: 50%; width: 18px; height: 18px; transform: translate(-50%, -50%);
+    border-radius: 4px; background-size: cover; background-color: var(--surface);
+    box-shadow: 0 0 0 1.5px var(--surface-2), 0 0 0 3px rgba(81,207,102,0.8); }
 .focus-table .group-head th { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint);
     border-bottom: 1px solid var(--border); }
 .focus-table .col-pull, .focus-table .col-all { border-left: 1px solid var(--border); }
@@ -1203,6 +1220,38 @@ document.querySelectorAll('.tl').forEach(tl => {
   });
   document.addEventListener('scroll', () => { tip.hidden = true; }, true);
 })();
+// Enemy portraits (npc_zoom: damage by target, the focus view's add cards) open the creature's render bigger,
+// with its Wowhead link - one pop-up for the page, made the first time it's needed.
+const npcModal = () => {
+  let modal = document.getElementById('npc-modal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'npc-modal'; modal.className = 'clip-modal'; modal.hidden = true;
+  modal.innerHTML = '<div class="clip-box npc-box" role="dialog" aria-modal="true" aria-labelledby="npc-modal-name">'
+    + '<div class="clip-head"><h3 id="npc-modal-name"></h3><button class="clip-close npc-close" aria-label="Close">✕</button></div>'
+    + '<img alt=""><p class="muted small"><a class="npc-link" target="_blank" rel="noopener">Open on Wowhead ↗</a></p></div>';
+  document.body.appendChild(modal);
+  return modal;
+};
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.npc-zoom');
+  const modal = btn ? npcModal() : document.getElementById('npc-modal');
+  if (!modal) return;
+  if (btn) {
+    modal.querySelector('h3').textContent = btn.dataset.name;
+    const img = modal.querySelector('img'); img.src = btn.dataset.src; img.alt = btn.dataset.name;
+    const link = modal.querySelector('.npc-link');
+    link.hidden = !btn.dataset.href.startsWith('https://www.wowhead.com/'); link.href = btn.dataset.href;
+    modal.hidden = false; modal.querySelector('.npc-close').focus();
+    modal.returnTo = btn;
+  } else if (!modal.hidden && (e.target === modal || e.target.closest('.npc-close'))) {
+    modal.hidden = true; if (modal.returnTo) modal.returnTo.focus();
+  }
+});
+document.addEventListener('keydown', e => {
+  const modal = document.getElementById('npc-modal');
+  if (e.key === 'Escape' && modal && !modal.hidden) { modal.hidden = true; if (modal.returnTo) modal.returnTo.focus(); }
+});
 // Mechanic clip pop-up: the Mythic Trap iframe only loads when someone opens it.
 document.addEventListener('click', e => {
   const btn = e.target.closest('.clip-btn');
@@ -1349,6 +1398,19 @@ def npc_portrait(url, color=None, size=''):
     ring = f';--c:{color}' if color else ''
     return (f'<span class="npc-icon{" " + size if size else ""}" role="img" aria-hidden="true" '
             f'style="background-image:url({src}){ring}"></span>')
+
+
+def npc_zoom(name, icon, href=None, color=None, size='lg'):
+    """
+    An enemy's portrait as a button that shows its render bigger, with its Wowhead link (href) - the pop-up
+    is made by PAGE_JS on first use. '' without a safe portrait URL.
+    """
+    portrait = npc_portrait(icon, color, size)
+    if not portrait:
+        return ''
+    href = href if (href or '').startswith('https://www.wowhead.com/') else ''
+    return (f'<button type="button" class="npc-zoom" data-src="{esc(safe_icon(icon))}" data-name="{esc(name)}" '
+            f'data-href="{esc(href)}" aria-label="Show {esc(name)} bigger">{portrait}</button>')
 
 
 def boss_portrait(encounter_id, size='', killed=False):

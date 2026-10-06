@@ -1131,7 +1131,8 @@ async def _damage_by_target(request, code, numbered, scope):
     ranked = throughput.target_ranking(numbered, stored, up)
     names = [t['name'] for t in ranked]
     npcs.ensure(code, names)
-    return dtargets.section(ranked, focus.priority_targets(code, pulls), scope, loading, npcs.icons(names))
+    return dtargets.section(ranked, focus.priority_targets(code, pulls), scope, loading, npcs.icons(names),
+                            npcs.wowhead_links(names))
 
 
 async def _focus_section(request, code, numbered, whole_night, name, damage_href):
@@ -1198,7 +1199,8 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
            Your potion and major cooldowns are at the bottom. Hover anything for the numbers.</p>
         {focusview.timeline(data, pull, name, color_of, order, cooldowns, potions, pull.get('phases') or [],
                             (db.get_report(code) or {}).get('phase_names'), npc_icons)}
-        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_icons)}""", pull_focus
+        {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_icons,
+                         npcs.wowhead_links(enemies))}""", pull_focus
 
 
 async def handle_spell(request):

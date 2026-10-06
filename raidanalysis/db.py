@@ -692,6 +692,15 @@ def get_npcs(names, version):
     return {r['name']: r['icon'] for r in rows}
 
 
+def get_npc_ids(names):
+    """{name: NPC id} for the enemies whose id a portrait lookup found (npcs.py)."""
+    if not names:
+        return {}
+    rows = _run("SELECT name, game_id FROM raid_npcs WHERE name = ANY(%s) AND game_id IS NOT NULL",
+                (list(names),), fetch='all')
+    return {r['name']: r['game_id'] for r in rows}
+
+
 def save_npc(name, game_id, icon, status, version):
     _run("""
         INSERT INTO raid_npcs (name, game_id, icon, status, version, fetched_at) VALUES (%s, %s, %s, %s, %s, NOW())

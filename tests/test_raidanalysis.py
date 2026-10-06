@@ -1127,6 +1127,12 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('Venomous Heart #1 · appeared 2:20.0, died 2:45', html)        # a bar per spawn
         self.assertIn('class="fspawn died"', html)
         self.assertIn('<span>10.0 s</span>', html)                                  # potion -> add bracket
+        self.assertIn('<span>🧪</span>', html)                                      # no icon in the log: the emoji
+        iconned = focusview.timeline(d, pull, 'Boops', color_of, order, [], [dict(potions[0], ability_id=431932,
+                                     icon='trade_alchemy_potionc4.jpg')], [])
+        self.assertIn('data-spell="431932"', iconned)                               # its Wowhead tooltip
+        self.assertIn('<b style="background-image:url(https://assets.rpglogs.com/img/warcraft/abilities/'
+                      'trade_alchemy_potionc4.jpg)"></b>', iconned)                 # the potion's own icon
         self.assertIn('freact never', html)                                         # never hit it
         phased = focusview.timeline(d, dict(pull, encounter_id=7), 'Boops', color_of, order, [], [],
                                     [{'id': 1, 'start': 0}, {'id': 2, 'start': 120000}],
@@ -1145,7 +1151,10 @@ class TestFocusTimeline(unittest.TestCase):
         with_icons = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [], None, icons)
         self.assertIn('background-image:url(https://wow.zamimg.com/modelviewer/live/webthumbs/npc/196/143812.webp)',
                       with_icons)
-        self.assertIn('143812.webp', focusview.cards(d, color_of, potions, [], {}, {}, 'x', icons))
+        add_cards = focusview.cards(d, color_of, potions, [], {}, {}, 'x', icons,
+                                    {'Venomous Heart': 'https://www.wowhead.com/npc=1'})
+        self.assertIn('class="npc-zoom" data-src="https://wow.zamimg.com/modelviewer/live/webthumbs/npc/196/143812.webp" '
+                      'data-name="Venomous Heart" data-href="https://www.wowhead.com/npc=1"', add_cards)
         self.assertNotIn('evil.example', focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [], None,
                                                             {'Venomous Heart': 'https://evil.example/x.jpg'}))
 
@@ -1162,6 +1171,21 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('background-image:url(https://wow.zamimg.com/', npc_portrait(npcs.thumb_url(1), '#fff', 'lg'))
         self.assertEqual(npc_portrait('https://evil.example/x.webp'), '')
         self.assertEqual(npc_portrait('https://wow.zamimg.com/x.webp);background:url(//evil'), '')
+
+    def test_damage_by_target_portraits_and_links(self):
+        """A portrait opens it bigger (#npc-modal); the name opens its Wowhead page in a new tab."""
+        from raidanalysis.web import targets
+        ranked = [{'name': 'Blightscale Clutch', 'type': 'NPC', 'total': 10, 'main': False, 'pulls': 1, 'complete': True,
+                   'players': [{'name': 'Boops', 'class': 'Hunter', 'role': 'dps', 'damage': 10, 'dps': 1, 'share': 1,
+                                'pulls': 1}]}]
+        thumb = 'https://wow.zamimg.com/modelviewer/live/webthumbs/npc/196/143812.webp'
+        html = targets.section(ranked, npc_icons={'Blightscale Clutch': thumb},
+                               npc_links={'Blightscale Clutch': 'https://www.wowhead.com/npc=263535'})
+        self.assertIn(f'class="npc-zoom" data-src="{thumb}" data-name="Blightscale Clutch"', html)
+        self.assertIn('<a class="dt-npc" href="https://www.wowhead.com/npc=263535" target="_blank" rel="noopener"', html)
+        plain = targets.section(ranked, npc_links={'Blightscale Clutch': 'https://evil.example/'})
+        self.assertNotIn('evil.example', plain)                                    # only Wowhead links
+        self.assertNotIn('npc-zoom', plain)                                         # no portrait: nothing to open
 
     def test_raid_timeline_boss_lanes_and_dropdowns(self):
         """The heart's spawns get their own lane and a dashed line through everyone; categories are dropdowns."""
@@ -1193,6 +1217,9 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('data-k="death" data-name="death"', html)
         self.assertIn('Venomous Heart #1 · appeared 2:20.0, died 2:45 (25 s) · a priority', html)
         self.assertNotIn('you never hit', html)                                     # the raid's view, not a player's
+        side = [dict(adds[0], target='Blightscale Rawling', priority=False)]
+        quiet = consumables.timeline([pull], analysis['players'], adds=adds + side)
+        self.assertIn('value="add:Blightscale Rawling" data-name="add:Blightscale Rawling">', quiet)  # in the dropdown, off
         self.assertIn('data-dd="boss"', html)
         self.assertIn('data-dd="cons"', html)
         self.assertIn('data-dd="raid"', html)
