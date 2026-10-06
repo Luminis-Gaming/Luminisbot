@@ -1737,3 +1737,143 @@ class TestCoach(unittest.TestCase):
         self.assertEqual(focus.up_seconds(bins, 20), {'Heart': 7.0, 'Second Boss': 20.0})
         self.assertIn('target.name = "Heart" and (source.name = "A" or source.owner.name = "A"',
                       focus._up_filter({'Heart': ['A', 'B']}))
+
+
+class TestArmory(unittest.TestCase):
+    """The Character tab's data: realm slugs, Blizzard's gear or Raider.IO's, the full-body render."""
+
+    def test_realm_slug(self):
+        from raidanalysis import armory
+        self.assertEqual(armory.realm_slug('TarrenMill'), 'tarren-mill')       # WCL spells realms run together
+        self.assertEqual(armory.realm_slug('Tarren Mill'), 'tarren-mill')
+        self.assertEqual(armory.realm_slug("Kel'Thuzad"), 'kelthuzad')
+        self.assertEqual(armory.realm_slug(None), '')
+
+    def test_gear_from_raiderio_and_render_from_thumbnail(self):
+        from raidanalysis import armory
+        data = {'raiderio': {'thumbnail_url': 'https://render.worldofwarcraft.com/eu/character/x/0/1-avatar.jpg?alt=y',
+                             'gear': {'items': {'head': {'item_id': 1, 'item_level': 321, 'icon': 'inv_helm', 'name': 'Fangs',
+                                                         'item_quality': 4, 'enchant': 8017, 'gems': [], 'tier': 'tier'},
+                                                'wrist': {'item_id': 2, 'item_level': 331, 'icon': 'inv_bracer', 'name': 'Bracers',
+                                                          'item_quality': 4, 'gems': [213]}}}}}
+        gear = armory.items(data)
+        self.assertEqual((gear['HEAD']['ilvl'], gear['HEAD']['enchant'], gear['HEAD']['tier']), (321, True, True))
+        self.assertEqual((gear['WRIST']['enchant'], gear['WRIST']['sockets']), (None, 1))
+        self.assertEqual(armory.render_url(data), 'https://render.worldofwarcraft.com/eu/character/x/0/1-main-raw.png')
+
+    def test_blizzard_gear_wins(self):
+        from raidanalysis import armory
+        data = {'equipped_items': [{'slot': {'type': 'CHEST'}, 'name': 'Vest', 'level': {'value': 321},
+                                    'quality': {'type': 'EPIC'}, 'item': {'id': 9},
+                                    'enchantments': [{'display_string': 'Enchanted: Crystalline Radiance'}],
+                                    'sockets': [{'item': {'name': 'Gem'}}, {}], 'set': {}}],
+                'raiderio': {'gear': {'items': {'head': {'name': 'ignored'}}}}}
+        gear = armory.items(data)
+        self.assertEqual(list(gear), ['CHEST'])
+        self.assertEqual((gear['CHEST']['enchant'], gear['CHEST']['gems'], gear['CHEST']['sockets']),
+                         ('Crystalline Radiance', ['Gem'], 2))
+
+    def test_tab_flags_missing_enchants(self):
+        from raidanalysis.web import armory as view
+        data = {'raiderio': {'gear': {'items': {'back': {'item_id': 3, 'item_level': 321, 'icon': 'x', 'name': 'Drape',
+                                                         'item_quality': 4}}}}}
+        html = view.tab(data, {'name': 'Futhark', 'class': 'Hunter', 'missing_enchants': ['Back']})
+        self.assertIn('No enchant', html)
+        self.assertIn('https://www.wowhead.com/item=3', html)
+
+
+class TestCharacterPage(unittest.TestCase):
+    """character.py (one character across nights), its realm handling and web/character.py."""
+
+    def setUp(self):
+        from unittest import mock
+        from raidanalysis import character, db, guides
+        players = actors('Futhark', 'B', 'C', 'D')
+        self.pulls = []
+        for night in range(4):
+            for i in range(3):
+                kill = night >= 2 and i == 2
+                a = analyze(players, [damage(1, CAUSTIC, 500, t=1000 + k) for k in range(3 - night if night < 3 else 0)],
+                            deaths=died(('Futhark', 20000)) if night == 0 and i == 0 else [], kill=kill)
+                a['extras'] = {'players': {'Futhark': {'parse': {'rank': 40 + night * 15}, 'damage': 1e8}}}
+                self.pulls.append({'report_code': f'C{night}', 'fight_id': i + 1, 'encounter_id': 3010,
+                                   'encounter_name': "Ula'tek", 'difficulty': 5, 'kill': kill, 'start_ms': i * 1000,
+                                   'end_ms': i * 1000 + 300000, 'fight_pct': 0 if kill else 50 - night * 10 - i,
+                                   'analysis': a, 'report_title': f'Night {night}', 'zone_name': 'Undermine',
+                                   'report_start': 1757000000000 + night * 604800000})
+        patches = [mock.patch.object(db, 'character_pulls', lambda name, realm=None: self.pulls),
+                   mock.patch.object(guides, 'effective_tags', lambda enc: ({CAUSTIC: analyzer.TAG_AVOIDABLE}, {})),
+                   mock.patch.object(guides, 'apply_death_only', lambda *a, **k: None)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.prof = character.profile('Futhark', 'Frostwhisper')
+
+    def test_profile_per_boss_and_night(self):
+        prof = self.prof
+        self.assertEqual((prof['totals']['nights'], prof['totals']['pulls'], prof['totals']['kills']), (4, 12, 2))
+        boss = prof['bosses'][0]
+        self.assertEqual((boss['kills'], boss['best_parse'], boss['best_pct']), (2, 85.0, 0.0))
+        self.assertEqual(boss['first_kill'], self.pulls[6]['report_start'])
+        self.assertEqual(boss['nights'][0]['best_pct'], 48.0)
+        scores = [e['score'] for e in boss['nights']]
+        self.assertLess(scores[0], scores[-1])  # fewer avoidable hits, no death
+        self.assertEqual(prof['latest_code'], 'C3')
+        titles = [h['title'] for h in prof['highlights']]
+        self.assertIn('85 parse', titles)
+        self.assertTrue(any(t.startswith('+') for t in titles))  # most improved
+
+    def test_page_links_every_night(self):
+        from raidanalysis.web import character as view
+        html = view.page(self.prof, None, '<div class="card">gear</div>')
+        for night in range(4):
+            self.assertIn(f'/admin/raids/report/C{night}/player/Futhark?boss=3010-5', html)
+        self.assertIn('/admin/raids/boss/3010/5/player/Futhark', html)  # the boss trend
+        self.assertIn('Raid logs <span class="muted small">(4)</span>', html)
+        self.assertIn('data-pin=', html)
+        self.assertIn('Frostwhisper', html)
+        self.assertIn('warcraftlogs.com/character/eu/frostwhisper/futhark', html)
+
+    def test_lately_compares_recent_nights(self):
+        from raidanalysis.web import character as view
+        points = [{'score': s, 'parse': None, 'deaths': 0} for s in (40, 50, 60, 70, 80, 90)]
+        html = view._lately(points, 'score', 'Score lately')
+        self.assertIn('<b>80</b>', html)      # the last 3
+        self.assertIn('▲ 30', html)           # against the 3 before (50)
+        self.assertEqual(view._lately(points, 'parse', 'Parse'), '')
+
+    def test_urls_carry_the_realm(self):
+        from raidanalysis.web import character as view
+        self.assertEqual(view.url('Futhark', 'TarrenMill'), '/admin/raids/character/tarren-mill/Futhark')
+        self.assertEqual(view.url('Futhark'), '/admin/raids/character/Futhark')
+
+    def test_resolve_by_realm(self):
+        from unittest import mock
+        from raidanalysis import character, db
+        with mock.patch.object(db, 'realms_for', lambda name: [{'realm': 'TarrenMill', 'nights': 5},
+                                                               {'realm': 'Frostwhisper', 'nights': 2}]):
+            self.assertEqual(character.resolve('Futhark', 'frostwhisper')[0], 'Frostwhisper')
+            self.assertEqual(character.resolve('Futhark', 'draenor')[0], None)
+            self.assertEqual(character.resolve('Futhark'), (None, ['TarrenMill', 'Frostwhisper']))
+        with mock.patch.object(db, 'realms_for', lambda name: [{'realm': 'TarrenMill', 'nights': 5}]):
+            self.assertEqual(character.resolve('Futhark')[0], 'TarrenMill')
+
+    def test_unknown_realms_fold_into_the_known_one(self):
+        from raidanalysis import db
+        rows = [{'name': 'A', 'realm': 'X', 'pulls': 10, 'kills': 1, 'nights': 3, 'last_seen': 5, 'spec': 's', 'role': 'dps'},
+                {'name': 'A', 'realm': 'Y', 'pulls': 4, 'kills': 0, 'nights': 1, 'last_seen': 9, 'spec': 's', 'role': 'dps'},
+                {'name': 'A', 'realm': None, 'pulls': 6, 'kills': 2, 'nights': 2, 'last_seen': 7, 'spec': 'new', 'role': 'tank'},
+                {'name': 'B', 'realm': None, 'pulls': 1, 'kills': 0, 'nights': 1, 'last_seen': 1, 'spec': 's', 'role': 'dps'}]
+        out = {(r['name'], r['realm']): r for r in db._merge_unknown_realms(rows)}
+        self.assertEqual(set(out), {('A', 'X'), ('A', 'Y'), ('B', None)})
+        self.assertEqual((out['A', 'X']['pulls'], out['A', 'X']['nights'], out['A', 'X']['spec']), (16, 5, 'new'))
+
+    def test_front_page_characters_tab(self):
+        from raidanalysis.web import routes
+        html = routes._home_characters([{'name': 'Futhark', 'realm': 'Frostwhisper', 'class': 'Hunter', 'spec': 'Survival',
+                                         'role': 'dps', 'pulls': 9, 'kills': 1, 'nights': 2, 'last_seen': 1757000000000}])
+        self.assertIn('href="/admin/raids/character/frostwhisper/Futhark"', html)
+        self.assertIn('data-search="futhark frostwhisper survival hunter"', html)
+        self.assertIn('Search 1 characters', html)
+        self.assertEqual(routes._home_href({'tier': '3'}, 'bosses'), '/admin/raids?tier=3')
+        self.assertEqual(routes._home_href({}, 'characters'), '/admin/raids?tab=characters')

@@ -142,6 +142,26 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (report_code, fight_id, name)
         );
     """)
+    # Each player's realm per log (WCL's actor list): two characters of one name on different realms are two
+    # people - character pages go by realm and name
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_realms (
+            report_code TEXT NOT NULL REFERENCES raid_reports(code) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            realm TEXT NOT NULL,
+            PRIMARY KEY (report_code, name)
+        );
+    """)
+    # Characters for the player page's Character tab (armory.py): Blizzard + Raider.IO, by name and realm
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_armory (
+            name_key TEXT NOT NULL,
+            realm TEXT NOT NULL,
+            data JSONB NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            PRIMARY KEY (name_key, realm)
+        );
+    """)
     # Enemies' portraits for the timelines (npcs.py): Blizzard's creature render, by name (NULL: none found)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_npcs (
@@ -321,6 +341,14 @@ KEEP_EMPTY_DAYS = 30    # logs without raid pulls (M+, trash) are remembered thi
 # comparison pages - most of its size. The rest (roster, deaths, mechanics, interrupts, consumables)
 # stays for the boss pages, night-by-night and player trends.
 ARCHIVE_DROP = ('casts', 'cooldowns', 'boss_casts', 'extras', 'cast_ids', 'casts_seen')
+# ...but each player's totals and parse stay, as analysis['slim_extras'] ({name: {'damage', 'healing', 'active_ms',
+# 'parse'}}), so the character pages keep their parse history
+_SLIM_EXTRAS = """COALESCE((
+    SELECT jsonb_object_agg(e.key, jsonb_strip_nulls(jsonb_build_object(
+               'damage', e.value->'damage', 'healing', e.value->'healing', 'active_ms', e.value->'active_ms',
+               'parse', e.value->'parse')))
+    FROM jsonb_each(CASE WHEN jsonb_typeof(p.analysis->'extras'->'players') = 'object'
+                         THEN p.analysis->'extras'->'players' ELSE '{}'::jsonb END) e), '{}'::jsonb)"""
 
 _PAST_KEEP = """
     WITH raid AS (
@@ -351,8 +379,9 @@ def prune_reports():
                    ELSE COALESCE(old.created_at, NOW()) < NOW() - make_interval(days => %s) END
         RETURNING r.code
     """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, KEEP_EMPTY_DAYS), fetch='all')
-    archived = _run(_PAST_KEEP + """
-        UPDATE raid_pulls p SET analysis = (p.analysis - %s::text[]) || jsonb_build_object('archived', NOW())
+    archived = _run(_PAST_KEEP + f"""
+        UPDATE raid_pulls p SET analysis = (p.analysis - %s::text[]) || jsonb_build_object('archived', NOW(),
+               'slim_extras', {_SLIM_EXTRAS})
         FROM old
         WHERE p.report_code = old.code AND old.source <> 'manual'
           AND p.analysis IS NOT NULL AND NOT p.analysis ? 'archived'
@@ -680,6 +709,152 @@ def character_owners():
     return resolve_owners([(r['character_name'], r['discord_id'], r['n']) for r in signups],
                           [(r['character_name'], r['discord_id']) for r in linked],
                           {r['discord_id']: r['display'] for r in displays})
+
+
+# ============================================================================
+# CHARACTER PAGES (character.py)
+# ============================================================================
+
+# What a character's page needs of each pull: everything scoring uses, without the per-player timelines
+# and throughput (most of a pull's size) - apart from this character's own throughput row.
+_SLIM_ANALYSIS = """
+    (p.analysis - '{casts,cooldowns,boss_casts,cast_ids,casts_seen,extras,slim_extras}'::text[])
+    || jsonb_build_object('extras', jsonb_build_object(
+           'duration', p.analysis->'extras'->'duration',
+           'players', jsonb_strip_nulls(jsonb_build_object(%s::text, COALESCE(
+               p.analysis->'extras'->'players'->%s::text, p.analysis->'slim_extras'->%s::text)))))
+"""
+
+
+def list_characters(zone_id=None, difficulty=None, team=None):
+    """
+    Everyone in our own logs (imports left out - they may be anyone's raid), most nights first:
+    [{'name', 'class', 'spec', 'role', 'pulls', 'kills', 'nights', 'last_seen'}] - spec / role as last played.
+    """
+    where, params = _filters(zone_id, difficulty)
+    if team:
+        team_where, team_params = teams.sql_filter(team)
+        where, params = where + team_where, params + team_params
+    rows = _run(f"""
+        SELECT x->>'name' AS name, rr.realm, MAX(x->>'class') AS class,
+               (array_agg(x->>'spec' ORDER BY r.start_time DESC))[1] AS spec,
+               (array_agg(x->>'role' ORDER BY r.start_time DESC))[1] AS role,
+               COUNT(*) AS pulls, COUNT(*) FILTER (WHERE p.kill) AS kills,
+               COUNT(DISTINCT r.code) AS nights, MAX(r.start_time) AS last_seen
+        FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        {_EVENT_JOIN},
+        jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
+        LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = x->>'name'
+        WHERE r.source <> 'manual' AND COALESCE(x->>'name', '') <> '' {where}
+        GROUP BY x->>'name', rr.realm
+    """, params, fetch='all')
+    return _merge_unknown_realms(rows)
+
+
+def _merge_unknown_realms(rows):
+    """
+    Logs whose realms aren't recorded yet (backfilled a few per sync) count toward the realm we know for that
+    name - the one with the most nights when there are several. Most nights first.
+    """
+    by_name = {}
+    for r in rows:
+        by_name.setdefault(r['name'], []).append(dict(r))
+    out = []
+    for name, group in by_name.items():
+        known = [g for g in group if g['realm']]
+        unknown = [g for g in group if not g['realm']]
+        if known and unknown:
+            into = max(known, key=lambda g: g['nights'])
+            for u in unknown:
+                for key in ('pulls', 'kills', 'nights'):
+                    into[key] += u[key]
+                if u['last_seen'] > into['last_seen']:
+                    into.update(last_seen=u['last_seen'], spec=u['spec'], role=u['role'])
+            group = known
+        out += group
+    return sorted(out, key=lambda r: (-r['nights'], r['name'], r['realm'] or ''))
+
+
+def character_pulls(name, realm=None):
+    """
+    Every pull of our own logs a character was in, night by night: pull rows with a slimmed analysis
+    (_SLIM_ANALYSIS) and the night's title, start and zone. realm (WCL's spelling): only that realm's
+    character - logs whose realms aren't recorded yet count too.
+    """
+    realm_where = 'AND (rr.realm = %s OR rr.realm IS NULL)' if realm else ''
+    return _run(f"""
+        SELECT p.report_code, p.fight_id, p.encounter_id, p.encounter_name, p.difficulty, p.kill, p.start_ms,
+               p.end_ms, p.fight_pct, {_SLIM_ANALYSIS} AS analysis,
+               r.title AS report_title, r.start_time AS report_start, r.zone_name
+        FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = %s
+        WHERE r.source <> 'manual' AND p.analysis->'players' @> %s::jsonb {realm_where}
+        ORDER BY r.start_time, p.start_ms
+    """, (name, name, name, name, Json([{'name': name}])) + ((realm,) if realm else ()), fetch='all')
+
+
+def realms_for(name):
+    """The realms a character name is known on in our logs, most nights first: [{'realm', 'nights'}]."""
+    return _run("""
+        SELECT realm, COUNT(*) AS nights FROM raid_realms WHERE lower(name) = lower(%s)
+        GROUP BY realm ORDER BY COUNT(*) DESC
+    """, (name,), fetch='all')
+
+
+def save_realms(code, realms):
+    """{player name: realm} for one log (WCL's actor list)."""
+    rows = [(code, n, r) for n, r in realms.items() if n and r]
+    if not rows:
+        return
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.executemany("""
+                INSERT INTO raid_realms (report_code, name, realm) VALUES (%s, %s, %s)
+                ON CONFLICT (report_code, name) DO UPDATE SET realm = EXCLUDED.realm
+            """, rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reports_missing_realms(limit):
+    """Our logs with raid pulls whose players' realms aren't recorded yet, newest first."""
+    rows = _run("""
+        SELECT r.code FROM raid_reports r
+        WHERE r.source <> 'manual' AND EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = r.code)
+          AND NOT EXISTS (SELECT 1 FROM raid_realms rr WHERE rr.report_code = r.code)
+        ORDER BY r.start_time DESC LIMIT %s
+    """, (limit,), fetch='all')
+    return [r['code'] for r in rows]
+
+
+# ============================================================================
+# CHARACTERS (armory.py)
+# ============================================================================
+
+def get_armory(name, realm=None):
+    """
+    The most recently fetched character of that name (on that realm - Blizzard's slug - when given):
+    {'realm', 'data', 'fetched_at'} or None.
+    """
+    return _run("""
+        SELECT realm, data, fetched_at FROM raid_armory WHERE name_key = lower(%s) AND (%s::text IS NULL OR realm = %s)
+        ORDER BY fetched_at DESC LIMIT 1
+    """, (name, realm, realm), fetch='one')
+
+
+def realm_in(code, name):
+    """A character's realm in one log (WCL's spelling), or None when it isn't recorded."""
+    row = _run("SELECT realm FROM raid_realms WHERE report_code = %s AND name = %s", (code, name), fetch='one')
+    return row['realm'] if row else None
+
+
+def save_armory(name, realm, data):
+    _run("""
+        INSERT INTO raid_armory (name_key, realm, data, fetched_at) VALUES (lower(%s), %s, %s, NOW())
+        ON CONFLICT (name_key, realm) DO UPDATE SET data = EXCLUDED.data, fetched_at = NOW()
+    """, (name, realm, Json(data)))
 
 
 # ============================================================================

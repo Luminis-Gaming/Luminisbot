@@ -271,13 +271,14 @@ _all_actors = {}  # report code -> every actor (focus.py: enemies by id, a playe
 
 
 async def get_report_actors(session, code):
-    """Every actor in a report - players, pets, NPCs: [{'id', 'name', 'type', 'subType', 'petOwner', 'gameID'}]."""
+    """Every actor in a report - players, pets, NPCs: [{'id', 'name', 'type', 'subType', 'petOwner', 'gameID',
+    'server' (players' realm)}]."""
     if code not in _all_actors:
         if len(_all_actors) > 200:
             _all_actors.clear()
         data = await query(session, """
             query($code: String!) {
-              reportData { report(code: $code) { masterData { actors { id name type subType petOwner gameID } } } }
+              reportData { report(code: $code) { masterData { actors { id name type subType petOwner gameID server } } } }
             }
         """, {'code': code})
         _all_actors[code] = ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {})

@@ -246,6 +246,8 @@ async def sync_report(session, code, source='guild', force=False):
     # Recorded even without raid pulls (Mythic+ / trash logs) so they're only checked once -
     # the pages only list reports that have pulls.
     db.upsert_report(report, _phase_names(report), source=source)
+    # each player's realm (character pages go by realm and name: two of one name are two people)
+    db.save_realms(code, {a['name']: a.get('server') for a in ((report.get('masterData') or {}).get('actors') or [])})
     pulls = _raid_pulls(report)
     if not pulls:
         return 0
@@ -439,6 +441,12 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                     errors.append(_rate_limited(e))
                 except Exception as e:
                     logger.warning(f"[RAIDS] Benchmarks skipped: {e}")
+                try:  # players' realms for logs synced before they were recorded
+                    await _backfill_realms(session)
+                except wcl.WCLRateLimited as e:
+                    errors.append(_rate_limited(e))
+                except Exception as e:
+                    logger.warning(f"[RAIDS] Realm backfill skipped: {e}")
                 await _budget_ok(session)
                 if spent_before is not None and status.get('wcl'):
                     status['last_points'] = max(0, status['wcl']['spent'] - spent_before)
@@ -489,6 +497,16 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
 
 
 BENCHMARK_BATCH = 5
+REALM_BACKFILL_PER_RUN = 5
+
+
+async def _backfill_realms(session):
+    """Players' realms for older logs (recorded at sync since): a few per run, while the WCL budget allows."""
+    for code in db.reports_missing_realms(REALM_BACKFILL_PER_RUN):
+        if not await _budget_ok(session):
+            return
+        actors = await wcl.get_report_actors(session, code)
+        db.save_realms(code, {a['name']: a.get('server') for a in actors if a.get('type') == 'Player'})
 
 
 async def fetch_all_benchmarks(full_budget=False):

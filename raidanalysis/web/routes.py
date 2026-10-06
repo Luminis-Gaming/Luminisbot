@@ -32,17 +32,19 @@ REPORT_CODE_RE = re.compile(r'(?:reports/)?([A-Za-z0-9]{16})\b')
 
 def register_routes(app):
     app.router.add_get('/admin/raids', handle_overview)
-    app.router.add_post('/admin/raids/sync', handle_sync)
-    app.router.add_post('/admin/raids/benchmarks', handle_fetch_benchmarks)
+    app.router.add_post('/admin/raids/sync', _changes(handle_sync))
+    app.router.add_post('/admin/raids/benchmarks', _changes(handle_fetch_benchmarks))
     app.router.add_get('/admin/raids/sync/status', handle_sync_status)
-    app.router.add_get('/admin/raids/report/{code}', handle_night)
-    app.router.add_get('/admin/raids/report/{code}/{fight_id}', handle_pull)
-    app.router.add_get('/admin/raids/report/{code}/player/{name}', handle_player)
-    app.router.add_get('/admin/raids/report/{code}/compare/{name}', handle_compare)
-    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', handle_boss)
-    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', handle_tag)
-    app.router.add_post('/admin/raids/spec-ability', handle_spec_ability)
-    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', handle_player_trend)
+    app.router.add_get('/admin/raids/report/{code}', _admin_cached(handle_night))
+    app.router.add_get('/admin/raids/report/{code}/{fight_id}', _admin_cached(handle_pull))
+    app.router.add_get('/admin/raids/report/{code}/player/{name}', _admin_cached(handle_player))
+    app.router.add_get('/admin/raids/report/{code}/compare/{name}', _admin_cached(handle_compare))
+    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', _admin_cached(handle_boss))
+    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', _changes(handle_tag))
+    app.router.add_post('/admin/raids/spec-ability', _changes(handle_spec_ability))
+    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', _admin_cached(handle_player_trend))
+    app.router.add_get('/admin/raids/character/{name}', _admin_cached(handle_character))
+    app.router.add_get('/admin/raids/character/{realm}/{name}', _admin_cached(handle_character))
 
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
     app.router.add_get('/raids', _public(handle_overview))
@@ -54,11 +56,53 @@ def register_routes(app):
     app.router.add_get('/raids/report/{code}/compare/{name}', _public(handle_compare))
     app.router.add_get('/raids/boss/{encounter_id}/{difficulty}', _public(handle_boss))
     app.router.add_get('/raids/boss/{encounter_id}/{difficulty}/player/{name}', _public(handle_player_trend))
-    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', handle_rescan_guides)
+    app.router.add_get('/raids/character/{name}', _public(handle_character))
+    app.router.add_get('/raids/character/{realm}/{name}', _public(handle_character))
+    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', _changes(handle_rescan_guides))
     logger.info("[RAIDS] Admin web routes registered")
 
 
 PUBLIC_SESSION = {'username': 'guest', 'role': 'public'}
+
+# The heavy admin pages (a night, a pull, a player, a boss) are kept for a minute per user, like the
+# public ones, so flipping between pulls and tabs is instant. Anything that changes what they show -
+# a sync finishing (its time is in the key), a tag, a re-sort, a re-analyze (POSTs clear it) - starts over.
+# A page still loading WCL data (the cast bar) is never kept.
+ADMIN_CACHE_SECONDS = 60
+ADMIN_CACHE_MAX = 400
+_admin_cache = {}
+
+
+def _admin_cached(handler):
+    import time
+
+    async def wrapper(request):
+        from oauth_server import get_session
+        session = None if request.get('public') or request.query.get('focus_load') else get_session(request)
+        if not session or session.get('must_change_password'):
+            return await handler(request)
+        key = (request.path_qs, session.get('username'), sync.status.get('last_finished'))
+        hit = _admin_cache.get(key)
+        if hit and hit[0] > time.time():
+            response = web.Response(text=hit[1], content_type='text/html', headers=SECURITY_HEADERS)
+            response.enable_compression()
+            return response
+        response = await handler(request)
+        if response.status == 200 and response.content_type == 'text/html' and 'data-focus-load' not in response.text:
+            if len(_admin_cache) >= ADMIN_CACHE_MAX:
+                _admin_cache.clear()
+            _admin_cache[key] = (time.time() + ADMIN_CACHE_SECONDS, response.text)
+        return response
+    return wrapper
+
+
+def _changes(handler):
+    """A POST that changes what pages show: the admin page cache starts over."""
+    async def wrapper(request):
+        _admin_cache.clear()
+        _public_cache.clear()
+        return await handler(request)
+    return wrapper
 
 # The public site's tab icon (the guild's Day Time Raider emoji): linked once the file is there.
 FAVICON = __import__('pathlib').Path(__file__).parent / 'static' / 'favicon.png'
@@ -76,7 +120,7 @@ SECURITY_HEADERS = {
     'Content-Security-Policy': (
         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
-        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com; "
+        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com https://render.worldofwarcraft.com; "
         "frame-src https://www.mythictrap.com; connect-src 'self'; "
         "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"),
     'X-Content-Type-Options': 'nosniff',
@@ -165,13 +209,14 @@ def public_base_url():
 
 def _page(title, session, body, waiting=False):
     from oauth_server import ADMIN_CSS, render_nav
+    banner = ''
     if session is PUBLIC_SESSION:
         body = _publicize(body)
         nav = ('<nav class="nav"><a href="/raids" class="active">⚔️ Raid Analysis</a><div class="spacer"></div>'
                '<span class="user-info">Read-only view</span></nav>')
         render_nav = lambda _session, active=None: nav  # noqa: E731 - public pages get their own nav
     else:
-        body = sync_banner(sync.status, waiting) + body
+        banner = sync_banner(sync.status, waiting)
     prefix = 'Luminis Raids' if session is PUBLIC_SESSION else 'LuminisBot Admin'
     icon = ('<link rel="icon" type="image/png" href="/raids/favicon.png">'
             if session is PUBLIC_SESSION and FAVICON.is_file() else '')
@@ -189,7 +234,8 @@ def _page(title, session, body, waiting=False):
 <body>
     <div class="container">
         {render_nav(session, active='raids')}
-        {body}
+        {banner}
+        <main id="page">{body}</main>
     </div>
     {CLIP_MODAL}
     <script>{PAGE_JS}</script>
@@ -292,10 +338,10 @@ def _team_pill(channel_id):
     return f'<span class="pill">{esc(teams.label(team))}</span>'
 
 
-def _overview_filters(request, tiers):
+def _overview_filters(request, tiers, tab=None):
     """
     (zone_id or None, difficulty or None, team or None, filter-bar HTML). Defaults to the newest
-    tier, all difficulties, all teams.
+    tier, all difficulties, all teams. tab: the front page's tab, kept when the filters change.
     """
     known = [t for t in tiers if t['zone_id'] is not None]
     tier_arg = request.query.get('tier')
@@ -325,15 +371,20 @@ def _overview_filters(request, tiers):
            f'<label>Difficulty <select name="difficulty" onchange="this.form.submit()">{diff_options}</select></label>'
            f'<label>Team <select name="team" onchange="this.form.submit()">{team_options}</select></label>'
            f'<input type="hidden" name="pick" value="1">'
+           + (f'<input type="hidden" name="tab" value="{esc(tab)}">' if tab else '') +
            f'<noscript><button class="btn btn-secondary btn-sm">Filter</button></noscript></form>')
     return zone_id, difficulty, team, bar
 
 
+HOME_TABS = (('bosses', '🐉', 'Bosses'), ('nights', '📅', 'Raid nights'), ('characters', '🧙', 'Characters'))
+
+
 async def handle_overview(request):
     session = _session(request)
-    zone_id, difficulty, team, filter_bar = _overview_filters(request, db.list_tiers())
-    reports = db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty, team=team)
-    bosses = db.list_bosses(zone_id=zone_id, difficulty=difficulty, team=team)
+    tab = request.query.get('tab')
+    tab = tab if tab in {key for key, _, _ in HOME_TABS} else 'bosses'
+    zone_id, difficulty, team, filter_bar = _overview_filters(request, db.list_tiers(),
+                                                              tab if tab != 'bosses' else None)
     team_q = _team_query(team)
 
     st = sync.status
@@ -357,35 +408,21 @@ async def handle_overview(request):
                        f'points this hour{resets}{last}'
                        f'{" · raid analysis uses WCL v1 first" if _v1_first() else ""}</p>')
 
-    boss_rows = ''.join(f"""
-        <tr onclick="location='/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}'" style="cursor:pointer">
-            <td><a href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}" style="color:#fff">
-                {boss_portrait(b['encounter_id'], 'sm', killed=bool(b['kills']))}<strong>{esc(b['name'])}</strong></a></td>
-            <td>{difficulty_pill(b['difficulty'])}</td>
-            <td class="num">{b['pulls']}</td>
-            <td class="num">{b['nights']}</td>
-            <td>{_boss_status(b)}</td>
-            <td class="muted small">{ts(b['last_seen'], 'date')}</td>
-        </tr>""" for b in bosses)
-
-    night_rows = []
-    for r in reports:
-        span = (r['last_pull_ms'] or 0) - (r['first_pull_ms'] or 0)
-        engaged = 100 * r['combat_ms'] / span if span else 0
-        diffs = ' '.join(difficulty_pill(d) for d in sorted(r['difficulties'] or [], reverse=True))
-        night_rows.append(f"""
-            <tr>
-                <td>{ts(r['start_time'], 'date')}</td>
-                <td><a href="/admin/raids/report/{esc(r['code'])}" style="color:#fff"><strong>{esc(r['title'])}</strong></a>
-                    {_team_pill(r['event_channel_id'])}
-                    {'<span class="pill pill-wipe">imported</span>' if r['source'] == 'manual' else ''}
-                    {f'<br><span class="small muted">📅 {esc(r["event_title"])}</span>' if r['event_title'] else ''}</td>
-                <td>{esc(r['zone_name'] or '')} {diffs}</td>
-                <td class="num">{r['pulls']}</td>
-                <td class="num">{r['kills']}</td>
-                <td class="num" title="Time in combat vs. time from first to last pull">{engaged:.0f}%</td>
-                <td><a class="btn btn-primary btn-sm" href="/admin/raids/report/{esc(r['code'])}">All pulls</a></td>
-            </tr>""")
+    if tab == 'bosses':
+        content = _home_bosses(db.list_bosses(zone_id=zone_id, difficulty=difficulty, team=team), team, team_q)
+    elif tab == 'nights':
+        content = _home_nights(db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty, team=team))
+    else:
+        from .. import character
+        content = _home_characters(character.roster(zone_id, difficulty, team))
+    filters = {k: v for k, v in request.query.items() if k in ('tier', 'difficulty', 'team')}
+    tabs = ''.join(
+        f'<a class="ptab{" active" if key == tab else ""}" data-swap="home" href="{_home_href(filters, key)}">'
+        f'{icon} {label}</a>' for key, icon, label in HOME_TABS)
+    from .render import CLASS_COLORS, json_for_script
+    pins = (f'<div class="pins" data-pins data-base="/admin/raids/character/" hidden>'
+            f'<span class="pins-label">📌 Pinned</span><div class="pins-list"></div>'
+            f'<script type="application/json" class="pins-colors">{json_for_script(CLASS_COLORS)}</script></div>')
 
     body = f"""
     <div class="card">
@@ -405,27 +442,162 @@ async def handle_overview(request):
            pages and player trends. Import any other log (an older night, another guild's kill) to analyze it in
            full now - imports are kept for {db.KEEP_IMPORTED_DAYS} days.</p>
         {_benchmarks_line(st['running']) if session is not PUBLIC_SESSION else ''}
+        {pins}
     </div>
-    <div class="card">{filter_bar}</div>
-    <div class="card">
-        <div class="sec-head"><div class="sec-title"><span class="sec-icon">🐉</span><div><h2>Bosses{f" — {esc(teams.label(team))}" if team else ""}</h2>
-            <p class="sec-sub">{"Only this team's raid nights." if team else "Both teams together."} Raid events
-               posted outside the team signup channels (e.g. #for-fun-raids) aren't counted.</p></div></div></div>
+    <div class="card home-card" id="home">
+        <nav class="ptabs home-tabs">{tabs}</nav>
+        {filter_bar}
+        {content}
+    </div>"""
+    return _remember_team(request, _page("Raid Analysis", session, body))
+
+
+def _home_href(filters, tab):
+    query = dict(filters, **({} if tab == 'bosses' else {'tab': tab}))
+    return '/admin/raids' + ('?' + '&'.join(f'{k}={quote(v)}' for k, v in query.items()) if query else '')
+
+
+def _home_bosses(bosses, team, team_q):
+    boss_rows = ''.join(f"""
+        <tr data-href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}">
+            <td><a href="/admin/raids/boss/{b['encounter_id']}/{b['difficulty']}{team_q}" style="color:#fff">
+                {boss_portrait(b['encounter_id'], 'sm', killed=bool(b['kills']))}<strong>{esc(b['name'])}</strong></a></td>
+            <td>{difficulty_pill(b['difficulty'])}</td>
+            <td class="num">{b['pulls']}</td>
+            <td class="num">{b['nights']}</td>
+            <td>{_boss_status(b)}</td>
+            <td class="muted small">{ts(b['last_seen'], 'date')}</td>
+        </tr>""" for b in bosses)
+    return f"""
+        <p class="sec-sub">{"Only " + esc(teams.label(team)) + "'s raid nights." if team else "Both teams together."}
+           Raid events posted outside the team signup channels (e.g. #for-fun-raids) aren't counted.</p>
         <div class="table-wrapper"><table class="compact">
             <tr><th>Boss</th><th>Difficulty</th><th class="num">Pulls</th><th class="num">Nights</th>
                 <th>Progress</th><th>Last pulled</th></tr>
             {boss_rows or '<tr><td colspan="6" class="muted">No raid pulls synced yet — hit Sync now.</td></tr>'}
-        </table></div>
-    </div>
-    <div class="card">
-        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📅</span><div><h2>Raid nights</h2></div></div></div>
+        </table></div>"""
+
+
+def _home_nights(reports):
+    night_rows = []
+    for r in reports:
+        span = (r['last_pull_ms'] or 0) - (r['first_pull_ms'] or 0)
+        engaged = 100 * r['combat_ms'] / span if span else 0
+        diffs = ' '.join(difficulty_pill(d) for d in sorted(r['difficulties'] or [], reverse=True))
+        night_rows.append(f"""
+            <tr>
+                <td>{ts(r['start_time'], 'date')}</td>
+                <td><a href="/admin/raids/report/{esc(r['code'])}" style="color:#fff"><strong>{esc(r['title'])}</strong></a>
+                    {_team_pill(r['event_channel_id'])}
+                    {'<span class="pill pill-wipe">imported</span>' if r['source'] == 'manual' else ''}
+                    {f'<br><span class="small muted">📅 {esc(r["event_title"])}</span>' if r['event_title'] else ''}</td>
+                <td>{esc(r['zone_name'] or '')} {diffs}</td>
+                <td class="num">{r['pulls']}</td>
+                <td class="num">{r['kills']}</td>
+                <td class="num" title="Time in combat vs. time from first to last pull">{engaged:.0f}%</td>
+                <td><a class="btn btn-primary btn-sm" href="/admin/raids/report/{esc(r['code'])}">All pulls</a></td>
+            </tr>""")
+    return f"""
         <div class="table-wrapper"><table class="compact">
             <tr><th>Date</th><th>Report</th><th>Zone</th><th class="num">Pulls</th><th class="num">Kills</th>
                 <th class="num">Engaged</th><th></th></tr>
             {''.join(night_rows) or '<tr><td colspan="7" class="muted">Nothing yet.</td></tr>'}
-        </table></div>
-    </div>"""
-    return _remember_team(request, _page("Raid Analysis", session, body))
+        </table></div>"""
+
+
+def _home_characters(roster):
+    """The Characters tab: a search, role chips and a card per character (most nights first), each opening their page."""
+    import json
+    from .. import armory
+    from . import character as cview
+    from .players import _class_label
+    from .render import CLASS_COLORS, ROLE_ICONS
+    cards = []
+    for c in roster:
+        color = CLASS_COLORS.get(c['class'], '#9aa1b9')
+        realm = cview._realm_label(c['realm']) if c['realm'] else ''
+        pin = json.dumps({'name': c['name'], 'realm': armory.realm_slug(c['realm']) if c['realm'] else '',
+                          'cls': c['class'], 'spec': c['spec']})
+        search = f"{c['name']} {realm} {c['spec'] or ''} {_class_label(c['class'])}".lower()
+        cards.append(f"""
+            <div class="ch-card" style="--c:{color}" data-search="{esc(search)}" data-role="{esc(c['role'] or 'dps')}">
+                <a class="ch-card-link" href="{cview.url(c['name'], c['realm'])}">
+                    <b class="ch-card-name" style="color:{color}">{esc(c['name'])}</b>
+                    <span class="muted small">{ROLE_ICONS.get(c['role'], '')} {esc(c['spec'] or '')} {esc(_class_label(c['class']))}</span>
+                    <span class="ch-card-realm">{esc(realm)}</span>
+                    <span class="ch-card-stats"><span><b>{c['nights']}</b> nights</span><span><b>{c['pulls']}</b> pulls</span>
+                        <span><b>{c['kills']}</b> kills</span></span>
+                    <span class="muted small">Last seen {ts(c['last_seen'], 'date')}</span>
+                </a>
+                <button type="button" class="pin-btn mini" data-pin="{esc(pin)}" title="Pin to the front page">📌</button>
+            </div>""")
+    if not cards:
+        return '<p class="muted">Nobody in these logs yet.</p>'
+    roles = ''.join(f'<button type="button" class="ch-chip" data-role-filter="{key}" '
+                    f'aria-pressed="{"true" if key == "all" else "false"}">{label}</button>'
+                    for key, label in (('all', 'Everyone'), ('tank', '🛡️ Tanks'), ('healer', '💚 Healers'),
+                                       ('dps', '⚔️ DPS')))
+    return f"""
+        <div class="ch-find" data-ch-find>
+            <input type="search" class="ch-search" placeholder="🔎 Search {len(cards)} characters - name, realm, class or spec"
+                   aria-label="Search characters" autocomplete="off">
+            <div class="ch-chips">{roles}</div>
+        </div>
+        <div class="ch-grid">{''.join(cards)}</div>
+        <p class="muted small ch-none" hidden>No character matches that.</p>
+        <p class="muted small">From the raid tier, difficulty and team above - imported logs aren't counted. 📌 pins a
+           character to the top of this page (in this browser only).</p>"""
+
+
+# ============================================================================
+# GET /admin/raids/character/{realm}/{name} - one character across every night we keep
+# ============================================================================
+
+async def handle_character(request):
+    """
+    A character's page (web/character.py). The URL carries the realm (the same name can be on several);
+    without one: straight to the only realm we know it on, or a "which one?" when there are several.
+    """
+    from .. import armory, character
+    from . import armory as armory_view, character as cview, focusview
+    session = _session(request)
+    name, slug = request.match_info['name'], request.match_info.get('realm')
+    realm, known = character.resolve(name, slug)
+    if slug and not realm and known:  # a realm we don't know it on: let the name decide
+        raise web.HTTPFound(cview.url(name))
+    if not slug and realm:
+        raise web.HTTPFound(cview.url(name, realm))
+    if not slug and len(known) > 1:
+        return _page(name, session, cview.picker(name, db.realms_for(name)))
+    prof = character.profile(name, realm)
+    if not prof:
+        raise web.HTTPFound('/admin/raids?tab=characters&error=' + quote(f'{name} is in none of the logs we keep.'))
+    if request.query.get('focus_load'):  # the gear's cast bar
+        data, why = await armory.load(prof['latest_code'], name, realm)
+        return web.json_response({'ok': bool(data), 'why': why}, headers=SECURITY_HEADERS)
+    data, stale = armory.cached(name, realm)
+    if data is None:
+        gear = f'<div class="card">{focusview.loader(text=f"Summoning {name} from the armory")}</div>'
+    else:
+        _refresh_armory(prof['latest_code'], name, realm, stale)
+        gear = armory_view.tab(data, {'name': name, 'class': prof['class']}, stale)
+    return _page(name, session, cview.page(prof, data, gear))
+
+
+def _refresh_armory(code, name, realm, stale):
+    """A stale stored character: fetched again in the background (one at a time each)."""
+    from .. import armory
+    key = (name, realm)
+    if not stale or key in _armory_refreshing:
+        return
+    _armory_refreshing.add(key)
+
+    async def refresh():
+        try:
+            await armory.load(code, name, realm)
+        finally:
+            _armory_refreshing.discard(key)
+    asyncio.create_task(refresh())
 
 
 # ============================================================================
@@ -542,7 +714,7 @@ def _pull_row(code, number, pull, phase_names, tags, reason=None):
     wipe_at = analysis.get('wipe_at')
     boss_hp = '' if pull['kill'] or pull.get('boss_pct') is None else f"{pull['boss_pct']:.1f}%"
     return f"""
-        <tr onclick="location='/admin/raids/report/{esc(code)}/{pull['fight_id']}'" style="cursor:pointer">
+        <tr data-href="/admin/raids/report/{esc(code)}/{pull['fight_id']}">
             <td class="num">{number}</td>
             <td>{ts(pull['_abs_start'], 'time')}</td>
             <td class="num">{fmt_duration(pull['end_ms'] - pull['start_ms'])}</td>
@@ -591,7 +763,7 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
         best = min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None)
         state = '✔ Killed' if kill else (f'best {best:.1f}%' if best is not None else '')
         active = ' active' if (encounter_id, difficulty) == selected else ''
-        tabs.append(f'<a class="boss-tab{active}" href="/admin/raids/report/{esc(code)}?boss={encounter_id}-{difficulty}'
+        tabs.append(f'<a class="boss-tab{active}" data-swap="page" href="/admin/raids/report/{esc(code)}?boss={encounter_id}-{difficulty}'
                     f'{"&view=players" if players_q else ""}">{boss_portrait(encounter_id, killed=kill)}'
                     f'<span><strong>{esc(boss_pulls[0]["encounter_name"])}</strong> {difficulty_pill(difficulty)}'
                     f'<small>{_plural(len(boss_pulls), "pull")} · {state}</small></span></a>')
@@ -599,7 +771,7 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
     boss_pulls = groups[selected]
     overall_href = f'/admin/raids/report/{esc(code)}?boss={selected[0]}-{selected[1]}'
     chips = ['<span class="chips-label">Pulls</span>',
-             f'<a class="pull-chip overall{" active" if fight_id is None else ""}" '
+             f'<a class="pull-chip overall{" active" if fight_id is None else ""}" data-swap="page" '
              f'href="{esc(chip_href(None)) if chip_href else overall_href + ("&view=players" if players_q else "")}">'
              f'Overall ({len(boss_pulls)})</a>']
     for number, pull in enumerate(boss_pulls, 1):
@@ -607,14 +779,15 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
         classes = 'pull-chip' + (' kill' if pull['kill'] else '') + (' active' if pull['fight_id'] == fight_id else '')
         href = (esc(chip_href(pull['fight_id'])) if chip_href else
                 f'/admin/raids/report/{esc(code)}/{pull["fight_id"]}{"?view=players" if players_q else ""}')
-        chips.append(f'<a class="{classes}" href="{href}" '
+        chips.append(f'<a class="{classes}" href="{href}" data-swap="page" '
                      f'title="Pull {number}: {esc(_result_text(pull))}">#{number} {label}</a>')
 
     # Mechanics / Players switch, keeping the selected boss and pull.
     here_base = (f'/admin/raids/report/{esc(code)}/{fight_id}?' if fight_id else f'{overall_href}&')
     views = ''.join(
-        f'<a class="view-tab{" active" if view == key else ""}" href="{here_base}view={key}">'
+        f'<a class="view-tab{" active" if view == key else ""}" data-swap="page" href="{here_base}view={key}">'
         f'<span class="vt-icon">{icon}</span><span><strong>{label}</strong><small>{hint}</small></span></a>'
+        .replace('">', f'" title="{hint}">', 1)
         for key, icon, label, hint in (
             ('mechanics', '📋', 'Mechanics', 'What happened: wipes, deaths, mechanics, consumables'),
             ('players', '👥', 'Players', 'Who did what: scores, feedback, cooldowns vs top players')))
@@ -644,6 +817,8 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
                {_full_budget_box()}
            </form></div>
         <div class="boss-tabs">{''.join(tabs)}</div>
+    </div>
+    <div class="night-bar">
         <div class="pull-chips">{''.join(chips)}</div>
         <nav class="view-tabs">{views}</nav>
     </div>"""
@@ -1112,8 +1287,9 @@ async def handle_player(request):
     # The header's pull chips stay on this player and tab - only the pull changes
     chip_href = lambda fid: (f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'  # noqa: E731
                              + (f'&pull={fid}' if fid else '') + ('' if tab == 'execution' else f'&tab={tab}'))
+    from . import character as cview
     body = (_night_header(request, report, code, pulls, selected, fight_id, view='players', chip_href=chip_href)
-            + players.player_hero(player, tab_href, tab))
+            + players.player_hero(player, tab_href, tab, cview.url(name, db.realm_in(code, name))))
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)
     elif tab == 'damage':
@@ -1124,6 +1300,11 @@ async def handle_player(request):
     elif tab == 'cooldowns':
         await benchmarks.ensure_spells_for(whole_night, name)
         body += _compare_card(request, code, selected, name, whole_night, tab_href('cooldowns'))
+    elif tab == 'armory':
+        armory_card = await _armory_card(request, code, name, player)
+        if isinstance(armory_card, web.Response):  # ?focus_load=1: the cast bar's request
+            return armory_card
+        body += armory_card
     else:
         await benchmarks.ensure_spells_for(whole_night, name)
         data = benchmarks.for_player(whole_night, name)
@@ -1131,6 +1312,28 @@ async def handle_player(request):
         body += performance.rotation_tab(numbered, player, data, back=None if request.get('public') else tab_href('rotation'),
                                          tracked=tracked_ids())
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
+
+
+_armory_refreshing = set()  # characters being re-fetched in the background (one at a time each)
+
+
+async def _armory_card(request, code, name, player):
+    """
+    The Character tab: the stored character at once (re-fetched in the background when older than
+    armory.FRESH_HOURS), else a cast bar while ?focus_load=1 fetches it (answered here as a response).
+    """
+    from .. import armory
+    from . import armory as armory_view, focusview
+    realm = db.realm_in(code, name)
+    if request.query.get('focus_load'):
+        data, why = await armory.load(code, name, realm)
+        return web.json_response({'ok': bool(data), 'why': why}, headers=SECURITY_HEADERS)
+    data, stale = armory.cached(name, realm)
+    if data is None:
+        text = f"Summoning {name}'s armory"
+        return f'<div class="card">{section_head("🛡️", "Character")}{focusview.loader(text=text)}</div>'
+    _refresh_armory(code, name, realm, stale)
+    return armory_view.tab(data, player, stale)
 
 
 async def _damage_by_target(request, code, numbered, scope):
@@ -1289,7 +1492,7 @@ def _compare_sections(code, numbered, data, pull, eligible, chip_href, back=None
         return '✔ Kill' if p.get('kill') else f"{rows_by_fight[p['fight_id']]['fight_pct'] or 0:.0f}%"
     pull_chips = ''.join(
         f'<a class="pull-chip{" kill" if p.get("kill") else ""}{" active" if p is pull else ""}" '
-        f'href="{chip_href(p["fight_id"])}" '
+        f'href="{chip_href(p["fight_id"])}" data-swap="compare" '  # swaps just the Cooldowns card (PAGE_JS)
         f'title="Pull {p["number"]}: {esc(_result_text(rows_by_fight[p["fight_id"]]))}">'
         f'#{p["number"]} {chip_label(p)}</a>' for p in eligible)
     fetched = data['benchmark'].get('fetched_at')

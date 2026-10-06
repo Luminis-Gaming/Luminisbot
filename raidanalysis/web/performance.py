@@ -87,7 +87,7 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
              (fmt_amount(max(r['amount'] for r in kills)) if kills else '—', f'{metric} on the kill'),
              (_pct(active), f'Active time · raid {_pct(raid_active)}' if raid_active else 'Active time')]
     table = ''.join(f"""
-        <tr class="click-row" onclick="location='{esc(pull_href(r['number']))}'">
+        <tr class="click-row" data-href="{esc(pull_href(r['number']))}">
             <td class="num">#{r['number']}</td>
             <td>{'<span class="pill pill-kill">✔ Kill</span>' if r['kill'] else ''}</td>
             <td class="num">{fmt_duration(r['duration'])}</td>

@@ -149,7 +149,7 @@ def _other_specs(p):
 
 
 PLAYER_TABS = (('execution', '🧮', 'Execution'), ('damage', '📈', 'Damage & focus'),
-               ('cooldowns', '⚔️', 'Cooldowns'), ('rotation', '🔁', 'Rotation'))
+               ('cooldowns', '⚔️', 'Cooldowns'), ('rotation', '🔁', 'Rotation'), ('armory', '🛡️', 'Character'))
 
 
 def throughput_label(role):
@@ -157,9 +157,12 @@ def throughput_label(role):
     return 'Healing & focus' if role == 'healer' else 'Damage & focus'
 
 
-def player_hero(p, tab_href, active):
-    """The player page's header - score, sub-scores, contributions - and its section tabs. tab_href(key) -> link."""
-    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" href="{esc(tab_href(key))}">{icon} '
+def player_hero(p, tab_href, active, character_href=None):
+    """
+    The player page's header - score, sub-scores, contributions - and its section tabs. tab_href(key) -> link;
+    character_href: their character page (every night), linked from the name.
+    """
+    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" data-swap="page" href="{esc(tab_href(key))}">{icon} '
                    f'{throughput_label(p.get("role")) if key == "damage" else label}</a>'
                    for key, icon, label in PLAYER_TABS)
     return f"""
@@ -167,7 +170,8 @@ def player_hero(p, tab_href, active):
         <div class="player-hero">
             {score_ring(p['score'], 'lg')}
             <div>
-                <h2>{player_name(p['name'], p['class'])}</h2>
+                <h2>{f'<a class="ch-name-link" href="{esc(character_href)}" title="Every raid night of theirs">' if character_href else ''}{player_name(p['name'], p['class'])}{'</a>' if character_href else ''}
+                    {f'<a class="card-link small" href="{esc(character_href)}">📈 Character page →</a>' if character_href else ''}</h2>
                 <p class="muted">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(p['class']))} ·
                    {p['pulls']} pulls · {p['deaths']} early death{'s' if p['deaths'] != 1 else ''} by mistake</p>
                 <div class="subscores wide">{_subscore_bars(p['scores'])}</div>
@@ -193,7 +197,7 @@ def player_page(p, guide_for, pull_href):
             status = '<span class="good-text">alive until the end</span>' if pp['kill'] else \
                 '<span class="good-text">alive until half the raid was dead</span>'
         rows.append(f"""
-            <tr onclick="location='{esc(pull_href(pp['number']))}'" style="cursor:pointer">
+            <tr data-href="{esc(pull_href(pp['number']))}">
                 <td class="num">#{pp['number']}</td>
                 <td>{'<span class="pill pill-kill">✔ Kill</span>' if pp['kill'] else ''}</td>
                 <td>{status}</td>
@@ -268,7 +272,7 @@ def compact_table(report, href, numbered=()):
         link = esc(href(p['name']))
         spec = f'{esc(p["spec"])} ' if p.get('spec') else ''
         rows.append(f"""
-            <tr class="click-row" onclick="location='{link}'" title="Open {esc(p['name'])}'s page for these pulls">
+            <tr class="click-row" data-href="{link}" title="Open {esc(p['name'])}'s page for these pulls">
                 <td data-v="{p['score']}"><span class="score-badge {band}" title="{label}">{p['score']}</span></td>
                 {_parse_cell(numbered, p['name'], p.get('role')) if numbered else ''}
                 <td data-v="{esc(p['name'])}"><a href="{link}" class="plain-link">{player_name(p['name'], p['class'])}</a>
@@ -373,7 +377,7 @@ def trends_card(night_data, trend_href, owners=None, show_discord=True):
         scores = [row['score'] for _, _, row in nights]
         hits = [row['avoidable_hits'] / row['pulls'] for _, _, row in nights]
         rows.append((scores[-1] - scores[0], f"""
-            <tr onclick="location='{esc(trend_href(key if show_discord else entry['characters'][-1]))}'" style="cursor:pointer">
+            <tr data-href="{esc(trend_href(key if show_discord else entry['characters'][-1]))}">
                 <td data-v="{esc((entry.get('display') if show_discord else None) or entry['characters'][-1])}">{_person_label(entry, show_discord)}</td>
                 <td class="num">{len(nights)}</td>
                 <td>{sparkline(scores)}</td>
@@ -467,7 +471,7 @@ def trend_page(entry, guide_for, night_href, show_discord=True):
         top_issue = next((n['text'] for n in row['feedback'] if n['tone'] == 'bad'), '')
         character = f'<td>{player_name(row["name"], row["class"])}</td>' if alts else ''
         rows.append(f"""
-            <tr onclick="location='{esc(night_href(code, row['name']))}'" style="cursor:pointer">
+            <tr data-href="{esc(night_href(code, row['name']))}">
                 <td>{esc(label)}</td>{character}<td class="num">{row['pulls']}</td>
                 <td class="num"><b>{row['score']}</b></td>{_subscore_cells(row)}
                 <td class="num">{row['deaths']}</td>

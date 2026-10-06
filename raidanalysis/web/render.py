@@ -23,7 +23,7 @@ PAGE_CSS = """
 :root {
     --bg: #0d1020; --surface: #161a2c; --surface-2: #1d2238; --surface-3: #252b45;
     --border: rgba(255,255,255,0.07); --border-strong: rgba(255,255,255,0.14);
-    --text: #e7e9f3; --muted: #9aa1b9; --faint: #6b7290;
+    --text: #e9ebf5; --muted: #a6adc6; --faint: #7c84a3;
     --accent: #6d7cff; --accent-soft: rgba(109,124,255,0.16);
     --good: #51cf66; --good-soft: rgba(81,207,102,0.14);
     --warn: #fcc419; --warn-soft: rgba(252,196,25,0.14);
@@ -78,9 +78,21 @@ code { background: var(--surface-3); }
 .pill-ignore { background: var(--surface-3); color: var(--muted); }
 .pill-suggest { background: var(--warn-soft); color: var(--warn); }
 
+/* A visual pass: explanations read as a column, not a line across the screen; quiet scrollbars; a card
+   lifts a touch from the page */
+.card p.muted, .card p.small, .sec-sub { max-width: 95ch; }
+.card { background: linear-gradient(180deg, rgba(255,255,255,0.018), transparent 120px), var(--surface); }
+* { scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 999px; border: 2px solid transparent;
+    background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--border-strong); }
+::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+h1 { font-size: 28px; }
+.sec-title h2 { font-size: 19px; }
 /* Tables */
 table { border-collapse: separate; border-spacing: 0; }
-th { background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em;
+th { background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: .06em;
     border-bottom: 1px solid var(--border-strong); }
 td { border-bottom: 1px solid var(--border); }
 tr:hover td { background: rgba(255,255,255,0.025); }
@@ -520,6 +532,224 @@ tr.muted-row td { opacity: 0.7; }
 .dtable tr.dt-detail > td { background: rgba(0,0,0,0.2); padding: 14px 16px; }
 .dt-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
 .dt-split h5 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+/* The night's pull chips + Mechanics / Players: pinned to the top while scrolling a long page */
+.night-bar { position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+    margin: -8px 0 20px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+.night-bar .pull-chips { margin: 0; flex: 1 1 auto; }
+.night-bar .view-tabs { margin: 0; flex: 0 0 auto; padding: 3px; }
+/* pinned, the Mechanics / Players switch is two compact pills - its explanation is the tooltip */
+.night-bar .view-tab { flex: 0 0 auto; gap: 7px; padding: 6px 14px; }
+.night-bar .view-tab .vt-icon { font-size: 16px; }
+.night-bar .view-tab strong { font-size: 13px; }
+.night-bar .view-tab small { display: none; }
+tr[data-href] { cursor: pointer; }
+tr[data-href]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* ---- The character page (web/character.py) and the front page's tabs ---- */
+.ch-hero { display: grid; grid-template-columns: 240px 1fr; gap: 26px; align-items: stretch; overflow: hidden; position: relative;
+    background: radial-gradient(ellipse 60% 120% at 0% 50%, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%),
+                linear-gradient(180deg, rgba(255,255,255,0.02), transparent 140px), var(--surface);
+    border-color: color-mix(in srgb, var(--c) 35%, var(--border)); }
+.ch-model { position: relative; min-height: 220px; display: flex; align-items: flex-end; justify-content: center; }
+.ch-render { width: 360px; max-width: none; margin: -60px -70px -40px; filter: drop-shadow(0 10px 24px rgba(0,0,0,0.6)); }
+.ch-initial { width: 150px; height: 150px; margin: auto; border-radius: 50%; display: grid; place-items: center;
+    font-size: 70px; font-weight: 800; color: var(--c); background: color-mix(in srgb, var(--c) 14%, var(--surface-2));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 45%, transparent), 0 0 40px color-mix(in srgb, var(--c) 30%, transparent); }
+.ch-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ch-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.ch-name { margin: 0; font-size: 34px; letter-spacing: -0.02em; text-shadow: 0 0 24px color-mix(in srgb, var(--c) 40%, transparent); }
+.ch-who { margin: 4px 0 0; color: var(--muted); }
+.ch-guild { color: var(--faint); }
+.ch-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 10px; }
+.ch-tile { background: color-mix(in srgb, var(--surface-2) 80%, transparent); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 12px; }
+.ch-tile > b { display: block; font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ch-tile > b .score-badge { font-size: 15px; height: 26px; }
+.ch-tile > b .parse { font-size: 21px; }
+.ch-tile > span { display: block; margin-top: 2px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); }
+.ch-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.pin-btn.on { background: var(--accent-soft); border-color: var(--accent); color: #fff; }
+.pin-btn.mini { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 8px; padding: 0;
+    border: 1px solid transparent; background: none; cursor: pointer; font-size: 14px; opacity: 0.35; filter: grayscale(1);
+    transition: opacity 0.15s, filter 0.15s, background-color 0.15s; }
+.ch-card:hover .pin-btn.mini, .pin-btn.mini:focus-visible { opacity: 0.8; }
+.pin-btn.mini.on { opacity: 1; filter: none; background: var(--accent-soft); border-color: var(--accent); }
+.ch-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.ch-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; }
+.ch-chip .boss-portrait { width: 20px; height: 20px; margin: 0 0 0 -6px; }
+.ch-chip small { color: var(--faint); font-weight: 500; }
+.ch-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.ch-chip[aria-pressed="true"] { color: #fff; background: var(--accent-soft); border-color: var(--accent); }
+.ch-latelies { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 0; }
+.ch-lately { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; border-radius: 10px; background: var(--surface-2);
+    border: 1px solid var(--border); }
+.ch-lately span { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.ch-lately b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.ch-delta { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.ch-delta.good { color: var(--good); } .ch-delta.bad { color: var(--bad); }
+.ch-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.ch-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.ch-legend i { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+.ch-legend i.dashed { height: 0; border-top: 3px dashed; border-radius: 0; }
+.ch-chart .ch-hit { fill: transparent; }
+.ch-chart a:hover .ch-hit { fill: rgba(255,255,255,0.045); }
+.ch-chart a { cursor: pointer; }
+.ch-chart .ch-kill-line { stroke: rgba(255,209,0,0.28); stroke-dasharray: 3 4; }
+.ch-star { fill: #ffd100; color: #ffd100; font-size: 14px; text-shadow: 0 0 6px rgba(255,209,0,0.6); }
+.chart.ch-chart.small { margin-top: 4px; }
+.ch-table td { vertical-align: middle; }
+.ch-boss { display: inline-flex; align-items: center; gap: 8px; color: #fff; }
+.ch-sparks { white-space: nowrap; }
+.ch-sparks .spark + .spark { margin-left: 6px; }
+.ch-prog { position: relative; width: 130px; height: 18px; border-radius: 5px; background: var(--surface-3); overflow: hidden; }
+.ch-prog i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #c8553d, #f0a33a); }
+.ch-prog span { position: relative; padding: 0 7px; font-size: 11px; font-weight: 700; line-height: 18px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85); }
+.ch-bchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ch-bchip { display: inline-flex; border-radius: 8px; padding: 1px; box-shadow: 0 0 0 1px var(--border); }
+.ch-bchip.kill { box-shadow: 0 0 0 1.5px var(--good); }
+.ch-bchip .boss-portrait { width: 30px; height: 30px; margin: 0; }
+.ch-bchip:hover { transform: translateY(-1px); box-shadow: 0 0 0 1.5px var(--accent); }
+.ch-logs { display: block; }
+.ch-logs:not(.open) tr.ch-extra { display: none; }
+.ch-hls { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.ch-hl { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--surface-2); }
+.ch-hl-icon { font-size: 24px; line-height: 1; }
+.ch-hl b { font-size: 16px; }
+.ch-hl p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+.ch-hl.parse { border-color: rgba(255,128,0,0.45); background: linear-gradient(135deg, rgba(255,128,0,0.12), var(--surface-2) 60%); }
+.ch-hl.good { border-color: rgba(81,207,102,0.35); background: linear-gradient(135deg, rgba(81,207,102,0.10), var(--surface-2) 60%); }
+.ch-hl.kill { border-color: rgba(255,209,0,0.4); background: linear-gradient(135deg, rgba(255,209,0,0.10), var(--surface-2) 60%); }
+.ch-gear { margin-bottom: 20px; }
+.ch-gear > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px;
+    margin-bottom: 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); font-weight: 600; }
+.ch-gear > summary::-webkit-details-marker { display: none; }
+.ch-gear > summary::after { content: '▾'; color: var(--muted); }
+.ch-gear[open] > summary::after { content: '▴'; }
+.ch-gear > summary:hover { border-color: var(--border-strong); }
+.ch-name-link:hover { text-decoration: none; filter: brightness(1.15); }
+h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-align: middle; }
+.ch-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.ch-pick { display: flex; flex-direction: column; padding: 14px; border-radius: 12px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); }
+.ch-pick:hover { border-color: var(--accent); text-decoration: none; }
+.ch-pick small { color: var(--faint); }
+/* front page: tabs, character search and cards, pins */
+.home-tabs { margin-bottom: 14px; }
+.home-card .filter-bar { margin-bottom: 16px; }
+.ch-find { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 6px; }
+.ch-search { flex: 1 1 320px; max-width: 520px; padding: 10px 14px; font-size: 15px; border-radius: 10px;
+    border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); }
+.ch-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ch-find .ch-chips { margin: 0; }
+.ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin: 10px 0 14px; }
+.ch-card { position: relative; border-radius: 12px; border: 1px solid var(--border); border-left: 3px solid var(--c);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--c) 9%, transparent), transparent 60%), var(--surface-2);
+    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s; }
+.ch-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,0.35); border-color: color-mix(in srgb, var(--c) 50%, var(--border)); }
+.ch-card-link { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; color: var(--text); }
+.ch-card-link:hover { text-decoration: none; }
+.ch-card-name { font-size: 16px; padding-right: 26px; }
+.ch-card-realm { font-size: 12px; color: var(--faint); min-height: 1em; }
+.ch-card-stats { display: flex; gap: 12px; margin: 6px 0 2px; font-size: 12px; color: var(--muted); }
+.ch-card-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.pins { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.pins-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.pins-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.pin-chip { display: inline-flex; align-items: center; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border));
+    background: color-mix(in srgb, var(--c) 12%, var(--surface-2)); overflow: hidden; }
+.pin-chip a { padding: 5px 4px 5px 12px; color: var(--c); font-weight: 700; font-size: 13px; }
+.pin-chip a small { color: var(--faint); font-weight: 500; margin-left: 4px; }
+.pin-chip a:hover { text-decoration: none; filter: brightness(1.2); }
+.pin-chip button { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 5px 10px 5px 6px; font-size: 14px; }
+.pin-chip button:hover { color: var(--bad); }
+@media (max-width: 760px) {
+    .ch-hero { grid-template-columns: 1fr; gap: 10px; }
+    .ch-model { min-height: 0; }
+    .ch-render { width: 220px; margin: -20px auto -20px; }
+    .ch-initial { width: 110px; height: 110px; font-size: 50px; }
+    .ch-name { font-size: 28px; }
+}
+/* Soft navigation (data-swap): the part being replaced fades while its new version loads */
+#swap-bar { position: fixed; top: 0; left: 0; z-index: 1000; height: 3px; width: 0; opacity: 0; pointer-events: none;
+    background: linear-gradient(90deg, var(--accent), #b98cff); box-shadow: 0 0 10px var(--accent);
+    transition: width 0.2s ease, opacity 0.3s; }
+#swap-bar.on { opacity: 1; }
+.swapped-in { animation: swap-in 0.18s ease-out; }
+@keyframes swap-in { from { opacity: 0.4; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* Feedback on everything you can press: a quick hover lift and a press-down - the site should feel alive */
+.pull-chip, .boss-tab, .view-tab, .ptab, .tl-chip, .tl-dd summary, .btn, .dt-toggle, .ftabs button, .card-link {
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.1s, box-shadow 0.15s; }
+.pull-chip:active, .boss-tab:active, .view-tab:active, .ptab:active, .tl-chip:active, .btn:active { transform: scale(0.97); }
+.boss-tab:hover, .view-tab:hover { transform: translateY(-1px); }
+.player-card { transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s; }
+.player-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+.click-row, .dtable tr.dt-click { transition: background-color 0.12s; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+    .swapped-in { animation: none; }
+    .pull-chip:active, .boss-tab:active, .view-tab:active, .ptab:active, .tl-chip:active, .btn:active,
+    .boss-tab:hover, .view-tab:hover, .player-card:hover { transform: none; }
+}
+.swapping { opacity: 0.55; transition: opacity 0.15s; pointer-events: none; }
+/* The Character tab (web/armory.py): the in-game character panel */
+.ar-card { background: radial-gradient(900px 420px at 50% 55%, color-mix(in srgb, var(--c) 16%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(255,255,255,0.02), transparent 140px), var(--surface); overflow: hidden; }
+.ar-head { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 14px 24px;
+    padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.ar-title { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 2px; text-shadow: 0 0 24px color-mix(in srgb, var(--c) 45%, transparent); }
+.ar-head p { margin: 0; }
+.ar-stats { display: flex; flex-wrap: wrap; gap: 10px; }
+.ar-stat { min-width: 110px; padding: 10px 14px; border-radius: 12px; background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border); display: flex; flex-direction: column; }
+.ar-stat b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ar-stat span { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.ar-doll { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 360px) minmax(0, 1fr); gap: 18px; align-items: center; }
+.ar-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ar-model { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    min-height: 460px; }
+.ar-model::before { content: ''; position: absolute; left: 10%; right: 10%; bottom: 74px; height: 38px; border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(0,0,0,0.55), transparent); }
+.ar-render { position: relative; width: 220%; max-width: 820px; margin: -110px -60% -40px; object-fit: contain;
+    filter: drop-shadow(0 0 28px color-mix(in srgb, var(--c) 40%, transparent)); pointer-events: none; }
+.ar-noimg { width: 160px; height: 160px; border-radius: 50%; display: grid; place-items: center; font-size: 64px; font-weight: 800;
+    color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); margin: auto; }
+.ar-weapons { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; margin-top: 8px; }
+.ar-item { display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 6px; border-radius: 10px; min-width: 0;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--q) 14%, transparent), rgba(0,0,0,0.2));
+    border: 1px solid color-mix(in srgb, var(--q) 35%, var(--border)); color: var(--text);
+    transition: transform 0.12s, border-color 0.15s, box-shadow 0.15s; }
+.ar-item:hover { text-decoration: none; transform: translateY(-1px); border-color: var(--q);
+    box-shadow: 0 0 16px color-mix(in srgb, var(--q) 30%, transparent); }
+.ar-item.right { flex-direction: row-reverse; text-align: right; padding: 6px 6px 6px 10px;
+    background: linear-gradient(270deg, color-mix(in srgb, var(--q) 14%, transparent), rgba(0,0,0,0.2)); }
+.ar-item.empty { --q: var(--faint); opacity: 0.5; }
+.ar-icon { position: relative; flex: none; width: 44px; height: 44px; border-radius: 8px; background: var(--surface-3);
+    box-shadow: 0 0 0 2px var(--q), 0 0 12px color-mix(in srgb, var(--q) 35%, transparent); overflow: hidden; }
+.ar-icon img { width: 100%; height: 100%; display: block; }
+.ar-ilvl { position: absolute; right: 2px; bottom: 1px; font-size: 11px; font-weight: 800; color: #fff;
+    text-shadow: 0 0 3px #000, 0 1px 2px #000; font-variant-numeric: tabular-nums; }
+.ar-text { display: flex; flex-direction: column; min-width: 0; }
+.ar-name { color: var(--q); font-weight: 650; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ar-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ar-ench { color: #7ee2a8; }
+.ar-tier { color: #e6cc80; font-weight: 700; }
+.ar-bad { color: var(--bad); font-weight: 700; }
+.ar-gems { display: inline-flex; gap: 3px; vertical-align: -1px; }
+.ar-gem { width: 8px; height: 8px; transform: rotate(45deg); background: #6fd3ff; box-shadow: 0 0 6px #6fd3ff; display: inline-block; }
+.ar-gem.empty { background: transparent; box-shadow: inset 0 0 0 1px var(--faint); }
+.ar-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 18px; padding-top: 14px;
+    border-top: 1px solid var(--border); }
+@media (max-width: 900px) {
+    .ar-doll { grid-template-columns: 1fr; }
+    .ar-model { order: -1; min-height: 0; }
+    .ar-render { width: 100%; margin: 0; max-width: 380px; }
+    .ar-item.right { flex-direction: row; text-align: left; }
+}
 /* Focus loading: a WoW cast bar (gold, a spark at the edge; green when done, red when interrupted) */
 .castbar-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 36px 0 30px; }
 .castbar { display: flex; align-items: center; gap: 10px; width: min(460px, 100%); }
@@ -838,14 +1068,22 @@ details.breakdown-toggle[open] > summary::before { content: '▾ '; }
 
 # Sortable tables + local timestamps. Kept dependency-free.
 PAGE_JS = """
-document.querySelectorAll('[data-ts]').forEach(el => {
+// Setup per element: onEach(selector, setup) runs setup on every match now, and raidInit(root) re-runs every
+// setup on the matches inside a part of the page swapped in later (a data-swap link) - so new content works.
+const INITS = [];
+const onEach = (selector, setup) => { INITS.push([selector, setup]); document.querySelectorAll(selector).forEach(setup); };
+window.raidInit = root => INITS.forEach(([selector, setup]) => {
+  if (root.matches(selector)) setup(root);
+  root.querySelectorAll(selector).forEach(setup);
+});
+onEach('[data-ts]', el => {
   const d = new Date(+el.dataset.ts);
   el.textContent = el.dataset.fmt === 'time'
     ? d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
     : d.toLocaleDateString([], {weekday: 'short', year: 'numeric', month: 'short', day: 'numeric'})
       + (el.dataset.fmt === 'date' ? '' : ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}));
 });
-document.querySelectorAll('th[data-sort]').forEach(th => th.addEventListener('click', () => {
+onEach('th[data-sort]', th => th.addEventListener('click', () => {
   const table = th.closest('table'), idx = [...th.parentNode.children].indexOf(th);
   const rows = [...table.querySelectorAll('tr')].filter(r => r.querySelector('td') && !r.classList.contains('mech-detail'));
   const details = new Map(rows.map(r => [r, r.nextElementSibling && r.nextElementSibling.classList.contains('mech-detail')
@@ -878,20 +1116,20 @@ if (syncBanner && syncBanner.dataset.running === '1') {
   setTimeout(poll, 2500);
 }
 // Players view: filter cards by role.
-document.querySelectorAll('.role-filter').forEach(btn => btn.addEventListener('click', () => {
+onEach('.role-filter', btn => btn.addEventListener('click', () => {
   document.querySelectorAll('.role-filter').forEach(b => b.classList.toggle('active', b === btn));
   document.querySelectorAll('.player-card').forEach(card => {
     card.hidden = btn.dataset.role !== 'all' && card.dataset.role !== btn.dataset.role;
   });
 }));
-document.querySelectorAll('.expand-all').forEach(btn => btn.addEventListener('click', () => {
+onEach('.expand-all', btn => btn.addEventListener('click', () => {
   const items = btn.closest('.card').querySelectorAll('details.insight');
   const open = [...items].some(d => !d.open);
   items.forEach(d => { d.open = open; });
   btn.textContent = open ? 'Collapse all' : 'Expand all';
 }));
 // Mechanics table: tag chips filter the rows; clicking a row (not its tag buttons / links) expands it.
-document.querySelectorAll('.mech-wrap').forEach(wrap => {
+onEach('.mech-wrap', wrap => {
   const apply = () => {
     const on = new Set([...wrap.querySelectorAll('.tl-chip[data-mg][aria-pressed=true]')].map(c => c.dataset.mg));
     let shown = 0;
@@ -921,7 +1159,7 @@ document.querySelectorAll('.mech-wrap').forEach(wrap => {
 // Raid and Focus timelines: a dropdown per category (an All box, a box per thing) and the Deaths chip choose
 // what's drawn - everything on it carries a data-k, shown while its box / chip is on; a group header
 // (data-kgroup) hides once its dropdown is all off.
-document.querySelectorAll('.cons-tl, .focus-tl').forEach(tl => {
+onEach('.cons-tl, .focus-tl', tl => {
   const dds = [...tl.querySelectorAll('.tl-dd')];
   const boxes = [...tl.querySelectorAll('.tl-dd-menu input[value]')];
   const els = [...tl.querySelectorAll('.tl-labels [data-k], .tl-inner [data-k]')];
@@ -960,7 +1198,7 @@ document.querySelectorAll('.cons-tl, .focus-tl').forEach(tl => {
 });
 // Focus loading: a cast bar while ?focus_load=1 fetches the pull from Warcraft Logs, then a reload
 // (the browser keeps the scroll position) renders the timeline from the stored data.
-document.querySelectorAll('[data-focus-load]').forEach(box => {
+onEach('[data-focus-load]', box => {
   const fill = box.querySelector('.cb-fill'), time = box.querySelector('.cb-time');
   const name = box.querySelector('.cb-name'), flavor = box.querySelector('.cb-flavor');
   const lines = JSON.parse(box.dataset.lines || '[]'), CAST = 8;  // a typical load, in seconds
@@ -998,7 +1236,7 @@ document.querySelectorAll('[data-focus-load]').forEach(box => {
     .catch(() => fail());
 });
 // Damage by target: a row of "Where your damage went" opens everyone's damage on it; healers on request.
-document.querySelectorAll('.dtable tr.dt-click').forEach(tr => {
+onEach('.dtable tr.dt-click', tr => {
   const toggle = () => {
     const detail = tr.nextElementSibling;
     if (!detail || !detail.classList.contains('dt-detail')) return;
@@ -1008,10 +1246,10 @@ document.querySelectorAll('.dtable tr.dt-click').forEach(tr => {
   tr.addEventListener('click', e => { if (!e.target.closest('a, button, input, summary')) toggle(); });
   tr.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
 });
-document.querySelectorAll('.dt-toggle').forEach(btn =>
+onEach('.dt-toggle', btn =>
   btn.addEventListener('click', () => btn.closest('.dt-rows').classList.toggle('open')));
 // Focus cards: Overall / per-spawn tabs.
-document.querySelectorAll('.fcard .ftabs').forEach(bar => bar.querySelectorAll('[data-tab]').forEach(btn => {
+onEach('.fcard .ftabs', bar => bar.querySelectorAll('[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => {
     const card = bar.closest('.fcard');
     bar.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', b === btn ? 'true' : 'false'));
@@ -1019,7 +1257,7 @@ document.querySelectorAll('.fcard .ftabs').forEach(bar => bar.querySelectorAll('
   });
 }));
 // Compare timeline: chips show/hide a group of lanes; Align phases / Real time swaps positions.
-document.querySelectorAll('.cmp-tl').forEach(tl => {
+onEach('.cmp-tl', tl => {
   tl.querySelectorAll('.tl-chip[data-g]').forEach(chip => chip.addEventListener('click', () => {
     const on = chip.getAttribute('aria-pressed') !== 'true';
     chip.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -1036,7 +1274,7 @@ document.querySelectorAll('.cmp-tl').forEach(tl => {
 // Timelines remember the viewer's filters (in this browser, per kind of timeline - raid, cooldowns, focus), so
 // switching pull or night keeps them: every toggle with a data-name (an ability's or add's name, never its
 // position) is saved when it changes, and restored by clicking it - the timeline's own handlers do the rest.
-document.querySelectorAll('[data-remember]').forEach(tl => {
+onEach('[data-remember]', tl => {
   const key = 'tl-filters:' + tl.dataset.remember;
   const isOn = el => el.matches('input') ? el.checked : el.getAttribute('aria-pressed') === 'true';
   const load = () => {
@@ -1059,7 +1297,7 @@ document.querySelectorAll('[data-remember]').forEach(tl => {
 });
 // Editor-style timelines: drag to pan, Ctrl/Cmd/Alt + scroll (or pinch) zooms around the pointer, the
 // slider and -/+/Fit zoom around the middle, a playhead shows the time under the mouse.
-document.querySelectorAll('.tl').forEach(tl => {
+onEach('.tl', tl => {
   const duration = +tl.dataset.duration, scroll = tl.querySelector('.tl-scroll'), inner = tl.querySelector('.tl-inner');
   const grid = tl.querySelector('.tl-grid'), ruler = tl.querySelector('.tl-ruler'), head = tl.querySelector('.tl-head');
   const slider = tl.querySelector('input[type=range]'), track = tl.querySelector('.tl-track');
@@ -1266,6 +1504,182 @@ document.addEventListener('keydown', e => {
   const modal = document.getElementById('clip-modal');
   if (e.key === 'Escape' && modal && !modal.hidden) { modal.hidden = true; modal.querySelector('iframe').src = 'about:blank'; }
 });
+// Soft navigation - the site feels like an app, not a stack of pages: a link to another raid page fetches it
+// and swaps in only its main part (#page) - the nav, banner and script stay - with a loading bar along the
+// top; the address and title follow. data-swap="id" swaps just that element and keeps the scroll (the night
+// header's boss / pull / view links, the Cooldowns card's pulls); any other raid link scrolls to the top (or
+// its #anchor). Hovering a link a moment fetches it ahead, so most clicks are instant. Back / forward, other
+// sites, new tabs and anything that goes wrong are ordinary page loads.
+const swapBar = document.createElement('div');
+swapBar.id = 'swap-bar';
+document.body.appendChild(swapBar);
+let swapCreep = null;
+const swapProgress = loading => {
+  clearInterval(swapCreep);
+  if (loading) {  // quick to 15 %, then ever slower toward 90 % - never "done" before it is
+    swapBar.classList.add('on');
+    swapBar.style.width = '15%';
+    swapCreep = setInterval(() => {
+      const w = parseFloat(swapBar.style.width) || 0;
+      swapBar.style.width = (w + (90 - w) * 0.1) + '%';
+    }, 200);
+  } else {
+    swapBar.style.width = '100%';
+    setTimeout(() => { swapBar.classList.remove('on'); swapBar.style.width = '0'; }, 300);
+  }
+};
+// a link's address - an SVG link's href is an object, not the string
+const hrefOf = a => typeof a.href === 'string' ? a.href : new URL(a.getAttribute('href'), location.href).href;
+const swapLink = el => {  // the link a click / hover is about, if it's one we swap in
+  const link = el && el.closest && el.closest('a[href]');
+  if (!link || (link.target && typeof link.target === 'string') || link.hasAttribute('target')
+      || link.hasAttribute('download') || link.dataset.noswap !== undefined) return null;
+  const url = new URL(hrefOf(link), location.href);
+  const raids = ['/raids', '/admin/raids'].some(p => url.pathname === p || url.pathname.startsWith(p + '/'));
+  if (url.origin !== location.origin || !raids) return null;
+  if (url.pathname === location.pathname && url.search === location.search && url.hash) return null;  // same page
+  return link;
+};
+const prefetched = new Map();  // url -> fetch promise, fresh for 30 s
+const fetchPage = href => {
+  const url = href.split('#')[0], hit = prefetched.get(url);
+  if (hit && Date.now() - hit.at < 30000) return hit.promise;
+  const promise = fetch(url, {credentials: 'same-origin'})
+    .then(r => r.ok ? r.text().then(html => [html, r.url]) : Promise.reject());
+  promise.catch(() => prefetched.delete(url));
+  prefetched.set(url, {at: Date.now(), promise});
+  return promise;
+};
+let hoverTimer = null;
+document.addEventListener('pointerover', e => {
+  const link = swapLink(e.target);
+  clearTimeout(hoverTimer);
+  if (link) hoverTimer = setTimeout(() => fetchPage(hrefOf(link)), 90);  // a deliberate hover, not a sweep past
+});
+const swapTo = (href, id = 'page', keepScroll = false) => {
+  const target = document.getElementById(id);
+  if (!target) { location.href = href; return; }
+  target.classList.add('swapping');
+  swapProgress(true);
+  fetchPage(href)
+    .then(([html, url]) => {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const fresh = doc.getElementById(id);
+      if (!fresh) return Promise.reject();
+      fresh.classList.add('swapped-in');
+      target.replaceWith(fresh);
+      document.title = doc.title;
+      const hash = new URL(href, location.href).hash;
+      history.pushState({swapped: true}, '', (url || href).split('#')[0] + hash);
+      window.raidInit(fresh);
+      if (!keepScroll) {  // a different page: to its top, or its #anchor
+        const anchor = hash && document.getElementById(decodeURIComponent(hash.slice(1)));
+        if (anchor) anchor.scrollIntoView(); else window.scrollTo(0, 0);
+      }
+      prefetched.clear();  // what we prefetched may be stale now (filters, a sync)
+      swapProgress(false);
+    })
+    .catch(() => { location.href = href; });
+};
+document.addEventListener('click', e => {
+  const link = swapLink(e.target);
+  if (!link || e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  if (!document.getElementById(link.dataset.swap || 'page')) return;
+  e.preventDefault();
+  swapTo(hrefOf(link), link.dataset.swap || 'page', !!link.dataset.swap);
+});
+// Table rows that open a page (a pull, a player, a boss): soft navigation too, a new tab with Ctrl / Cmd /
+// middle click, and a prefetch on hover - like links. Clicks on a link, button or form inside go there.
+onEach('tr[data-href]', tr => {
+  const open = e => {
+    if (e.target.closest('a, button, input, select, label, summary, form')) return;
+    if (e.ctrlKey || e.metaKey || e.button === 1) { window.open(tr.dataset.href, '_blank'); return; }
+    if (e.button) return;
+    swapTo(tr.dataset.href);
+  };
+  tr.addEventListener('click', open);
+  tr.addEventListener('auxclick', e => { if (e.button === 1) open(e); });
+  tr.addEventListener('pointerenter', () => { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => fetchPage(tr.dataset.href), 90); });
+  tr.tabIndex = 0;
+  tr.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target === tr) swapTo(tr.dataset.href); });
+});
+// Character page: the Improvement card's views - all bosses, or one at a time.
+onEach('[data-ch-views]', card => card.querySelectorAll('.ch-chip[data-view]').forEach(chip =>
+  chip.addEventListener('click', () => {
+    card.querySelectorAll('.ch-chip[data-view]').forEach(c => c.setAttribute('aria-pressed', c === chip ? 'true' : 'false'));
+    card.querySelectorAll('.ch-pane').forEach(p => { p.hidden = p.dataset.pane !== chip.dataset.view; });
+  })));
+// Pinned characters: kept in this browser only (localStorage), shown as quick links on the front page.
+const PIN_KEY = 'raid-pins';
+const readPins = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY)) || []; } catch (e) { return []; } };
+const writePins = pins => { try { localStorage.setItem(PIN_KEY, JSON.stringify(pins)); } catch (e) { /* private mode */ } };
+const samePin = (a, b) => a.name === b.name && (a.realm || '') === (b.realm || '');
+const showPinState = () => {
+  const pins = readPins();
+  document.querySelectorAll('.pin-btn[data-pin]').forEach(btn => {
+    let me; try { me = JSON.parse(btn.dataset.pin); } catch (e) { return; }
+    const on = pins.some(p => samePin(p, me));
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (!btn.classList.contains('mini')) btn.textContent = on ? '📌 Pinned' : '📌 Pin';
+    btn.title = on ? 'Unpin from the front page' : 'Pin to the front page - kept in this browser only';
+  });
+  document.querySelectorAll('[data-pins]').forEach(box => {
+    let colors = {}; try { colors = JSON.parse(box.querySelector('.pins-colors').textContent); } catch (e) { /* none */ }
+    const list = box.querySelector('.pins-list');
+    list.replaceChildren(...pins.map(p => {
+      const chip = document.createElement('span');
+      chip.className = 'pin-chip';
+      chip.style.setProperty('--c', colors[p.cls] || '#9aa1b9');
+      const a = document.createElement('a');
+      a.href = box.dataset.base + (p.realm ? encodeURIComponent(p.realm) + '/' : '') + encodeURIComponent(p.name);
+      a.textContent = p.name;
+      if (p.spec) { const s = document.createElement('small'); s.textContent = p.spec; a.appendChild(s); }
+      const x = document.createElement('button');
+      x.type = 'button'; x.textContent = '×'; x.title = 'Unpin'; x.setAttribute('aria-label', 'Unpin ' + p.name);
+      x.addEventListener('click', () => { writePins(readPins().filter(q => !samePin(q, p))); showPinState(); });
+      chip.append(a, x);
+      return chip;
+    }));
+    box.hidden = !pins.length;
+  });
+};
+onEach('.pin-btn[data-pin]', btn => btn.addEventListener('click', e => {
+  e.preventDefault();
+  let me; try { me = JSON.parse(btn.dataset.pin); } catch (err) { return; }
+  const pins = readPins();
+  writePins(pins.some(p => samePin(p, me)) ? pins.filter(p => !samePin(p, me)) : pins.concat([me]).slice(-24));
+  showPinState();
+}));
+onEach('[data-pins]', showPinState);
+onEach('.pin-btn[data-pin]', () => { clearTimeout(window.pinTimer); window.pinTimer = setTimeout(showPinState, 0); });
+// Front page: the character search and role chips.
+onEach('[data-ch-find]', box => {
+  const card = box.parentElement, input = box.querySelector('.ch-search');
+  let role = 'all';
+  const apply = () => {
+    const words = input.value.toLowerCase().split(' ').filter(Boolean);
+    let shown = 0;
+    card.querySelectorAll('.ch-card').forEach(c => {
+      const ok = (role === 'all' || c.dataset.role === role) && words.every(w => c.dataset.search.includes(w));
+      c.hidden = !ok; shown += ok;
+    });
+    const none = card.querySelector('.ch-none');
+    if (none) none.hidden = shown > 0;
+  };
+  input.addEventListener('input', apply);
+  input.addEventListener('keydown', e => {  // Enter opens the first match
+    if (e.key !== 'Enter') return;
+    const first = [...card.querySelectorAll('.ch-card')].find(c => !c.hidden);
+    if (first) first.querySelector('a').click();
+  });
+  box.querySelectorAll('[data-role-filter]').forEach(chip => chip.addEventListener('click', () => {
+    role = chip.dataset.roleFilter;
+    box.querySelectorAll('[data-role-filter]').forEach(c => c.setAttribute('aria-pressed', c === chip ? 'true' : 'false'));
+    apply();
+  }));
+});
+window.addEventListener('popstate', () => location.reload());
 """
 
 # A film strip: reads as "short clip" (and not as a YouTube logo, which a red ▶ did).
