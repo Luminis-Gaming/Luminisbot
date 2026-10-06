@@ -508,6 +508,90 @@ class TestSameNameMechanics(unittest.TestCase):
         merged = analyzer.merge_pulls([analysis, other])
         self.assertEqual(len([a for a in merged['abilities'] if a['name'] == 'Evil Eyes']), 1)
 
+    def test_fetched_with_nobody_hit_is_complete(self):
+        """Evil Eyes' cast id was fetched and nobody took it: a real zero, not "unknown" - the merge stays complete."""
+        from raidanalysis import analyzer
+        a = self.fight_with(event_ids={1291918, 1292764, 1292758})
+        eyes = next(x for x in a['abilities'] if x['name'] == 'Evil Eyes')
+        self.assertTrue(eyes['complete'])
+        self.assertEqual(analyzer.mistake_counts(eyes), {'Aedrios': 1, 'Mangor': 1})
+
+    def test_stuns_count_from_the_debuff(self):
+        """Shell Spin's shells stun for 0 damage: each debuff landing on a player is a hit."""
+        from raidanalysis import analyzer
+        debuffs = [{'type': 'applydebuff', 'timestamp': 1000 + t, 'targetID': who, 'abilityGameID': 1291920,
+                    'abilityName': 'Shell Spin'} for t, who in ((20000, 1), (60000, 1), (61000, 2))]
+        a = self.fight_with(event_ids={1291918}, damage=False, debuffs=debuffs)
+        shell = next(x for x in a['abilities'] if x['name'] == 'Shell Spin')
+        self.assertTrue(shell['complete'])
+        self.assertEqual(analyzer.mistake_counts(shell), {'Aedrios': 2, 'Mangor': 1})
+        self.assertEqual(shell['players']['Aedrios']['times'], [20000, 60000])
+
+    def fight_with(self, event_ids=None, damage=True, debuffs=()):
+        from raidanalysis import analyzer
+        actors = [{'id': 1, 'name': 'Aedrios', 'type': 'Player'}, {'id': 2, 'name': 'Mangor', 'type': 'Player'}]
+        tables = {'playerDetails': {'dps': [{'name': 'Aedrios', 'type': 'Warrior', 'specs': [{'spec': 'Arms'}]}],
+                                    'tanks': [{'name': 'Mangor', 'type': 'Monk', 'specs': [{'spec': 'Brewmaster'}]}]},
+                  'damageTaken': {'entries': [
+                      {'guid': 1291918, 'name': 'Shell Spin', 'total': 0, 'hitCount': 3, 'actorType': 'NPC',
+                       'targets': [{'name': 'Aedrios', 'total': 0}]},
+                      {'guid': 1292764, 'name': 'Evil Eyes', 'total': 800, 'hitCount': 2, 'actorType': 'NPC'},
+                      {'guid': 1292758, 'name': 'Evil Eyes', 'total': 0, 'hitCount': 0, 'actorType': 'NPC',
+                       'targets': [{'name': 'Aedrios', 'total': 0}]}]}}
+        ev = [{'type': 'damage', 'timestamp': 1000 + t, 'targetID': who, 'abilityGameID': aid, 'amount': 400,
+               'hitType': 1} for t, who, aid in ((7000, 1, 1292764), (8000, 2, 1292764))] if damage else []
+        fight = {'id': 1, 'startTime': 1000, 'endTime': 301000, 'kill': False, 'size': 2}
+        return analyzer.annotate_deaths(analyzer.analyze_fight(fight, actors, tables, ev, [], set(), set(),
+                                                               event_ids=event_ids, debuff_events=debuffs))
+
+    def test_tagged_mechanics_fetched_first_and_in_full(self):
+        """Tagged mechanics (every id of their name) get a request of their own; a capped request isn't complete."""
+        import asyncio
+        from unittest import mock
+        from raidanalysis import sync
+        tables = {'damageTaken': {'entries': [
+            {'guid': 1, 'name': 'Shell Spin', 'total': 0, 'hitCount': 3, 'actorType': 'NPC'},
+            {'guid': 2, 'name': 'Evil Eyes', 'total': 10, 'hitCount': 900, 'actorType': 'NPC'},   # big, but tagged
+            {'guid': 3, 'name': 'Evil Eyes', 'total': 0, 'hitCount': 0, 'actorType': 'NPC'},     # its other id
+            {'guid': 4, 'name': 'Raid Pulse', 'total': 99, 'hitCount': 9000, 'actorType': 'NPC'},  # big, untagged
+            {'guid': 5, 'name': 'Small Thing', 'total': 5, 'hitCount': 3, 'actorType': 'NPC'}]}}
+        calls = []
+
+        async def events(session, code, fid, kind, flt, max_events=20000, hostility='Friendlies'):
+            calls.append((kind, flt))
+            return [{}] * (max_events if '5' in flt else 1)                            # the small request: capped
+
+        async def abilities(session, code):
+            return {}
+        with mock.patch('raidanalysis.guides.effective_tags', return_value=({1: 'avoidable', 2: 'avoidable'}, {})), \
+                mock.patch('raidanalysis.wcl.get_events', events), \
+                mock.patch('raidanalysis.wcl.get_report_abilities', abilities):
+            _, complete, _ = asyncio.run(sync._mechanic_events(None, 'x', {'id': 1, 'encounterID': 9}, tables))
+        self.assertEqual(calls[0], ('DamageTaken', 'ability.id in (1,2,3)'))          # tagged, by name, whatever size
+        self.assertEqual(calls[1], ('DamageTaken', 'ability.id in (5)'))              # small untagged; not the pulse
+        self.assertEqual(calls[2], ('Debuffs', 'type = "applydebuff" and ability.name in ("Shell Spin")'))
+        self.assertEqual(complete, {1, 2, 3})                                          # the capped one isn't
+
+    def test_partial_detail_is_a_floor_not_nobody(self):
+        """One pull with the per-hit detail, one without: the known hits plus at least one - never "nobody"."""
+        import re
+        from raidanalysis import analyzer
+        from raidanalysis.web import insights
+
+        def pull(n, hits):
+            return {'number': n, 'fight_id': n, 'kill': False, 'reason': None, 'phases': [],
+                    'analysis': {'_duration': 300000, 'deaths': [],
+                                 'players': [{'name': 'Aedrios', 'class': 'Warrior', 'role': 'dps'}],
+                                 'abilities': [{'id': 7, 'name': 'Blast Wave', 'total': 500, 'events': 9,
+                                                'players': {'Aedrios': {'damage': 500, 'hits': hits}},
+                                                'complete': hits is not None}]}}
+        tags = {7: analyzer.TAG_AVOIDABLE}
+        html = insights.build([pull(1, 3), pull(2, None)], tags, lambda i, n: None, 'x')
+        self.assertIn('Hit by <strong>Blast Wave</strong> <strong>at least 3 times</strong>', html)
+        self.assertNotIn('Nobody got hit', html)
+        self.assertEqual(analyzer.avoidable_by_player(pull(2, None)['analysis'], tags)['Aedrios']['hits'], 1)
+        self.assertIn('<strong>6 times</strong>', insights.build([pull(1, 3), pull(2, 3)], tags, lambda i, n: None, 'x'))
+
     def test_tags_cover_every_id_of_a_name(self):
         from raidanalysis import analyzer, guides
         guide = [{'spell_id': 1292388, 'name': 'Evil Eyes', 'category': 'Dodge', 'subtitle': 'Swirlies'}]

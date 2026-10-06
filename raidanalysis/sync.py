@@ -36,14 +36,8 @@ def _raid_pulls(report):
 async def _analyze_pull(session, code, fight, actors, detail=True):
     tables = await wcl.get_fight_tables(session, code, fight['id'])
 
-    tagged = set(db.get_tags(fight['encounterID']))
-    damage_ids = analyzer.event_ability_ids(analyzer.hostile_damage_entries(tables.get('damageTaken')), tagged)
+    damage_events, complete_ids, debuff_events = await _mechanic_events(session, code, fight, tables)
     potion_ids, defensive_ids = analyzer.consumable_ids(tables.get('casts'))
-
-    damage_events = []
-    if damage_ids:
-        damage_events = await wcl.get_events(session, code, fight['id'], 'DamageTaken',
-                                             f"ability.id in ({','.join(map(str, damage_ids))})")
     cooldown_meta = cooldowns.cooldown_meta(tables.get('casts'))
     consumable_events, buff_events, heal_events = [], [], []
     # ...plus everything the top players of any spec press on this boss (benchmarks.py), so a spec
@@ -73,7 +67,7 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
 
     analysis = analyzer.analyze_fight(fight, actors, tables, damage_events, consumable_events,
                                   set(potion_ids), set(defensive_ids), buff_events, heal_events, enemy_cast_events,
-                                  combatant_events, cooldown_meta)
+                                  combatant_events, cooldown_meta, event_ids=complete_ids, debuff_events=debuff_events)
     analysis['cast_ids'] = cast_ids  # which spells 'casts' is complete for (benchmarks.compare)
     # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
     # (a talent you don't take), as opposed to one we didn't fetch.
@@ -82,6 +76,48 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
     if extras:
         analysis['extras'] = extras
     return analysis
+
+
+TAGGED_EVENTS_MAX = 60000  # the tagged mechanics' damage events in a pull (fetched on their own, first)
+DAMAGE_EVENTS_MAX = 20000  # ...and the rest's: the small ones (analyzer.EVENT_FETCH_MAX_EVENTS each)
+
+
+async def _mechanic_events(session, code, fight, tables):
+    """
+    Damage events for the per-player hits on enemy abilities: (events, ids whose events are complete,
+    debuff events). Every tagged mechanic is fetched whatever its size - by name, so all the spell ids it's
+    logged under - in a request of its own, before the small untagged ones; a request that hits its cap
+    leaves its ids incomplete (counted from WCL's top-5 table instead). A tagged mechanic that dealt no
+    damage at all (Shell Spin's shells only stun) is counted from its debuff landing on players.
+    """
+    from . import guides
+    hostile = analyzer.hostile_damage_entries(tables.get('damageTaken'))
+    tags, _ = guides.effective_tags(fight['encounterID'])
+    tagged_names = {e.get('name') for e in hostile if tags.get(e['guid']) in analyzer.AVOIDABLE_TAGS}
+    tagged = sorted({e['guid'] for e in hostile if e.get('name') in tagged_names})
+    rest = [i for i in analyzer.event_ability_ids(hostile) if i not in set(tagged)]
+    events, complete = [], set()
+    for ids, cap in ((tagged, TAGGED_EVENTS_MAX), (rest, DAMAGE_EVENTS_MAX)):
+        if not ids:
+            continue
+        got = await wcl.get_events(session, code, fight['id'], 'DamageTaken',
+                                   f"ability.id in ({','.join(map(str, ids))})", max_events=cap)
+        events += got
+        if len(got) < cap:
+            complete |= set(ids)
+    totals = {}
+    for e in hostile:
+        totals[e.get('name')] = totals.get(e.get('name'), 0) + (e.get('total') or 0)
+    status = sorted(n for n in tagged_names if n and not totals.get(n))
+    debuffs = []
+    if status:
+        names = ', '.join('"' + n.replace('"', '') + '"' for n in status)
+        debuffs = await wcl.get_events(session, code, fight['id'], 'Debuffs',
+                                       f'type = "applydebuff" and ability.name in ({names})')
+        abilities = await wcl.get_report_abilities(session, code) if debuffs else {}
+        for e in debuffs:  # events carry only the spell id: the name ties it to its mechanic
+            e['abilityName'] = (abilities.get(e.get('abilityGameID')) or ('',))[0]
+    return events, complete, debuffs
 
 
 # The per-player detail (buffs, debuffs, casts, resources, procs: most of a pull's WCL points) is fetched

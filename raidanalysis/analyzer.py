@@ -415,9 +415,14 @@ def _boss_timeline(fight_start, enemy_casts_table, enemy_cast_events):
 
 
 def analyze_fight(fight, actors, tables, damage_events, consumable_events, potion_ids, defensive_ids,
-                  buff_events=(), heal_events=(), enemy_cast_events=(), combatant_events=(), cooldown_meta=None):
+                  buff_events=(), heal_events=(), enemy_cast_events=(), combatant_events=(), cooldown_meta=None,
+                  event_ids=None, debuff_events=()):
     """
     Build the stored analysis for one pull.
+
+    event_ids: the abilities whose damage events were fetched in full - complete even when nobody was hit
+    (no events at all is a real zero). debuff_events: applydebuff events of mechanics that only stun (no
+    damage): each one landing on a player is a hit.
 
     fight: a `fights` entry from the report overview (absolute ms timestamps).
     actors: masterData player actors. tables: output of wcl.get_fight_tables.
@@ -481,6 +486,25 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         per_player['damage'] += damage
         per_player['ticks' if event.get('tick') else 'hits'] += 1
         per_player['tick_times' if event.get('tick') else 'times'].append(event['timestamp'] - fight_start)
+    for guid in set(event_ids or ()) & set(abilities):
+        if guid not in fetched:  # fetched in full, nobody hit by it (only missed / immune / 0-damage events)
+            abilities[guid]['players'] = {}
+            abilities[guid]['complete'] = True
+    # Mechanics that only stun (no damage): who got the debuff, when - each one a hit
+    no_damage = {}
+    for ability in abilities.values():
+        no_damage.setdefault(ability['name'], []).append(ability)
+    no_damage = {n: parts for n, parts in no_damage.items() if not any(p['total'] for p in parts)}
+    for event in sorted(debuff_events or (), key=lambda e: e['timestamp']):
+        name = names_by_id.get(event.get('targetID'))
+        parts = no_damage.get((event.get('ability') or {}).get('name') or event.get('abilityName'))
+        if event.get('type') != 'applydebuff' or name not in roster or not parts:
+            continue
+        guid = parts[0]['id']
+        per_player = fetched.setdefault(guid, {}).setdefault(name, {'damage': 0, 'hits': 0, 'ticks': 0,
+                                                                     'times': [], 'tick_times': []})
+        per_player['hits'] += 1
+        per_player['times'].append(event['timestamp'] - fight_start)
     for guid, players in fetched.items():
         # Keep the timestamps that match how mistakes are counted (see mistake_counts).
         direct = any(p['hits'] for p in players.values())
@@ -570,11 +594,13 @@ def avoidable_by_player(analysis, tags):
         for name, stats in (ability.get('players') or {}).items():
             if tag == TAG_AVOIDABLE_NON_TANK and roles.get(name) == 'tank':
                 continue
-            if not counts.get(name):
+            # Without the per-hit detail (WCL's top-5 table only), taking damage from it is at least one hit
+            hits = counts.get(name) or (1 if not ability.get('complete') and stats.get('damage') else 0)
+            if not hits:
                 continue
             row = out.setdefault(name, {'damage': 0, 'hits': 0})
             row['damage'] += stats.get('damage') or 0
-            row['hits'] += counts[name]
+            row['hits'] += hits
     return out
 
 

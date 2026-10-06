@@ -487,9 +487,11 @@ tr.muted-row td { opacity: 0.7; }
 /* Damage by target (targets.py): ranked players per target, class-colored bars, a gold star for the top */
 .dt-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 12px; }
 .dt-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
-.dt-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 10px; }
+/* Portrait, then the name and pills over the totals: a long name never pushes the totals around */
+.dt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-height: 44px; }
 .dt-head b { font-size: 15px; }
-.dt-head .muted { margin-left: auto; }
+.dt-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dt-name-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .dt-rows { display: grid; gap: 3px; }
 .dt-row { display: grid; grid-template-columns: 22px minmax(90px, 150px) 1fr; gap: 8px; align-items: center;
     padding: 2px 4px; border-radius: 6px; font-size: 12px; }

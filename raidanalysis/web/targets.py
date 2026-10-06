@@ -79,8 +79,8 @@ def section(ranked, priority=(), scope='', loading='', npc_icons=None, npc_links
         cards.append(f"""
             <div class="dt-card">
                 <div class="dt-head">{npc_zoom(t['name'], npc_icons.get(t['name']), npc_links.get(t['name']))}
-                    {_name(t['name'], npc_links.get(t['name']))}{pills}
-                    <span class="muted small">{fmt_amount(t['total'])} · {sum(1 for p in t['players'] if p['damage'] > 0)} players</span></div>
+                    <div class="dt-title"><div class="dt-name-row">{_name(t['name'], npc_links.get(t['name']))}{pills}</div>
+                        <span class="muted small">{fmt_amount(t['total'])} damage · {sum(1 for p in t['players'] if p['damage'] > 0)} players</span></div></div>
                 {ranking(t)}
             </div>""")
     return f"""

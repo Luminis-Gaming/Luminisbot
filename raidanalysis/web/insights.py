@@ -110,11 +110,15 @@ def build(pulls, tags, guide_for, code):
         tag = tags.get(ability['id'])
         if tag not in analyzer.AVOIDABLE_TAGS:
             continue
+        # Every spell id and pull of the mechanic added up (merge_same_name, merge_pulls). Where the per-hit
+        # detail is missing for some of it, the hits we know are a floor: taking damage from it is at least one.
+        exact = ability.get('complete')
+        known = analyzer.mistake_counts(ability)
         counts, damage = {}, {}
         for name, stats in ability['players'].items():
             if tag == analyzer.TAG_AVOIDABLE_NON_TANK and roster.get(name, {}).get('role') == 'tank':
                 continue
-            n = analyzer.mistake_counts({'players': {name: stats}})[name] if ability.get('complete') else 0
+            n = known.get(name) or (1 if not exact and stats.get('damage') else 0)
             if n:
                 counts[name] = n
                 damage[name] = stats.get('damage') or 0
@@ -125,8 +129,11 @@ def build(pulls, tags, guide_for, code):
             groups['Avoidable mechanics'].append(_row('🎯', f'Nobody{who} got hit by {label}', '', 'good'))
             continue
         hits = sum(counts.values())
-        sentence = (f'Hit by {label} <strong>{_plural(hits, "time")}</strong> — {_plural(len(counts), "player")}{who}, '
-                    f'{fmt_amount(sum(damage.values()))} damage')
+        floor = '' if exact else 'at least '
+        sentence = (f'Hit by {label} <strong>{floor}{_plural(hits, "time")}</strong> — {_plural(len(counts), "player")}{who}, '
+                    f'{fmt_amount(sum(damage.values()))} damage'
+                    + ('' if exact else ' <span class="muted small">(exact hits not fetched for every pull - '
+                                        '🔄 Re-analyze)</span>'))
         body = players_bars(counts, 'Hits', notes={n: fmt_amount(d) for n, d in damage.items()})
         if single:
             # Hit timestamps live on the pull's own analysis (merging drops them).
