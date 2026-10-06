@@ -785,7 +785,7 @@ def character_pulls(name, realm=None):
     return _run(f"""
         SELECT p.report_code, p.fight_id, p.encounter_id, p.encounter_name, p.difficulty, p.kill, p.start_ms,
                p.end_ms, p.fight_pct, {_SLIM_ANALYSIS} AS analysis,
-               r.title AS report_title, r.start_time AS report_start, r.zone_name
+               r.title AS report_title, r.start_time AS report_start, r.zone_name, r.zone_id
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = %s
         WHERE r.source <> 'manual' AND p.analysis->'players' @> %s::jsonb {realm_where}

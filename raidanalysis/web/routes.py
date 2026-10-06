@@ -570,7 +570,10 @@ async def handle_character(request):
         raise web.HTTPFound(cview.url(name, realm))
     if not slug and len(known) > 1:
         return _page(name, session, cview.picker(name, db.realms_for(name)))
-    prof = character.profile(name, realm)
+    def choice(key):  # ?tier= / ?difficulty=: a number, "all", or nothing (their default)
+        value = request.query.get(key)
+        return character.ALL if value == character.ALL else int(value) if value and value.isdigit() else None
+    prof = character.profile(name, realm, choice('tier'), choice('difficulty'))
     if not prof:
         raise web.HTTPFound('/admin/raids?tab=characters&error=' + quote(f'{name} is in none of the logs we keep.'))
     if request.query.get('focus_load'):  # the gear's cast bar
@@ -581,7 +584,7 @@ async def handle_character(request):
         gear = f'<div class="card">{focusview.loader(text=f"Summoning {name} from the armory")}</div>'
     else:
         _refresh_armory(prof['latest_code'], name, realm, stale)
-        gear = armory_view.tab(data, {'name': name, 'class': prof['class']}, stale)
+        gear = armory_view.tab(data, {'name': name, 'class': prof['class']}, stale, embedded=True)
     return _page(name, session, cview.page(prof, data, gear))
 
 

@@ -42,19 +42,59 @@ def _amount(analysis, name, role, duration):
     return total / (duration / 1000) if total and duration else None
 
 
-def profile(name, realm=None):
+ALL = 'all'
+
+
+def tiers_of(pulls):
+    """The raid tiers in these pulls, newest first: [{'zone_id', 'zone_name', 'nights', 'last'}]."""
+    tiers = {}
+    for p in pulls:
+        t = tiers.setdefault(p.get('zone_id'), {'zone_id': p.get('zone_id'), 'zone_name': p.get('zone_name') or 'Unknown zone',
+                                               'codes': set(), 'last': 0})
+        t['codes'].add(p['report_code'])
+        t['last'] = max(t['last'], p['report_start'])
+    return [{'zone_id': t['zone_id'], 'zone_name': t['zone_name'], 'nights': len(t['codes']), 'last': t['last']}
+            for t in sorted(tiers.values(), key=lambda t: -t['last'])]
+
+
+def filter_pulls(pulls, tier=None, difficulty=None):
+    """
+    (pulls, tier, difficulty, difficulties) - the pulls of one raid tier (None: their latest; ALL: every tier) and
+    difficulty (None: the one they pulled most there; ALL: every one). difficulties: [(difficulty, pulls)] in
+    that tier, hardest first.
+    """
+    tiers = tiers_of(pulls)
+    known = {t['zone_id'] for t in tiers}
+    if tier != ALL and tier not in known:
+        tier = tiers[0]['zone_id'] if tiers else ALL
+    in_tier = pulls if tier == ALL else [p for p in pulls if p.get('zone_id') == tier]
+    counts = {}
+    for p in in_tier:
+        counts[p['difficulty']] = counts.get(p['difficulty'], 0) + 1
+    difficulties = sorted(counts.items(), key=lambda d: -d[0])
+    if difficulty != ALL and difficulty not in counts:
+        difficulty = max(counts.items(), key=lambda d: (d[1], d[0]))[0] if counts else ALL
+    chosen = in_tier if difficulty == ALL else [p for p in in_tier if p['difficulty'] == difficulty]
+    return chosen, tier, difficulty, difficulties
+
+
+def profile(name, realm=None, tier=None, difficulty=None):
     """
     {'name', 'realm', 'class', 'spec', 'role', 'bosses': [boss], 'nights': [night], 'totals', 'highlights',
-    'latest_code'} or None when they're in none of our logs. realm (WCL's spelling, e.g. 'TarrenMill'): only
-    that realm's character of the name.
+    'latest_code', 'tiers', 'tier', 'difficulties', 'difficulty'} or None when they're in none of our logs.
+    realm (WCL's spelling, e.g. 'TarrenMill'): only that realm's character of the name. tier (a zone id) and
+    difficulty narrow it (filter_pulls: their latest tier and most pulled difficulty by default; ALL for every one).
     boss: {'key', 'name', 'difficulty', 'pulls', 'kills', 'best_parse', 'best_pct', 'nights': [entry], 'first_kill'}
     night: {'code', 'title', 'date', 'zone', 'entries': [entry]}; entry: {'code', 'date', 'boss', 'difficulty',
     'key', 'score', 'parse', 'amount', 'pulls', 'kills', 'best_pct' (boss % left, 0 = killed), 'deaths',
     'avoidable', 'interrupts', 'fight_id' (the night's last pull of it)}
     """
-    pulls = db.character_pulls(name, realm)
-    if not pulls:
+    every = db.character_pulls(name, realm)
+    if not every:
         return None
+    latest_code = every[-1]['report_code']
+    tiers = tiers_of(every)
+    pulls, tier, difficulty, difficulties = filter_pulls(every, tier, difficulty)
     groups = {}  # (code, encounter, difficulty) -> pulls, in night order
     for p in pulls:
         groups.setdefault((p['report_code'], p['encounter_id'], p['difficulty']), []).append(p)
@@ -121,7 +161,8 @@ def profile(name, realm=None):
               'interrupts': sum(e['interrupts'] for e in entries)}
     return {'name': name, 'realm': realm, 'class': me_last.get('class') or '', 'spec': me_last.get('spec') or '',
             'role': me_last.get('role') or 'dps', 'bosses': boss_list, 'nights': night_list, 'totals': totals,
-            'highlights': highlights(entries, boss_list), 'latest_code': night_list[-1]['code']}
+            'highlights': highlights(entries, boss_list), 'latest_code': latest_code, 'tiers': tiers, 'tier': tier,
+            'difficulties': difficulties, 'difficulty': difficulty}
 
 
 def _alive_streak(boss_pulls, name):

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 REGION = 'eu'
 FRESH_HOURS = 6
+SHEET_VERSION = 1  # a stored copy from before load() fetched the stat sheet and set bonuses is fetched again
 ICON_URL = 'https://wow.zamimg.com/images/wow/icons/large/{icon}.jpg'
 
 # The in-game character panel: gear down both sides of the model, weapons underneath
@@ -231,6 +232,14 @@ async def _wowhead_set(data):
     return _set_from_wowhead(raw, len(pieces), tooltips.spec_id(*_class_spec(data)))
 
 
+def blizzard_configured():
+    try:
+        from character_enrichment import BLIZZARD_CLIENT_ID, BLIZZARD_CLIENT_SECRET
+        return bool(BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET)
+    except Exception:
+        return False
+
+
 async def _statistics(realm, name):
     """Blizzard's character statistics (the stat sheet), or None - e.g. without API credentials."""
     import aiohttp
@@ -289,12 +298,12 @@ def cached(name, realm=None):
             for key in ('statistics', 'tier_set'):
                 if own['data'].get(key) and not data.get(key):
                     data[key] = own['data'][key]
-        if not own or not _fresh(own['fetched_at']):
+        if not own or not _fresh(own['fetched_at']) or own['data'].get('sheet_v') != SHEET_VERSION:
             stale = True
         return data, stale
     row = db.get_armory(name, slug)
     if row:
-        return row['data'], not _fresh(row['fetched_at'])
+        return row['data'], not _fresh(row['fetched_at']) or row['data'].get('sheet_v') != SHEET_VERSION
     return None, True
 
 
@@ -336,6 +345,7 @@ async def load(code, name, realm=None):
                                                 'mythic_plus_scores_by_season') if rio.get(k) is not None}
     if statistics:
         keep['statistics'] = statistics
+    keep['sheet_v'] = SHEET_VERSION
     if not tier_set(keep):
         keep['tier_set'] = await _wowhead_set(keep)
     db.save_armory(name, realm, keep)

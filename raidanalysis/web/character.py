@@ -8,7 +8,8 @@ The character page: one character across every raid night we keep (character.pro
     - Bosses: progression per boss and difficulty - kills, best pull, best parse, both trends
     - Highlights: the fun facts
     - Every raid log they were in, newest first, each boss a link to their page for it that night
-    - Their gear, folded away (web/armory.py)
+    - right under it: their gear and character sheet (web/armory.py); then raid tier / difficulty chips that
+      everything below follows
 """
 import json
 from datetime import datetime, timezone
@@ -83,11 +84,15 @@ def _entry_point(entry, name):
 
 def _x_labels(points, x, y_text):
     step = max(1, -(-len(points) // 12))  # at most ~12 dates along the bottom
-    out = []
-    for i, p in enumerate(points):
-        if i % step == 0 or i == len(points) - 1:
-            out.append(f'<text x="{x(i):.1f}" y="{y_text}" text-anchor="middle">{_date(p["date"])}</text>')
-    return ''.join(out)
+    shown = [i for i in range(len(points)) if i % step == 0]
+    last = len(points) - 1
+    if shown[-1] != last:  # the last night always - in place of the one before when they'd overlap
+        if last - shown[-1] < max(2, step * 0.7) and len(shown) > 1:
+            shown[-1] = last
+        else:
+            shown.append(last)
+    return ''.join(f'<text x="{x(i):.1f}" y="{y_text}" text-anchor="middle">{_date(points[i]["date"])}</text>'
+                   for i in shown)
 
 
 def _segments(points, key, x, y):
@@ -212,8 +217,20 @@ def _lately(points, key, label, higher_better=True):
 # The page
 # ============================================================================
 
-def hero(prof, data, back_href):
-    """Render, name, class / spec / realm, the pin button, key numbers and links."""
+def _scope(prof):
+    """'Liberation of Undermine · Mythic' - what the numbers below the filters cover."""
+    from ..character import ALL
+    tier = 'All tiers' if prof['tier'] == ALL else next(
+        (t['zone_name'] for t in prof['tiers'] if t['zone_id'] == prof['tier']), '')
+    diff = 'all difficulties' if prof['difficulty'] == ALL else DIFFICULTY_NAMES.get(prof['difficulty'], '')
+    return f'{tier} · {diff}'
+
+
+def hero(prof, data, back_href, with_model=True):
+    """
+    Name, class / spec / realm, the pin button, key numbers (of the chosen tier and difficulty) and links -
+    and their render, unless the gear panel right under it shows it.
+    """
     color = CLASS_COLORS.get(prof['class'], '#9aa1b9')
     info = armory.summary(data) if data else {}
     render = armory.render_url(data) if data else None
@@ -227,7 +244,7 @@ def hero(prof, data, back_href):
              (f'{t["bosses_killed"]}', 'Bosses killed'),
              (f'<span class="score-badge {_band(t["score"])[0]}">{t["score"]}</span>', 'Avg score'),
              (parse_html(t['avg_parse']), 'Avg parse'), (parse_html(t['best_parse']), 'Best parse')]
-    if info.get('ilvl'):
+    if info.get('ilvl') and with_model:
         tiles.append((f'{float(info["ilvl"]):.0f}', 'Item level'))
     tiles_html = ''.join(f'<div class="ch-tile"><b>{v}</b><span>{label}</span></div>' for v, label in tiles)
     pin = json.dumps({'name': prof['name'], 'realm': armory.realm_slug(prof['realm']) if prof['realm'] else '',
@@ -240,8 +257,8 @@ def hero(prof, data, back_href):
         links.append(f'<a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" href="https://raider.io/characters/'
                      f'{armory.REGION}/{esc(slug)}/{esc(prof["name"])}">Raider.IO ↗</a>')
     return f"""
-    <div class="card ch-hero" style="--c:{color}">
-        <div class="ch-model">{model}</div>
+    <div class="card ch-hero{'' if with_model else ' no-model'}" style="--c:{color}">
+        {f'<div class="ch-model">{model}</div>' if with_model else ''}
         <div class="ch-main">
             <div class="ch-top">
                 <div><h1 class="ch-name" style="color:{color}">{esc(prof['name'])}</h1>
@@ -249,6 +266,7 @@ def hero(prof, data, back_href):
                 <button type="button" class="btn btn-secondary btn-sm pin-btn" data-pin="{esc(pin)}"
                         title="Pin to the front page - kept in this browser only">📌 Pin</button>
             </div>
+            <div class="ch-scope">📊 {esc(_scope(prof))}</div>
             <div class="ch-tiles">{tiles_html}</div>
             <div class="ch-links">{''.join(links)}</div>
         </div>
@@ -328,8 +346,8 @@ def bosses(prof):
         trend = f'/admin/raids/boss/{enc}/{diff}/player/{quote(name)}'
         rows.append(f"""
             <tr data-href="{trend}">
-                <td><a href="{trend}" class="ch-boss">{boss_portrait(enc, 'sm', killed=bool(b['kills']))}
-                    <strong>{esc(b['name'])}</strong></a> {difficulty_pill(diff)}</td>
+                <td><div class="ch-bosscell"><a href="{trend}" class="ch-boss">{boss_portrait(enc, 'sm', killed=bool(b['kills']))}
+                    <strong>{esc(b['name'])}</strong></a>{difficulty_pill(diff)}</div></td>
                 <td>{status}</td>
                 <td class="num">{b['pulls']}<span class="muted small"> / {len(b['nights'])}n</span></td>
                 <td class="num">{parse_html(b['best_parse'])}</td>
@@ -416,17 +434,44 @@ def _per_pull(value):
     return '<span class="muted">0</span>' if not value else f'{value:.2f}'
 
 
-def gear(armory_html):
-    """Their gear (web/armory.py's card - or its cast bar while it loads), folded away."""
-    return (f'<details class="ch-gear"{" open" if "data-focus-load" in armory_html else ""}>'
-            f'<summary>🛡️ Gear &amp; character panel</summary>{armory_html}</details>')
+def filter_href(prof, tier, difficulty):
+    """This page for another raid tier / difficulty (their defaults left out of the address)."""
+    query = []
+    if tier is not None:
+        query.append(f'tier={tier}')
+    if difficulty is not None:
+        query.append(f'difficulty={difficulty}')
+    return url(prof['name'], prof['realm']) + ('?' + '&'.join(query) if query else '')
+
+
+def filters(prof):
+    """Raid tier and difficulty chips: everything under them follows (the gear doesn't - it's what they wear now)."""
+    from ..character import ALL
+    if not prof['tiers']:
+        return ''
+    tier_chips = [f'<a class="ch-chip" data-swap="page" aria-pressed="{"true" if t["zone_id"] == prof["tier"] else "false"}" '
+                  f'href="{esc(filter_href(prof, t["zone_id"], None))}">{esc(t["zone_name"])} '
+                  f'<small>{t["nights"]} night{"s" if t["nights"] != 1 else ""}</small></a>' for t in prof['tiers']]
+    if len(prof['tiers']) > 1:
+        tier_chips.append(f'<a class="ch-chip" data-swap="page" aria-pressed="{"true" if prof["tier"] == ALL else "false"}" '
+                          f'href="{esc(filter_href(prof, ALL, None))}">All tiers</a>')
+    tier_q = None if prof['tier'] == (prof['tiers'][0]['zone_id']) else prof['tier']
+    diff_chips = [f'<a class="ch-chip" data-swap="page" aria-pressed="{"true" if d == prof["difficulty"] else "false"}" '
+                  f'href="{esc(filter_href(prof, tier_q, d))}">{esc(DIFFICULTY_NAMES.get(d, str(d)))} '
+                  f'<small>{n} pull{"s" if n != 1 else ""}</small></a>' for d, n in prof['difficulties']]
+    if len(prof['difficulties']) > 1:
+        diff_chips.append(f'<a class="ch-chip" data-swap="page" aria-pressed="{"true" if prof["difficulty"] == ALL else "false"}" '
+                          f'href="{esc(filter_href(prof, tier_q, ALL))}">All difficulties</a>')
+    return (f'<div class="night-bar ch-filters"><span class="ch-flabel">Raid tier</span><div class="ch-chips">{"".join(tier_chips)}</div>'
+            f'<span class="ch-flabel">Difficulty</span><div class="ch-chips">{"".join(diff_chips)}</div></div>')
 
 
 def page(prof, data, armory_html):
     latest = prof['nights'][-1]
     main = max(latest['entries'], key=lambda e: (e['difficulty'], e['pulls']))
-    return (hero(prof, data, player_href(latest['code'], prof['name'], main['key']))
-            + highlights(prof) + improvement(prof) + bosses(prof) + logs(prof) + gear(armory_html))
+    return (hero(prof, data, player_href(latest['code'], prof['name'], main['key']), with_model=not data)
+            + armory_html + filters(prof)
+            + highlights(prof) + improvement(prof) + bosses(prof) + logs(prof))
 
 
 def picker(name, realms):

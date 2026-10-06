@@ -58,7 +58,7 @@ def _num(value):
     return f'{value:,.0f}'.replace(',', '\u2009')  # thin-space thousands, like the game's tooltips
 
 
-def sheet(data):
+def sheet(data, stale=False):
     """The character sheet under the gear: attributes, enhancements, the set's bonuses - each part only when known."""
     st = armory.stats(data)
     tier = armory.tier_set(data)
@@ -81,13 +81,27 @@ def sheet(data):
                      f'{tier["worn"]}/{tier["size"]}</span></h4>{bonuses}</div>')
     if not parts:
         return ''
-    note = '' if st else ('<p class="muted small ar-note">The stat sheet comes from Blizzard\'s armory, which '
-                          'hasn\'t answered for this character yet.</p>')
-    return f'<div class="ar-sheet">{"".join(parts)}</div>{note}'
+    return f'<div class="ar-sheet">{"".join(parts)}</div>{_sheet_note(data, st, stale)}'
 
 
-def tab(data, player, stale=False):
-    """The Character card. player: analyzer.player_report row (class colour, missing enchants)."""
+def _sheet_note(data, st, stale):
+    """Why there's no stat sheet, in words."""
+    if st:
+        return ''
+    if not armory.blizzard_configured():
+        why = "Stats come from Blizzard's armory API, which isn't set up on this server."
+    elif data.get('sheet_v') != armory.SHEET_VERSION or stale:
+        why = 'Fetching the stat sheet from Blizzard - reload in a minute.'
+    else:
+        why = "Blizzard's armory has no stats for this character right now (it can lag until they log in again)."
+    return f'<p class="muted small ar-note">{why}</p>'
+
+
+def tab(data, player, stale=False, embedded=False):
+    """
+    The Character card. player: analyzer.player_report row (class colour, missing enchants). embedded: on the
+    character page, under its own header - no name and class line of its own.
+    """
     info = armory.summary(data)
     gear = armory.items(data)
     render = armory.render_url(data)
@@ -119,8 +133,7 @@ def tab(data, player, stale=False):
     return f"""
     <div class="card ar-card" style="--c:{color}">
         <div class="ar-head">
-            <div><h2 class="ar-title" style="color:{color}">{esc(player['name'])}</h2>
-                <p class="muted">{who}{guild}</p></div>
+            {'' if embedded else f'<div><h2 class="ar-title" style="color:{color}">{esc(player["name"])}</h2><p class="muted">{who}{guild}</p></div>'}
             <div class="ar-stats">{''.join(tiles)}</div>
         </div>
         <div class="ar-doll">
@@ -128,7 +141,7 @@ def tab(data, player, stale=False):
             <div class="ar-model">{model}<div class="ar-weapons">{weapons}</div></div>
             <div class="ar-col">{right}</div>
         </div>
-        {sheet(data)}
+        {sheet(data, stale)}
         <div class="ar-foot">{''.join(links)}
             <span class="muted small">{'Refreshing in the background - reload in a bit for the latest gear. ' if stale else ''}
             From Blizzard's armory and Raider.IO; kept {armory.FRESH_HOURS} hours.</span></div>

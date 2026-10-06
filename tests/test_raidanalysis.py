@@ -1978,3 +1978,22 @@ class TestItemTooltips(unittest.TestCase):
         self.assertEqual((wh['name'], wh['worn'], wh['size']), ('Viper Set', 2, 5))
         self.assertEqual([(b['count'], b['text'], b['active']) for b in wh['bonuses']],
                          [(2, 'MM two', True), (4, 'MM four', False)])
+
+
+class TestCharacterFilters(unittest.TestCase):
+    def test_latest_tier_and_most_pulled_difficulty_by_default(self):
+        from raidanalysis import character
+        pull = lambda code, zone, diff, start: {'report_code': code, 'zone_id': zone, 'zone_name': f'Zone {zone}',  # noqa: E731
+                                                'difficulty': diff, 'report_start': start}
+        pulls = ([pull('old', 38, 5, 1)] * 3 + [pull('new', 42, 5, 9)] * 4 + [pull('new', 42, 4, 9)] * 2
+                 + [pull('new2', 42, 4, 10)])
+        chosen, tier, diff, diffs = character.filter_pulls(pulls)
+        self.assertEqual((tier, diff, len(chosen)), (42, 5, 4))
+        self.assertEqual(diffs, [(5, 4), (4, 3)])
+        self.assertEqual([t['zone_id'] for t in character.tiers_of(pulls)], [42, 38])
+        chosen, tier, diff, _ = character.filter_pulls(pulls, 38, None)
+        self.assertEqual((tier, diff, len(chosen)), (38, 5, 3))
+        chosen, tier, diff, _ = character.filter_pulls(pulls, character.ALL, character.ALL)
+        self.assertEqual(len(chosen), len(pulls))
+        chosen, tier, diff, _ = character.filter_pulls(pulls, 999, 3)  # unknown: back to the defaults
+        self.assertEqual((tier, diff), (42, 5))
