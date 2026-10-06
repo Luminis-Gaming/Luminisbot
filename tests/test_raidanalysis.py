@@ -507,6 +507,18 @@ class TestMushroomBounce(unittest.TestCase):
         self.assertEqual(bossmech.failures(self.analysis(early, deaths=[1000] * 15), mech), [])
         self.assertIsNone(bossmech.failures({'players': []}, mech))                 # analyzed before the check
 
+    def test_my_performance(self):
+        """Failing it is a top "work on" for the one who went early; the others get a small "going well"."""
+        from raidanalysis import coach
+        numbered = [(3, {'analysis': self.analysis([[81109, ['Naautilus'], 81595]])}),
+                    (4, {'analysis': self.analysis([[81046, ['Naautilus', 'P3', 'P4', 'P5'], 104494]])})]
+        bad = coach.boss_mechanic_insights(3497, numbered, 'Naautilus')
+        self.assertEqual((bad[0]['tone'], bad[0]['impact'], bad[0]['kind']), ('bad', 90, 'boss_mechanic'))
+        self.assertIn('You bounced on the mushroom too early in 1 pull (#3 at 1:21', bad[0]['text'])
+        good = coach.boss_mechanic_insights(3497, numbered, 'P3')
+        self.assertEqual((good[0]['tone'], good[0]['text']), ('good', 'Mushroom bounce: with the raid every time (1×), never too early'))
+        self.assertEqual(coach.boss_mechanic_insights(1234, numbered, 'P3'), [])     # another boss: nothing
+
     def test_night_summary(self):
         from raidanalysis.web import insights
 
