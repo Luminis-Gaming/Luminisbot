@@ -284,27 +284,36 @@ def _linked(name, slug=None):
 
 def cached(name, realm=None):
     """
-    (data, stale) for a character - the linked character's cache, else ours - or (None, True).
-    realm (WCL's spelling or a slug): that realm's character of the name only.
+    (data, stale) for a character - the newer of the linked character's cache (the admin site's character
+    view) and ours - or (None, True). realm (WCL's spelling or a slug): that realm's character of the name only.
+    Stale: older than FRESH_HOURS, or our copy (which brings the stat sheet and set bonuses) missing or old.
     """
     from . import db
     slug = realm_slug(realm) if realm else None
     linked = _linked(name, slug)
-    if linked and linked.get('enrichment_cache') and items(linked['enrichment_cache']):
-        data = dict(linked['enrichment_cache'])
-        stale = not _fresh(linked.get('last_enriched'))
-        own = db.get_armory(name, slug)  # the stat sheet and set bonuses come with our own copy
-        if own and isinstance(own['data'], dict):
+    own = db.get_armory(name, slug)
+    own_ok = bool(own and isinstance(own['data'], dict) and items(own['data']))
+    linked_ok = bool(linked and linked.get('enrichment_cache') and items(linked['enrichment_cache']))
+    if not own_ok and not linked_ok:
+        return None, True
+    if own_ok and (not linked_ok or _when(own['fetched_at']) >= _when(linked.get('last_enriched'))):
+        data, fetched = own['data'], own['fetched_at']
+    else:  # a linked character refreshed on the admin site since we last fetched it
+        data, fetched = dict(linked['enrichment_cache']), linked.get('last_enriched')
+        if own_ok:
             for key in ('statistics', 'tier_set'):
                 if own['data'].get(key) and not data.get(key):
                     data[key] = own['data'][key]
-        if not own or not _fresh(own['fetched_at']) or own['data'].get('sheet_v') != SHEET_VERSION:
-            stale = True
-        return data, stale
-    row = db.get_armory(name, slug)
-    if row:
-        return row['data'], not _fresh(row['fetched_at']) or row['data'].get('sheet_v') != SHEET_VERSION
-    return None, True
+    stale = (not _fresh(fetched) or not own_ok or not _fresh(own['fetched_at'])
+             or own['data'].get('sheet_v') != SHEET_VERSION)
+    return data, stale
+
+
+def _when(dt):
+    """A stored time, comparable: naive ones are UTC; none is the oldest."""
+    if not dt:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 async def load(code, name, realm=None):

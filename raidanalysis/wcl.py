@@ -131,6 +131,15 @@ async def query(session, gql, variables=None):
     return body.get('data') or {}
 
 
+async def get_zone_encounters(session, zone_id):
+    """A raid tier's boss encounter ids in raid order (as WCL's zone lists them - the encounter journal's)."""
+    data = await query(session, """
+        query($id: Int!) { worldData { zone(id: $id) { encounters { id name } } } }
+    """, {'id': int(zone_id)})
+    zone = (data.get('worldData') or {}).get('zone') or {}
+    return [e['id'] for e in zone.get('encounters') or [] if e.get('id')]
+
+
 async def get_rate_limit(session):
     data = await query(session, """
         query { rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn } }

@@ -588,17 +588,30 @@ async def handle_character(request):
     return _page(name, session, cview.page(prof, data, gear))
 
 
+ARMORY_RETRY_SECONDS = 15 * 60
+_armory_tried = {}  # (name, realm) -> when it was last fetched in the background
+
+
 def _refresh_armory(code, name, realm, stale):
-    """A stale stored character: fetched again in the background (one at a time each)."""
+    """
+    A stale stored character: fetched again in the background - one at a time each, and not again for
+    ARMORY_RETRY_SECONDS (a character Blizzard / Raider.IO can't find isn't asked for on every page view).
+    """
+    import time
     from .. import armory
     key = (name, realm)
-    if not stale or key in _armory_refreshing:
+    if not stale or key in _armory_refreshing or time.time() - _armory_tried.get(key, 0) < ARMORY_RETRY_SECONDS:
         return
     _armory_refreshing.add(key)
+    _armory_tried[key] = time.time()
 
     async def refresh():
         try:
-            await armory.load(code, name, realm)
+            data, why = await armory.load(code, name, realm)
+            if not data:
+                logger.info(f'[RAIDS] Character {name} not refreshed: {why}')
+        except Exception:
+            logger.exception(f'[RAIDS] Character {name} refresh failed')
         finally:
             _armory_refreshing.discard(key)
     asyncio.create_task(refresh())
@@ -749,10 +762,13 @@ def _selected_boss(request, groups):
     return max(keys, key=lambda k: (len(groups[k]), keys.index(k)))
 
 
-def _night_header(request, report, code, pulls, selected, fight_id=None, view='mechanics', chip_href=None):
+def _night_header(request, report, code, pulls, selected, fight_id=None, view='mechanics', chip_href=None,
+                  boss_href=None):
     """
     Night summary, boss tabs, Overall / pull chips and the Mechanics / Players switch. chip_href(fight id or
     None for Overall) -> where a pull chip goes - a player's page keeps the player and tab, changing the pull.
+    boss_href((encounter id, difficulty), its pulls) -> where a boss tab goes instead of the boss's page (None:
+    there) - a player's page keeps the player and tab, changing the boss.
     """
     players_q = view == 'players'
     groups = _group_by_boss(pulls)
@@ -767,8 +783,9 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
         best = min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None)
         state = '✔ Killed' if kill else (f'best {best:.1f}%' if best is not None else '')
         active = ' active' if (encounter_id, difficulty) == selected else ''
-        tabs.append(f'<a class="boss-tab{active}" data-swap="page" href="/admin/raids/report/{esc(code)}?boss={encounter_id}-{difficulty}'
-                    f'{"&view=players" if players_q else ""}">{boss_portrait(encounter_id, killed=kill)}'
+        href = ((boss_href((encounter_id, difficulty), boss_pulls) if boss_href else None)
+                or f'/admin/raids/report/{code}?boss={encounter_id}-{difficulty}{"&view=players" if players_q else ""}')
+        tabs.append(f'<a class="boss-tab{active}" data-swap="page" href="{esc(href)}">{boss_portrait(encounter_id, killed=kill)}'
                     f'<span><strong>{esc(boss_pulls[0]["encounter_name"])}</strong> {difficulty_pill(difficulty)}'
                     f'<small>{_plural(len(boss_pulls), "pull")} · {state}</small></span></a>')
 
@@ -1292,7 +1309,14 @@ async def handle_player(request):
     chip_href = lambda fid: (f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'  # noqa: E731
                              + (f'&pull={fid}' if fid else '') + ('' if tab == 'execution' else f'&tab={tab}'))
     from . import character as cview
-    body = (_night_header(request, report, code, pulls, selected, fight_id, view='players', chip_href=chip_href)
+    def boss_href(key, boss_pulls):  # the boss tabs stay on this player and tab, when they were in that boss's pulls
+        if not any(any(x.get('name') == name for x in ((p.get('analysis') or {}).get('players') or []))
+                   for p in boss_pulls):
+            return None
+        return (f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={key[0]}-{key[1]}'
+                + ('' if tab == 'execution' else f'&tab={tab}'))
+    body = (_night_header(request, report, code, pulls, selected, fight_id, view='players', chip_href=chip_href,
+                          boss_href=boss_href)
             + players.player_hero(player, tab_href, tab, cview.url(name, db.realm_in(code, name))))
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)

@@ -443,6 +443,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                     logger.warning(f"[RAIDS] Benchmarks skipped: {e}")
                 try:  # players' realms for logs synced before they were recorded
                     await _backfill_realms(session)
+                    await _backfill_zones(session)
                 except wcl.WCLRateLimited as e:
                     errors.append(_rate_limited(e))
                 except Exception as e:
@@ -507,6 +508,20 @@ async def _backfill_realms(session):
             return
         actors = await wcl.get_report_actors(session, code)
         db.save_realms(code, {a['name']: a.get('server') for a in actors if a.get('type') == 'Player'})
+
+
+async def _backfill_zones(session):
+    """Raid tiers' boss order (coach.boss_weights): fetched once per tier (and weekly), a point or two each."""
+    for zone_id in db.zones_missing(3):
+        if not await _budget_ok(session):
+            return
+        try:
+            ids = await wcl.get_zone_encounters(session, zone_id)
+        except wcl.WCLError as e:
+            logger.warning(f'[RAIDS] Boss order of zone {zone_id} failed: {e}')
+            continue
+        if ids:
+            db.save_zone(zone_id, ids)
 
 
 async def fetch_all_benchmarks(full_budget=False):

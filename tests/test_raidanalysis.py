@@ -1997,3 +1997,81 @@ class TestCharacterFilters(unittest.TestCase):
         self.assertEqual(len(chosen), len(pulls))
         chosen, tier, diff, _ = character.filter_pulls(pulls, 999, 3)  # unknown: back to the defaults
         self.assertEqual((tier, diff), (42, 5))
+
+
+class TestArmoryNewestCopy(unittest.TestCase):
+    """armory.cached(): the newer of a linked character's cache (admin site) and ours."""
+
+    def run_cached(self, linked_when, own_when, own_extra=None):
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+        from raidanalysis import armory, db
+        now = datetime.now(timezone.utc)
+        gear = lambda ilvl: {'raiderio': {'gear': {'items': {'head': {'item_id': 1, 'item_level': ilvl, 'name': 'H'}}}}}  # noqa: E731
+        linked = {'enrichment_cache': gear(295), 'last_enriched': (now - linked_when).replace(tzinfo=None)}
+        own = {'data': dict(gear(325), sheet_v=armory.SHEET_VERSION, **(own_extra or {})), 'fetched_at': now - own_when}
+        with mock.patch.object(armory, '_linked', lambda name, slug=None: linked), \
+                mock.patch.object(db, 'get_armory', lambda name, slug=None: own):
+            data, stale = armory.cached('Boopsboops', 'Frostwhisper')
+        return armory.items(data)['HEAD']['ilvl'], stale, data
+
+    def test_ours_wins_when_newer(self):
+        from datetime import timedelta
+        ilvl, stale, _ = self.run_cached(timedelta(days=30), timedelta(minutes=5))
+        self.assertEqual((ilvl, stale), (325, False))  # not "refreshing" forever because the linked copy is old
+
+    def test_linked_wins_when_newer_and_keeps_our_sheet(self):
+        from datetime import timedelta
+        ilvl, stale, data = self.run_cached(timedelta(minutes=1), timedelta(hours=2), {'statistics': {'health': 1}})
+        self.assertEqual((ilvl, stale), (295, False))
+        self.assertEqual(data['statistics'], {'health': 1})
+
+
+class TestBossTabsKeepThePlayer(unittest.TestCase):
+    def test_player_page_boss_tabs(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from raidanalysis import db
+        from raidanalysis.web import routes
+        pull = lambda fid, enc, names: {'fight_id': fid, 'encounter_id': enc, 'difficulty': 5, 'encounter_name': f'Boss {enc}',  # noqa: E731
+                                        'kill': False, 'fight_pct': 50.0, 'start_ms': fid * 1000, 'end_ms': fid * 1000 + 500,
+                                        'analysis': {'players': [{'name': n} for n in names]}}
+        pulls = [pull(1, 10, ['Futhark', 'Bob']), pull(2, 20, ['Bob'])]
+        report = {'title': 'Night', 'start_time': 0, 'zone_name': 'Z', 'owner': 'x', 'event_title': None}
+        href = lambda key, ps: ('/player-page' if any('Futhark' in [x['name'] for x in p['analysis']['players']]  # noqa: E731
+                                                       for p in ps) else None)
+        with mock.patch.object(db, 'report_archived', lambda code: False):
+            html = routes._night_header(SimpleNamespace(query={}), report, 'CODE', pulls, (10, 5), view='players',
+                                        boss_href=href)
+        self.assertIn('class="boss-tab active" data-swap="page" href="/player-page"', html)
+        self.assertIn('href="/admin/raids/report/CODE?boss=20-5&amp;view=players"', html)  # not in that boss: its page
+
+
+class TestBossWeightsByDifficulty(unittest.TestCase):
+    """coach.boss_weights: difficulty strictly first, then the boss's place in the raid and the pulls."""
+    ORDER = {3470: 0, 3445: 1, 3455: 2, 3497: 3, 3420: 4, 3421: 5, 3429: 6, 3492: 7}  # The Venomous Abyss
+
+    def test_a_normal_last_boss_never_beats_a_mythic_first_boss(self):
+        from raidanalysis import coach
+        normal_last = {'encounter': 3492, 'difficulty': 3, 'pulls': 12, 'killed': False, 'start': 0}
+        heroic_first = {'encounter': 3470, 'difficulty': 4, 'pulls': 1, 'killed': True, 'start': 1}   # an easy kill even
+        mythic_first = {'encounter': 3470, 'difficulty': 5, 'pulls': 1, 'killed': True, 'start': 2}
+        w = coach.boss_weights([normal_last, heroic_first, mythic_first], self.ORDER)
+        self.assertTrue(w[0] < w[1] < w[2])
+        self.assertEqual(w[2], 1)
+
+    def test_later_bosses_count_more_within_a_difficulty(self):
+        from raidanalysis import coach
+        # pulled in this order tonight, but Ula'tek is boss 8 and Nek'zali boss 1
+        ulatek = {'encounter': 3492, 'difficulty': 4, 'pulls': 5, 'killed': True, 'start': 0}
+        nekzali = {'encounter': 3470, 'difficulty': 4, 'pulls': 5, 'killed': True, 'start': 1}
+        w_ulatek, w_nekzali = coach.boss_weights([ulatek, nekzali], self.ORDER)
+        self.assertGreater(w_ulatek, w_nekzali)
+
+    def test_pulls_still_count_and_easy_kills_hardly(self):
+        from raidanalysis import coach
+        prog = {'encounter': 3445, 'difficulty': 5, 'pulls': 20, 'killed': False, 'start': 1}   # boss 2, 20 wipes
+        farm = {'encounter': 3470, 'difficulty': 5, 'pulls': 1, 'killed': True, 'start': 0}     # boss 1, one-shot
+        w_prog, w_farm = coach.boss_weights([prog, farm], self.ORDER)
+        self.assertEqual(w_prog, 1)
+        self.assertLess(w_farm, 0.15)  # like before: an easy kill hardly counts

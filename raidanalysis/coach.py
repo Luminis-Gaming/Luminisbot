@@ -4,9 +4,11 @@ Coaching for one player's raid night - what the "📊 My performance" recap says
 Every insight the data has is a candidate - mechanics and deaths (analyzer feedback), priority adds and
 reaction, potion timing (the focus data), cooldowns against the top players, rotation and uptime, wasted
 procs, active time, output (parses, most damage to a priority add) - each with an impact (0-100: how much
-it cost you, or how good it was). Impacts are weighted by how much the boss mattered tonight: the bosses
-you pulled most and ended the night on count; an easy one- or two-pull kill hardly does - nobody needs
-three tips about a boss that died first try. The best-weighted few become "work on" and "going well".
+it cost you, or how good it was). Impacts are weighted by how much the boss mattered tonight: the hardest
+difficulty first - every Mythic boss over every Heroic one over every Normal one - then, within a difficulty,
+the later bosses of the raid and the ones you pulled most; an easy one- or two-pull kill hardly counts -
+nobody needs three tips about a boss that died first try. The best-weighted few become "work on" and
+"going well".
 
 Focus insights need a pull's focus data from Warcraft Logs: `night(load=True)` fetches it (and everyone's
 damage per target) for the key pull - the kill, else the furthest wipe - of the most important bosses.
@@ -33,23 +35,39 @@ ROTATION_MIN_GAP = 0.5     # ...and you're at least this many casts a minute beh
 # How much each boss matters tonight
 # ============================================================================
 
-def boss_weights(bosses):
+ORDER_SHARE = 0.55   # within a difficulty: how much the boss's place in the raid counts, against pulls
+EASY_KILL_FACTOR = 0.5
+
+
+def boss_weights(bosses, order=None):
     """
-    bosses: [{'pulls', 'killed', 'start'}] -> a weight per boss, 1 for the most important: more pulls
-    count more, the boss the night ended on gets a bonus, an easy kill (EASY_KILL_PULLS or fewer) hardly counts.
+    bosses: [{'encounter', 'difficulty', 'pulls', 'killed', 'start'}] -> a weight per boss, 1 for the most important.
+    Difficulty first, strictly: each difficulty played tonight is a band, and every boss of a harder one weighs
+    more than any boss of an easier one (a Normal last boss never beats a Mythic first boss). Within a band:
+    the boss's place in the raid (order: {encounter id: place}, zone_order(); unknown - the night's order) and
+    how much it was pulled; an easy kill (EASY_KILL_PULLS or fewer) counts for half.
     """
     if not bosses:
         return []
-    most = max(b['pulls'] for b in bosses) or 1
-    last = max(b['start'] for b in bosses)
+    order = order or {}
+    bands = sorted({b.get('difficulty') or 0 for b in bosses})
+    places = sorted(order.values()) if order else []
+    last_place = places[-1] if places else 0
+    by_night = sorted(bosses, key=lambda b: b['start'])
     raw = []
     for b in bosses:
-        w = 0.3 + 0.7 * b['pulls'] / most
-        if b['start'] == last:
-            w += 0.2
+        band = [x for x in bosses if (x.get('difficulty') or 0) == (b.get('difficulty') or 0)]
+        if order and b.get('encounter') in order and last_place:
+            place = order[b['encounter']] / last_place
+        else:  # boss order unknown: the night's order within the difficulty stands in
+            seq = [x for x in by_night if any(x is y for y in band)]
+            mine = next(i for i, x in enumerate(seq) if x is b)
+            place = mine / (len(seq) - 1) if len(seq) > 1 else 1.0
+        effort = b['pulls'] / (max(x['pulls'] for x in band) or 1)
+        s = 0.15 + 0.8 * (ORDER_SHARE * place + (1 - ORDER_SHARE) * effort)  # 0.15 .. 0.95: bands never overlap
         if b['killed'] and b['pulls'] <= EASY_KILL_PULLS:
-            w *= 0.35
-        raw.append(w)
+            s *= EASY_KILL_FACTOR
+        raw.append(bands.index(b.get('difficulty') or 0) + s)
     top = max(raw)
     return [w / top for w in raw]
 
@@ -311,12 +329,13 @@ def night(code, character_names, load=True):
         row = next((r for r in analyzer.player_report(insight_pulls, tags) if r['name'] == character), None)
         if not row:
             continue
-        bosses.append({'name': boss_pulls[0]['encounter_name'], 'difficulty': key[1], 'key': key, 'numbered': numbered,
+        bosses.append({'name': boss_pulls[0]['encounter_name'], 'encounter': key[0], 'difficulty': key[1], 'key': key,
+                       'numbered': numbered,
                        'pulls': len(boss_pulls), 'killed': any(p['kill'] for p in boss_pulls),
                        'best': min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None),
                        'start': boss_pulls[0]['start_ms'], 'row': row, 'score': row['score'],
                        'deaths': row['deaths'], 'guide_for': guides.guide_lookup(key[0]), 'star': None})
-    for boss, weight in zip(bosses, boss_weights(bosses)):
+    for boss, weight in zip(bosses, boss_weights(bosses, db.zone_order(report.get('zone_id')))):
         boss['weight'] = weight
 
     from .gamedata import tracked_ids

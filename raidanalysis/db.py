@@ -152,6 +152,15 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (report_code, name)
         );
     """)
+    # Each raid tier's bosses in raid order (WCL's zone, as its encounter journal lists them): the coach weighs
+    # later bosses over earlier ones (coach.boss_weights) - encounter ids don't follow the raid's order
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_zones (
+            zone_id INTEGER PRIMARY KEY,
+            encounters JSONB NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
     # Characters for the player page's Character tab (armory.py): Blizzard + Raider.IO, by name and realm
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_armory (
@@ -791,6 +800,32 @@ def character_pulls(name, realm=None):
         WHERE r.source <> 'manual' AND p.analysis->'players' @> %s::jsonb {realm_where}
         ORDER BY r.start_time, p.start_ms
     """, (name, name, name, name, Json([{'name': name}])) + ((realm,) if realm else ()), fetch='all')
+
+
+def zone_order(zone_id):
+    """{encounter id: its place in the raid (0 = first boss)} for a raid tier, or {} when it isn't known yet."""
+    if zone_id is None:
+        return {}
+    row = _run("SELECT encounters FROM raid_zones WHERE zone_id = %s", (zone_id,), fetch='one')
+    return {int(e): i for i, e in enumerate(row['encounters'])} if row else {}
+
+
+def save_zone(zone_id, encounter_ids):
+    _run("""
+        INSERT INTO raid_zones (zone_id, encounters) VALUES (%s, %s)
+        ON CONFLICT (zone_id) DO UPDATE SET encounters = EXCLUDED.encounters, fetched_at = NOW()
+    """, (zone_id, Json([int(e) for e in encounter_ids])))
+
+
+def zones_missing(limit):
+    """Raid tiers in our logs whose boss order we haven't fetched (or not for a week: a tier may get bosses added)."""
+    rows = _run("""
+        SELECT DISTINCT r.zone_id FROM raid_reports r
+        LEFT JOIN raid_zones z ON z.zone_id = r.zone_id
+        WHERE r.zone_id IS NOT NULL AND (z.zone_id IS NULL OR z.fetched_at < NOW() - INTERVAL '7 days')
+        LIMIT %s
+    """, (limit,), fetch='all')
+    return [r['zone_id'] for r in rows or []]
 
 
 def realms_for(name):
