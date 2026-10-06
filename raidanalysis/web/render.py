@@ -568,6 +568,12 @@ tr.muted-row td { opacity: 0.7; }
     font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; margin-bottom: -1px; }
 .ftabs button:hover { color: var(--text); }
 .ftabs button[aria-selected=true] { color: var(--text); border-bottom-color: var(--c); }
+/* The verdict, big and labelled: the only good / partly / off colors on a card */
+.fverdict { margin-left: auto; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 700;
+    white-space: nowrap; background: var(--surface-3); color: var(--muted); }
+.fverdict.good { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
+.fverdict.ok { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.fverdict.bad { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
 .fpane[hidden] { display: none; }
 .fstats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 12px; }
 .fstats > div { background: var(--surface-3); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
@@ -669,6 +675,7 @@ table.bars td.bar-cell { width: 55%; }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; }
 .grid-2 > * { min-width: 0; }
 .grid-2 > .card { margin-bottom: 0; }
+.grid-2 { margin-bottom: 20px; }  /* the row keeps a card's gap to what follows */
 
 /* Tagging */
 .tag-form { display: inline-flex; gap: 4px; }

@@ -111,9 +111,10 @@ def players_view(players, guide_for, player_href):
         cards.append(f"""
         <article class="player-card" data-role="{esc(p['role'])}">
             <header>
-                {score_ring(p['score'])}
+                <a href="{esc(player_href(p['name']))}" class="plain-link" title="Open {esc(p['name'])}'s full analysis">{score_ring(p['score'])}</a>
                 <div>
-                    <h3>{player_name(p['name'], p['class'])}</h3>
+                    <h3><a href="{esc(player_href(p['name']))}" class="plain-link player-card-name"
+                           title="Open {esc(p['name'])}'s full analysis">{player_name(p['name'], p['class'])}</a></h3>
                     <p class="muted small">{ROLE_ICONS.get(p['role'], '')} {spec}{esc(_class_label(p['class']))}{_other_specs(p)} ·
                        {p['pulls']} pull{'s' if p['pulls'] != 1 else ''}</p>
                 </div>
@@ -124,7 +125,7 @@ def players_view(players, guide_for, player_href):
             <details class="breakdown-toggle"><summary>Score breakdown ({len(p.get('components') or [])})</summary>
                 {breakdown(p, guide_for)}</details>
             <a class="card-link" href="{esc(player_href(p['name']))}">
-                {f'+{more} more · ' if more > 0 else ''}Pull-by-pull details →</a>
+                {f'+{more} more · ' if more > 0 else ''}Full analysis →</a>
         </article>""")
     return f"""
     <div class="card">
@@ -204,7 +205,9 @@ def player_page(p, guide_for, pull_href):
         f'<li class="note bad"><span>🎯</span><span>{esc(a["name"])}{guide_button(guide_for(a["id"], a["name"]), a["name"])}'
         f' — {a["hits"]} hit{"s" if a["hits"] != 1 else ""}</span></li>'
         for a in sorted(p['avoidable'].values(), key=lambda a: -a['hits']))
-    chart = per_pull_columns([(pp['number'], pp['avoidable_hits']) for pp in p['per_pull']], 'Avoidable hits per pull')
+    single = len(p['per_pull']) == 1  # one pull picked: no per-pull chart, and its row is "this pull"
+    chart = '' if single else per_pull_columns([(pp['number'], pp['avoidable_hits']) for pp in p['per_pull']],
+                                               'Avoidable hits per pull')
     return f"""
     <div class="card">
         <div class="sec-head"><div class="sec-title"><span class="sec-icon">🧮</span><div><h2>Score breakdown</h2></div></div></div>
@@ -221,7 +224,7 @@ def player_page(p, guide_for, pull_href):
             {f'<h4>Per pull</h4>{chart}' if chart and p['avoidable_hits'] else ''}</div>
     </div>
     <div class="card">
-        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📋</span><div><h2>Pull by pull</h2></div></div></div>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">📋</span><div><h2>{'This pull' if single else 'Pull by pull'}</h2></div></div></div>
         <div class="table-wrapper"><table class="compact">
             <tr><th class="num">Pull</th><th></th><th>Outcome</th><th class="num">Avoidable hits</th>
                 <th class="num">Potion</th><th class="num">Healthstones</th></tr>

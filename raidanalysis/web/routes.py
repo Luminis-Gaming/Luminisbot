@@ -47,6 +47,7 @@ def register_routes(app):
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
     app.router.add_get('/raids', _public(handle_overview))
     app.router.add_get('/raids/spell/{spell_id}', handle_spell)
+    app.router.add_get('/raids/favicon.png', handle_favicon)
     app.router.add_get('/raids/report/{code}', _public(handle_night))
     app.router.add_get('/raids/report/{code}/{fight_id}', _public(handle_pull))
     app.router.add_get('/raids/report/{code}/player/{name}', _public(handle_player))
@@ -58,6 +59,15 @@ def register_routes(app):
 
 
 PUBLIC_SESSION = {'username': 'guest', 'role': 'public'}
+
+# The public site's tab icon (the guild's Day Time Raider emoji): linked once the file is there.
+FAVICON = __import__('pathlib').Path(__file__).parent / 'static' / 'favicon.png'
+
+
+async def handle_favicon(request):
+    if not FAVICON.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(FAVICON, headers={'Cache-Control': 'public, max-age=86400'})
 
 # Every raid page: a content security policy (scripts/styles are inline, so the value is mostly in
 # locking down where anything else may load from and who may frame us), no MIME sniffing, no framing
@@ -163,11 +173,14 @@ def _page(title, session, body, waiting=False):
     else:
         body = sync_banner(sync.status, waiting) + body
     prefix = 'Luminis Raids' if session is PUBLIC_SESSION else 'LuminisBot Admin'
+    icon = ('<link rel="icon" type="image/png" href="/raids/favicon.png">'
+            if session is PUBLIC_SESSION and FAVICON.is_file() else '')
     response = web.Response(text=f"""<!DOCTYPE html>
 <html>
 <head>
     <title>{prefix} - {esc(title)}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    {icon}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -560,8 +573,11 @@ def _selected_boss(request, groups):
     return max(keys, key=lambda k: (len(groups[k]), keys.index(k)))
 
 
-def _night_header(request, report, code, pulls, selected, fight_id=None, view='mechanics'):
-    """Night summary, boss tabs, Overall / pull chips and the Mechanics / Players switch."""
+def _night_header(request, report, code, pulls, selected, fight_id=None, view='mechanics', chip_href=None):
+    """
+    Night summary, boss tabs, Overall / pull chips and the Mechanics / Players switch. chip_href(fight id or
+    None for Overall) -> where a pull chip goes - a player's page keeps the player and tab, changing the pull.
+    """
     players_q = view == 'players'
     groups = _group_by_boss(pulls)
     combat = sum(p['end_ms'] - p['start_ms'] for p in pulls)
@@ -584,12 +600,14 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
     overall_href = f'/admin/raids/report/{esc(code)}?boss={selected[0]}-{selected[1]}'
     chips = ['<span class="chips-label">Pulls</span>',
              f'<a class="pull-chip overall{" active" if fight_id is None else ""}" '
-             f'href="{overall_href}{"&view=players" if players_q else ""}">Overall ({len(boss_pulls)})</a>']
+             f'href="{esc(chip_href(None)) if chip_href else overall_href + ("&view=players" if players_q else "")}">'
+             f'Overall ({len(boss_pulls)})</a>']
     for number, pull in enumerate(boss_pulls, 1):
         label = '✔ Kill' if pull['kill'] else f"{pull['fight_pct'] or 0:.0f}%"
         classes = 'pull-chip' + (' kill' if pull['kill'] else '') + (' active' if pull['fight_id'] == fight_id else '')
-        chips.append(f'<a class="{classes}" href="/admin/raids/report/{esc(code)}/{pull["fight_id"]}'
-                     f'{"?view=players" if players_q else ""}" '
+        href = (esc(chip_href(pull['fight_id'])) if chip_href else
+                f'/admin/raids/report/{esc(code)}/{pull["fight_id"]}{"?view=players" if players_q else ""}')
+        chips.append(f'<a class="{classes}" href="{href}" '
                      f'title="Pull {number}: {esc(_result_text(pull))}">#{number} {label}</a>')
 
     # Mechanics / Players switch, keeping the selected boss and pull.
@@ -1091,7 +1109,10 @@ async def handle_player(request):
     tab_href = lambda key: page_href + ('' if key == 'execution' else f'&tab={key}')  # noqa: E731
     pull_href = lambda number: f'/admin/raids/report/{code}/{fights[number]}'  # noqa: E731
     whole_night = list(enumerate(groups[selected], 1))  # top-player comparisons use every pull of the boss
-    body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
+    # The header's pull chips stay on this player and tab - only the pull changes
+    chip_href = lambda fid: (f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={selected[0]}-{selected[1]}'  # noqa: E731
+                             + (f'&pull={fid}' if fid else '') + ('' if tab == 'execution' else f'&tab={tab}'))
+    body = (_night_header(request, report, code, pulls, selected, fight_id, view='players', chip_href=chip_href)
             + players.player_hero(player, tab_href, tab))
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)

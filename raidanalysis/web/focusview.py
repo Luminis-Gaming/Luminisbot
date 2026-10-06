@@ -13,10 +13,12 @@ Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from
 from .. import focus, spells
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, npc_portrait, npc_zoom, safe_icon
 
-# Categorical slots, dark steps, in fixed order (validated on the card surface #161a2c: all checks pass).
-COLORS = ('#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#8f6ce0')
+# Categorical slots for targets, in fixed order. No green, amber, orange or red: those mean good / partly /
+# off on these pages (the verdicts), and an add colored like a grade reads as one.
+COLORS = ('#3987e5', '#d55181', '#8f6ce0', '#1fa9bb', '#b08550', '#c3c8dc')
 OTHER_COLOR = '#5b6178'
-VERDICTS = {'good': ('pill-kill', 'On it'), 'ok': ('pill', 'Partly'), 'off': ('pill-wipe', 'Off target')}
+VERDICTS = {'good': ('good', '✅ On it'), 'ok': ('ok', '⚠️ Partly'), 'off': ('bad', '❌ Off target')}
+
 REACTION_GOOD_MS, REACTION_OK_MS = 1500, 3000  # first hit on a priority add after it appeared
 POTION_WINDOW_MS = 30000                         # a potion this close to a priority spawn (its nearest) is for it
 
@@ -481,7 +483,7 @@ def _card_mark(name, color, icon, href, size=''):
 
 
 def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, idx, wins, icon=None, href=None):
-    cls, text = VERDICTS.get(kind['verdict'], ('pill-muted', '—'))
+    cls, text = VERDICTS.get(kind['verdict'], ('none', '—'))
     spawns = kind['spawns']
     rows = ''.join(
         f'<div class="fsrow"><span class="fs-when">#{k} {_clock(w["start"])}</span>'
@@ -513,7 +515,7 @@ def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, 
         <div class="fcard prio" style="--c:{color}" id="fcard-{idx}">
             <div class="fcard-head">{_card_mark(kind['target'], color, icon, href, 'md')}<b>{esc(kind['target'])}</b>
                 <span class="muted small">{len(spawns)} spawn{'s' if len(spawns) != 1 else ''}</span>
-                <span class="pill {cls}">{text}</span></div>
+                <span class="fverdict {cls}" title="Your share of damage on it against the top DPS's, over its spawns">{text}</span></div>
             <div class="ftabs" role="tablist">{buttons}</div>
             {panes}
         </div>"""

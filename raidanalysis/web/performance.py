@@ -46,6 +46,25 @@ def _pct(share):
 # Damage & focus
 # ============================================================================
 
+def _damage_one_pull(r, role, metric, active, raid_active, focus_section, numbered, name, pull_focus):
+    """The Damage & focus card for one pull: its parse, ilvl parse, DPS / HPS, raid rank and active time."""
+    peers = 'healers' if role == 'healer' else 'tanks' if role == 'tank' else 'DPS'
+    tiles = [(parse_html(r['parse']), 'Parse'), (parse_html(r['bracket']), 'ilvl parse'),
+             (fmt_amount(r['amount']), metric),
+             (f"{r['raid_rank']} / {r['raid_size']}" if r['raid_rank'] else '—', f"Raid rank among the {peers}"),
+             (_pct(active), f'Active time · raid {_pct(raid_active)}' if raid_active else 'Active time')]
+    wipe = ('<p class="muted small">No parse for this wipe: Warcraft Logs only shows those on its website, which '
+            'needs a browser session set up (WCL_SCRAPE_COOKIES).</p>' if not r['kill'] and r['parse'] is None else '')
+    return f"""
+    <div class="card">
+        {section_head('📈', throughput_label(role),
+                      f"Parse, {metric} and where your damage went in pull #{r['number']} "
+                      f"({'kill' if r['kill'] else 'wipe'}, {fmt_duration(r['duration'])}).")}
+        {subsection('Performance', stat_tiles(tiles) + wipe)}
+        {subsection('Focus', focus_section + '<h4>Where your damage went</h4>' + _focus(numbered, name, role, pull_focus))}
+    </div>"""
+
+
 def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
     """
     numbered: [(pull number, pull)] the page covers; player: analyzer.player_report row; focus_section:
@@ -60,6 +79,8 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
     parses = [r['parse'] for r in rows if r['parse'] is not None]
     kills = [r for r in rows if r['kill']]
     active, raid_active = throughput.active_time(numbered, name, role)
+    if len(rows) == 1:  # one pull picked: its own numbers, once - no best / typical / average of one, no one-row table
+        return _damage_one_pull(rows[0], role, metric, active, raid_active, focus_section, numbered, name, pull_focus)
     tiles = [(parse_html(max(parses)) if parses else '—', 'Best parse'),
              (parse_html(sorted(parses)[len(parses) // 2]) if parses else '—', 'Typical parse'),
              (fmt_amount(sum(r['amount'] for r in rows) / len(rows)), f'Average {metric}'),
@@ -203,13 +224,14 @@ def _focus(numbered, name, role, pull_focus=None):
                  '<th class="num" title="Bosses: the whole pull. Adds: while the raid was hitting them">Up</th>'
                  '<th class="num" title="Your damage on it over the time it was up">DPS while up</th>'
                  if pull_focus else '')
+    one = len(numbered) == 1  # a single pull picked: the right side is that pull against the raid, not "all pulls"
+    right = 'the raid' if one else f'all {len(numbered)} pulls of this boss'
     return f"""
-        <p class="muted small">{f'Pull #{number} on the left; ' if pull_focus else ''}all {len(numbered)} pull(s) of
-           this boss on the right: your share of your damage against the raid's {peers} (their typical share is the
-           tick), and how many points you're above (green) or clearly below (red) them. Click a target to see
-           everyone's damage on it.</p>
+        <p class="muted small">{f'Pull #{number} on the left; ' if pull_focus else ''}{right} on the right: your share
+           of your damage against the raid's {peers} (their typical share is the tick), and how many points you're
+           above (green) or clearly below (red) them. Click a target to see everyone's damage on it.</p>
         <div class="table-wrapper"><table class="compact focus-table dtable">
-            <tr class="group-head"><th></th>{pull_head}<th colspan="2" class="col-all">All these pulls</th></tr>
+            <tr class="group-head"><th></th>{pull_head}<th colspan="2" class="col-all">{'Against the raid' if one else 'All these pulls'}</th></tr>
             <tr><th>Target</th>{pull_cols}
                 <th class="col-all">Your share</th><th>vs raid</th></tr>
             {''.join(out)}</table></div>"""
