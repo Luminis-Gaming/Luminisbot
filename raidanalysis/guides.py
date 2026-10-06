@@ -154,19 +154,26 @@ RAID_WIDE_SHARE = 0.9
 
 def auto_tags(guides, abilities):
     """
-    {ability_id: tag} from Mythic Trap for the logged abilities of one boss.
+    {ability_id: tag} from Mythic Trap for the logged abilities of one boss - decided once per ability *name*
+    and given to all its spell ids (a mechanic is often logged under several: Evil Eyes' cast and its damage).
 
     abilities: {ability_id: {'name', 'share'}} where share is the average part
     of the raid hit per pull (None when unknown).
     """
     from .analyzer import AVOIDABLE_TAGS
-    out = {}
+    by_name = {}
     for ability_id, info in abilities.items():
-        tag = classify(match_guide(guides, ability_id, info['name']))
-        if tag in AVOIDABLE_TAGS and (info.get('share') or 0) >= RAID_WIDE_SHARE:
+        by_name.setdefault(info.get('name') or ability_id, []).append(ability_id)
+    out = {}
+    for name, ids in by_name.items():
+        guide = next((g for g in guides if g.get('spell_id') in ids), None) or \
+            match_guide(guides, ids[0], name if isinstance(name, str) else '')  # none by id: by name
+        tag = classify(guide)
+        share = max((abilities[i].get('share') or 0 for i in ids), default=0)
+        if tag in AVOIDABLE_TAGS and share >= RAID_WIDE_SHARE:
             continue
         if tag:
-            out[ability_id] = tag
+            out.update({i: tag for i in ids})
     return out
 
 
@@ -218,17 +225,39 @@ async def scan_missing(encounter_ids=None):
 def effective_tags(encounter_id):
     """
     ({ability_id: tag}, {ability_id: 'auto'|'manual'}) for a boss: tags derived
-    from Mythic Trap's mechanic categories, with officers' overrides on top.
+    from Mythic Trap's mechanic categories, with officers' overrides on top - both per ability name, so
+    every spell id a mechanic is logged under gets the same tag (an officer's newest call wins).
     """
     from . import db
-    tags = auto_tags(db.get_guides(encounter_id), db.ability_shares(encounter_id))
-    sources = {ability_id: 'auto' for ability_id in tags}
-    for ability_id, tag in db.get_tags(encounter_id).items():
-        sources[ability_id] = 'manual'
-        if tag in db.TAGS:
-            tags[ability_id] = tag
-        else:
-            tags.pop(ability_id, None)
+    shares = db.ability_shares(encounter_id)
+    return name_tags(auto_tags(db.get_guides(encounter_id), shares),
+                     {i: info.get('name') for i, info in shares.items()}, db.get_tag_rows(encounter_id))
+
+
+def name_tags(auto, names, overrides):
+    """
+    Officers' overrides (newest first: [{'ability_id', 'ability_name', 'tag'}]) on top of the automatic tags,
+    each one covering every id of its ability's name (names: {ability_id: name} of the logged abilities).
+    """
+    from . import db
+    names = dict(names)
+    for row in overrides:
+        names.setdefault(row['ability_id'], row.get('ability_name'))
+    ids_of = {}
+    for ability_id, name in names.items():
+        ids_of.setdefault(name or ability_id, set()).add(ability_id)
+    tags, sources, decided = dict(auto), {ability_id: 'auto' for ability_id in auto}, set()
+    for row in overrides:
+        key = names.get(row['ability_id']) or row['ability_id']
+        if key in decided:
+            continue  # an older call on the same mechanic
+        decided.add(key)
+        for ability_id in ids_of.get(key, {row['ability_id']}):
+            sources[ability_id] = 'manual'
+            if row['tag'] in db.TAGS:
+                tags[ability_id] = row['tag']
+            else:
+                tags.pop(ability_id, None)
     return tags, sources
 
 

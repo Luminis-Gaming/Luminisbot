@@ -552,6 +552,14 @@ def get_tags(encounter_id):
     return {r['ability_id']: r['tag'] for r in rows}
 
 
+def get_tag_rows(encounter_id):
+    """Officers' overrides for a boss, newest first: [{'ability_id', 'ability_name', 'tag'}]."""
+    return _run("""
+        SELECT ability_id, ability_name, tag FROM raid_ability_tags WHERE encounter_id = %s
+        ORDER BY updated_at DESC NULLS LAST
+    """, (encounter_id,), fetch='all') or []
+
+
 TAG_NONE = 'none'   # officer cleared the automatic tag - remembered so it doesn't come back
 TAG_AUTO = 'auto'   # request: drop the officer's override and go back to the automatic tag
 

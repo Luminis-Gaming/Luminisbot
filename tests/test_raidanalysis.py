@@ -469,6 +469,61 @@ class TestSuggestions(unittest.TestCase):
         self.assertEqual(suggested, {AURA})
 
 
+class TestSameNameMechanics(unittest.TestCase):
+    """The Lost Explorers: Shell Spin only stuns (0-damage hits), Evil Eyes is logged under two spell ids."""
+
+    def fight(self):
+        from raidanalysis import analyzer
+        roster_actors = [{'id': i, 'name': n, 'type': 'Player'} for i, n in ((1, 'Aedrios'), (2, 'Mangor'))]
+        tables = {'playerDetails': {'dps': [{'name': 'Aedrios', 'type': 'Warrior', 'specs': [{'spec': 'Arms'}]}],
+                                    'tanks': [{'name': 'Mangor', 'type': 'Monk', 'specs': [{'spec': 'Brewmaster'}]}]},
+                  'damageTaken': {'entries': [
+                      {'guid': 1291918, 'name': 'Shell Spin', 'total': 0, 'hitCount': 3, 'actorType': 'NPC'},
+                      {'guid': 1292764, 'name': 'Evil Eyes', 'total': 800, 'hitCount': 2, 'actorType': 'NPC'},
+                      {'guid': 1292758, 'name': 'Evil Eyes', 'total': 0, 'hitCount': 0, 'actorType': 'NPC'}]}}
+        ev = [{'type': 'damage', 'timestamp': 1000 + t, 'targetID': who, 'abilityGameID': aid, 'amount': amt,
+               'hitType': ht} for t, who, aid, amt, ht in [
+            (5000, 1, 1291918, 0, 1), (9000, 1, 1291918, 0, 1),            # stunned twice: 0 damage, landed
+            (9500, 2, 1291918, 0, 10),                                     # immune: not a hit
+            (7000, 1, 1292764, 400, 1), (8000, 2, 1292764, 400, 1)]]
+        fight = {'id': 1, 'startTime': 1000, 'endTime': 301000, 'kill': False, 'size': 2}
+        return analyzer.analyze_fight(fight, roster_actors, tables, ev, [], set(), set())
+
+    def test_stun_only_hits_count(self):
+        from raidanalysis import analyzer
+        shell = next(a for a in self.fight()['abilities'] if a['name'] == 'Shell Spin')
+        self.assertEqual(analyzer.mistake_counts(shell), {'Aedrios': 2})
+        tags = {1291918: analyzer.TAG_AVOIDABLE}
+        self.assertEqual(analyzer.avoidable_by_player(self.fight(), tags)['Aedrios']['hits'], 2)
+
+    def test_same_name_is_one_mechanic(self):
+        from raidanalysis import analyzer
+        analysis = self.fight()
+        eyes = [a for a in analysis['abilities'] if a['name'] == 'Evil Eyes']
+        self.assertEqual(len(eyes), 1)
+        self.assertEqual((eyes[0]['id'], eyes[0]['ids'], eyes[0]['total']), (1292764, [1292758, 1292764], 800))
+        self.assertEqual(analyzer.annotate_deaths(analysis)['abilities'], analysis['abilities'])  # idempotent
+        # Two pulls where a different id did the damage: still one row overall
+        other = dict(analysis, abilities=[dict(eyes[0], id=1292758, ids=[1292758])])
+        merged = analyzer.merge_pulls([analysis, other])
+        self.assertEqual(len([a for a in merged['abilities'] if a['name'] == 'Evil Eyes']), 1)
+
+    def test_tags_cover_every_id_of_a_name(self):
+        from raidanalysis import analyzer, guides
+        guide = [{'spell_id': 1292388, 'name': 'Evil Eyes', 'category': 'Dodge', 'subtitle': 'Swirlies'}]
+        shares = {1292764: {'name': 'Evil Eyes', 'share': 0.2}, 1292758: {'name': 'Evil Eyes', 'share': 0}}
+        auto = guides.auto_tags(guide, shares)
+        self.assertEqual(auto, {1292764: analyzer.TAG_AVOIDABLE, 1292758: analyzer.TAG_AVOIDABLE})
+        names = {i: v['name'] for i, v in shares.items()}
+        # An officer's call on one id covers its sibling; the newest call wins
+        rows = [{'ability_id': 1292758, 'ability_name': 'Evil Eyes', 'tag': 'ignore'},
+                {'ability_id': 1292764, 'ability_name': 'Evil Eyes', 'tag': 'avoidable'}]
+        tags, sources = guides.name_tags(auto, names, rows)
+        self.assertEqual((tags[1292764], sources[1292764]), ('ignore', 'manual'))
+        cleared, _ = guides.name_tags(auto, names, [{'ability_id': 1292764, 'ability_name': 'Evil Eyes', 'tag': 'none'}])
+        self.assertNotIn(1292758, cleared)                                         # cleared for both ids
+
+
 class TestMythicTrapGuides(unittest.TestCase):
     PAGE = ('<html><script id="__NEXT_DATA__" type="application/json">'
             '{"props": {"pageProps": {"boss": {"id": "ulatek", "raidID": "venomous-abyss", "bossPhases": ['
@@ -1049,6 +1104,57 @@ class TestHotsOnOthers(unittest.TestCase):
         row = throughput.on_others_rows(numbered, 'Boops', top)[0]
         self.assertEqual((row['name'], row['ours'], row['top'], row['verdict']), ('Renewing Mist', 6.0, 8.0, 'ok'))
         self.assertEqual(throughput.uptime(numbered, 'Boops', top), [])  # no "uptime on you" tile for it
+
+    def test_raid_buff_missing(self):
+        """Nobody of the class kept the raid buff up: every one of them hears it. Two priests sharing it is fine."""
+        from raidanalysis import throughput
+        # Cast before the pull (not in its casts): still kept, and the pull says raid buffs are stored
+        fort = {'guid': 21562, 'name': 'Power Word: Fortitude', 'totalUptime': 300000}
+        per_player = {1: {'buffs': {'auras': [fort]}, 'debuffs': [], 'casts': {'entries': [{'name': 'Smite', 'total': 9}]}}}
+        fight = {'id': 1, 'startTime': 0, 'endTime': 300000, 'kill': True}
+        tables = {'damageDone': {'entries': []}, 'healing': {'entries': []}}
+        extras = throughput.build_extras(fight, [{'name': 'Asiriel', 'class': 'Priest'}], {1: 'Asiriel'}, tables,
+                                         per_player, {}, tracked={999})
+        self.assertTrue(extras['raid_buffs'])
+        self.assertEqual([a['name'] for a in extras['players']['Asiriel']['auras']], ['Power Word: Fortitude'])
+
+        def pull(number, ups, stored=True):
+            players = {n: {'auras': [{'id': 21562, 'name': 'Power Word: Fortitude', 'kind': 'buff', 'uptime': u}]
+                           if u else []} for n, u in ups.items()}
+            ex = {'detail': True, 'duration': 300000, 'players': players}
+            if stored:
+                ex['raid_buffs'] = True
+            return (number, {'analysis': {'extras': ex, 'players': [
+                {'name': n, 'class': 'Priest'} for n in ups] + [{'name': 'Aedrios', 'class': 'Warrior'}]}})
+        numbered = [pull(1, {'Asiriel': 300000, 'Alliuda': 0}),               # Asiriel's copy: the raid had it
+                    pull(2, {'Asiriel': 120000, 'Alliuda': 180000}),          # recast by the other: still all fight
+                    pull(3, {'Asiriel': 0, 'Alliuda': 0})]                    # nobody: missing
+        buff = throughput.raid_buff(numbered, 'Alliuda', 'Priest')
+        self.assertEqual((buff['buff'], buff['missing'], buff['verdict']), ('Power Word: Fortitude', [3], 'off'))
+        self.assertEqual([p['share'] for p in buff['pulls']], [1.0, 1.0, 0.0])
+        self.assertIsNone(throughput.raid_buff(numbered, 'Alliuda', 'Rogue'))       # no raid buff to bring
+        old = [pull(1, {'Asiriel': 0, 'Alliuda': 0}, stored=False)]
+        self.assertIsNone(throughput.raid_buff(old, 'Alliuda', 'Priest'))           # before they were kept: no alarm
+
+    def test_raid_buffs_are_not_an_uptime_goal(self):
+        """Two priests: the other one's Fortitude was up all fight - yours shows 0%. Not a rotation problem."""
+        from raidanalysis import throughput
+        extras = {'detail': True, 'duration': 300000, 'players': {'Boops': {'auras': [
+            {'id': 21562, 'name': 'Power Word: Fortitude', 'kind': 'buff', 'uptime': 0},
+            {'id': 194249, 'name': 'Voidform', 'kind': 'buff', 'uptime': 30000}]}}}
+        numbered = [(1, {'fight_id': 1, 'analysis': {'extras': extras}})]
+        top = [{'duration': 300000, 'cast_names': {'Power Word: Fortitude': 1, 'Voidform': 3},
+                'auras': [{'id': 21562, 'name': 'Power Word: Fortitude', 'kind': 'buff', 'uptime': 300000},
+                          {'id': 194249, 'name': 'Voidform', 'kind': 'buff', 'uptime': 150000}]}] * 5
+        rows = throughput.uptime(numbered, 'Boops', top)
+        self.assertEqual([r['name'] for r in rows], ['Voidform'])                   # your own buffs still count
+        # ...and the same in "HoTs & buffs on others": the priest who didn't cast it isn't "Low"
+        extras['players']['Boops']['on_others'] = [{'id': 21562, 'name': 'Power Word: Fortitude', 'uptime': 0},
+                                                   {'id': 17, 'name': 'Power Word: Shield', 'uptime': 300000}]
+        for p in top:
+            p['on_others'] = [{'id': 21562, 'name': 'Power Word: Fortitude', 'uptime': 300000}]
+        self.assertEqual([r['name'] for r in throughput.on_others_rows(numbered, 'Boops', top)], ['Power Word: Shield'])
+        self.assertNotIn("Hunter's Mark", throughput.RAID_WIDE_AURAS)               # one per hunter: still theirs
 
 
 class TestFocusTimeline(unittest.TestCase):

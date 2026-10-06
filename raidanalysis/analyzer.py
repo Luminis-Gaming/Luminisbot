@@ -108,11 +108,55 @@ MASS_DEATH_WINDOW_MS = 3000     # deaths this close together ...
 MASS_DEATH_SIZE = 3             # ... this many of them = a mass death, not a personal mistake
 
 
+# A damage event that landed (a normal hit or a crit) counts as a hit even at 0 damage: Shell Spin's shells
+# only stun - every hit is a 0-damage event. Misses, immunes, dodges and the like don't count.
+LANDED_HIT_TYPES = {1, 2}
+
+
+def merge_same_name(abilities):
+    """
+    One entry per ability *name*: a mechanic is often logged under several spell ids (Evil Eyes' cast and its
+    damage, Shell Spin's two waves) - counted, tagged and shown as one. The merged entry keeps the id that did
+    the most damage ('ids': all of them), the damage, events and every player's hits added up; it's
+    `complete` only if every part was. Idempotent; entries without a name stay as they are.
+    """
+    groups, out = {}, []
+    for ability in abilities or []:
+        name = ability.get('name')
+        if not name:
+            out.append(ability)
+            continue
+        groups.setdefault(name, []).append(ability)
+    for name, parts in groups.items():
+        if len(parts) == 1:
+            out.append(dict(parts[0], ids=parts[0].get('ids') or [parts[0]['id']]))
+            continue
+        main = max(parts, key=lambda a: (a.get('total') or 0, -(a['id'] or 0)))
+        players = {}
+        for part in parts:
+            for player, stats in (part.get('players') or {}).items():
+                row = players.setdefault(player, {'damage': 0, 'hits': None, 'ticks': None})
+                row['damage'] += stats.get('damage') or 0
+                for key in ('hits', 'ticks'):
+                    if stats.get(key) is not None:
+                        row[key] = (row[key] or 0) + stats[key]
+                for key in ('times', 'tick_times'):
+                    if stats.get(key):
+                        row[key] = sorted((row.get(key) or []) + stats[key])
+        sources = list(dict.fromkeys(p.get('source') for p in parts if p.get('source')))
+        out.append(dict(main, ids=sorted({i for p in parts for i in (p.get('ids') or [p['id']])}),
+                        source=', '.join(sources), total=sum(p.get('total') or 0 for p in parts),
+                        events=sum(p.get('events') or 0 for p in parts), players=players,
+                        complete=all(p.get('complete') for p in parts)))
+    return sorted(out, key=lambda a: -(a.get('total') or 0))
+
+
 def annotate_deaths(analysis):
     """
     Mark every death in a pull with 'order' (1-based), 'mass' (died together with 2+ others) and
-    'early' (counts as a personal mistake: one of the first 4 deaths and not part of a mass death).
-    Idempotent; works on stored analyses of any version.
+    'early' (counts as a personal mistake: one of the first 4 deaths and not part of a mass death) - and
+    merge abilities logged under several spell ids into one per name (merge_same_name): every page reads
+    a pull through here. Idempotent; works on stored analyses of any version.
     """
     deaths = sorted(analysis.get('deaths') or [], key=lambda d: d['t'])
     for i, death in enumerate(deaths):
@@ -121,6 +165,8 @@ def annotate_deaths(analysis):
         death['mass'] = together >= MASS_DEATH_SIZE
         death['early'] = i < EARLY_DEATH_LIMIT and not death['mass']
     analysis['deaths'] = deaths
+    if analysis.get('abilities'):
+        analysis['abilities'] = merge_same_name(analysis['abilities'])
     return analysis
 
 
@@ -428,7 +474,7 @@ def analyze_fight(fight, actors, tables, damage_events, consumable_events, potio
         if name not in roster or guid not in abilities:
             continue
         damage = (event.get('amount') or 0) + (event.get('absorbed') or 0)
-        if not damage:
+        if not damage and event.get('hitType') not in LANDED_HIT_TYPES:
             continue  # immuned/missed - not a hit, and would skew the hit-vs-tick split
         per_player = fetched.setdefault(guid, {}).setdefault(name, {'damage': 0, 'hits': 0, 'ticks': 0,
                                                                      'times': [], 'tick_times': []})
@@ -620,11 +666,13 @@ def merge_pulls(analyses):
     for analysis in analyses:
         for player in analysis.get('players') or []:
             roster[player['name']] = player
-        for ability in analysis.get('abilities') or []:
-            merged = abilities.setdefault(ability['id'], {
+        for ability in merge_same_name(analysis.get('abilities')):
+            merged = abilities.setdefault(ability.get('name') or ability['id'], {
                 'id': ability['id'], 'name': ability['name'], 'icon': ability.get('icon'),
                 'source': ability.get('source'), 'total': 0, 'events': 0, 'pulls': 0,
-                'players': {}, 'complete': True})
+                'players': {}, 'complete': True, 'ids': set(), 'by_id': {}})
+            merged['ids'].update(ability.get('ids') or [ability['id']])
+            merged['by_id'][ability['id']] = merged['by_id'].get(ability['id'], 0) + (ability.get('total') or 0)
             merged['total'] += ability.get('total') or 0
             merged['events'] += ability.get('events') or 0
             merged['pulls'] += 1
@@ -641,6 +689,10 @@ def merge_pulls(analyses):
                 merged['count'] += entry.get('count') or 0
                 for name, count in entry['by'].items():
                     merged['by'][name] = merged['by'].get(name, 0) + count
+    for merged in abilities.values():  # the id that did the most damage over the night names the mechanic
+        by_id = merged.pop('by_id')
+        merged['id'] = max(by_id, key=lambda i: (by_id[i], -i)) if by_id else merged['id']
+        merged['ids'] = sorted(merged['ids'])
     return {
         'players': sorted(roster.values(), key=lambda p: ({'tank': 0, 'healer': 1}.get(p.get('role'), 2), p['name'])),
         'abilities': sorted(abilities.values(), key=lambda a: -a['total']),
@@ -674,32 +726,36 @@ def suggest_avoidable(analyses, tagged_ids):
     """
     Untagged abilities that look like personal-responsibility mechanics: across
     the given pulls they only ever hit a small share of the raid, and never by
-    a large number of events (which would mean raid-wide pulses).
+    a large number of events (which would mean raid-wide pulses). One per ability name (merge_same_name):
+    'id' names it, 'ids' are all its spell ids.
     """
     seen, tank_only = {}, set()
     for analysis in analyses:
         raid = max(1, len(analysis.get('players') or []))
         tanks = {p['name'] for p in analysis.get('players') or [] if p.get('role') == 'tank'}
-        for ability in analysis.get('abilities') or []:
-            if ability['id'] in tagged_ids or ability['id'] == MELEE_ABILITY_ID \
+        for ability in merge_same_name(analysis.get('abilities')):
+            ids = set(ability.get('ids') or [ability['id']])
+            if ids & set(tagged_ids) or MELEE_ABILITY_ID in ids \
                     or not ability.get('complete') or not ability.get('total'):
                 continue
+            key = ability.get('name') or ability['id']
             hit = set(ability.get('players') or {})
             if hit and hit <= tanks:
-                tank_only.add(ability['id'])  # tank mechanic - few players hit by design
+                tank_only.add(key)  # tank mechanic - few players hit by design
                 continue
-            stats = seen.setdefault(ability['id'], {'name': ability['name'], 'icon': ability.get('icon'),
-                                                    'pulls': 0, 'share_sum': 0.0, 'hits': 0})
+            stats = seen.setdefault(key, {'id': ability['id'], 'ids': set(), 'name': ability['name'],
+                                          'icon': ability.get('icon'), 'pulls': 0, 'share_sum': 0.0, 'hits': 0})
+            stats['ids'] |= ids
             stats['pulls'] += 1
             stats['share_sum'] += len(ability.get('players') or {}) / raid
             stats['hits'] += sum(mistake_counts(ability).values())
     out = []
-    for guid, stats in seen.items():
-        if guid in tank_only:
+    for key, stats in seen.items():
+        if key in tank_only:
             continue
         share = stats['share_sum'] / stats['pulls']
         if share <= 0.35:
-            out.append({'id': guid, 'name': stats['name'], 'icon': stats['icon'],
+            out.append({'id': stats['id'], 'ids': sorted(stats['ids']), 'name': stats['name'], 'icon': stats['icon'],
                         'avg_share': share, 'hits': stats['hits'], 'pulls': stats['pulls']})
     return sorted(out, key=lambda s: -s['hits'])
 

@@ -23,6 +23,19 @@ TOP_TARGETS = 8           # targets stored per player (WCL's table lists at most
                           # damage per target comes from focus.load_by_target)
 SKIP_AURA_WORDS = ('flask', 'phial', 'well fed', 'potion', 'food', 'augment rune', 'drink')
 KEY_AURAS = {'Bone Shield'}
+# Raid buffs and raid-wide debuffs on the boss: one copy for the whole raid, owned by whoever applied it last -
+# so with two priests the one who didn't cast it shows 0% Fortitude while the raid had it all fight (and a top
+# player who's their raid's only priest shows 100%). Says nothing about anyone's rotation: never an uptime or
+# buffs-on-others row. (Not Hunter's Mark: every hunter has their own.)
+RAID_WIDE_AURAS = {
+    'Power Word: Fortitude', 'Battle Shout', 'Arcane Intellect', 'Mark of the Wild', 'Blessing of the Bronze',
+    'Skyfury', 'Mystic Touch', 'Chaos Brand',
+}
+# ...but whether the raid HAD its buff is: the class that brings one should keep it up (raid_buff()). Anyone of
+# the class keeping it up counts - with two priests whoever cast it last owns it.
+RAID_BUFFS = {'Priest': 'Power Word: Fortitude', 'Warrior': 'Battle Shout', 'Mage': 'Arcane Intellect',
+              'Druid': 'Mark of the Wild', 'Evoker': 'Blessing of the Bronze', 'Shaman': 'Skyfury'}
+RAID_BUFF_MIN = 0.9  # up less than this share of a pull: the raid went (partly) without it
 
 MIN_TOP_UPTIME = 0.4      # one of your spells the top players keep up less than this isn't an uptime goal
 MIN_TRACKED_UPTIME = 0.6  # ...a tracked buff that isn't one of your spells: below this it's a proc you spend
@@ -238,8 +251,11 @@ def proc_waste(events, names_by_id):
 
 
 def _worth_keeping(aura, cast, tracked):
-    """Stored auras: the player's own spells and the buffs the Cooldown Manager tracks (all of them without that list)."""
-    return not tracked or aura['name'] in cast or aura['id'] in tracked
+    """
+    Stored auras: the player's own spells and the buffs the Cooldown Manager tracks (all of them without that
+    list) - and raid buffs, usually cast before the pull (not in its casts): raid_buff() needs them.
+    """
+    return not tracked or aura['name'] in cast or aura['id'] in tracked or aura['name'] in RAID_BUFFS.values()
 
 
 def build_extras(fight, roster, names_by_id, extras, per_player, parses, resource_events=(), proc_events=(),
@@ -284,7 +300,8 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
         for name, damage, kind in p['targets']:
             t = raid.setdefault(name, {'name': name, 'type': kind, 'total': 0})
             t['total'] += damage
-    return {'v': EXTRAS_VERSION, 'detail': detail, 'duration': duration, 'players': players,
+    # raid_buffs: stored with the raid buffs kept (_worth_keeping) - older pulls can't tell "missing" from "not kept"
+    return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'duration': duration, 'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 
 
@@ -476,7 +493,8 @@ def uptime(numbered, name, top, tracked=frozenset()):
         if not p.get('duration'):
             continue
         for a in p.get('auras') or []:
-            if (a['name'] not in spells and a['id'] not in tracked) or a['name'] in on_raid:
+            if (a['name'] not in spells and a['id'] not in tracked) or a['name'] in on_raid \
+                    or a['name'] in RAID_WIDE_AURAS:
                 continue
             s = seen.setdefault((a['name'], a['kind']), {'id': a['id'], 'icon': a.get('icon'), 'shares': {},
                                                          'cast': a['name'] in spells})
@@ -506,6 +524,32 @@ def uptime(numbered, name, top, tracked=frozenset()):
     return sorted(rows, key=lambda r: (r['verdict'] == 'good', -r['top']))
 
 
+def raid_buff(numbered, name, cls):
+    """
+    Your class's raid buff (RAID_BUFFS) in the pulls you were in: how much of each the raid had it - its uptime
+    summed over everyone of your class (the copy on the one who cast it last). {'buff', 'pulls': [{'number',
+    'share'}], 'share' (over the pulls), 'missing': [pull numbers under RAID_BUFF_MIN], 'verdict'} - None for a
+    class without one, or without pulls stored since raid buffs are kept (extras['raid_buffs']).
+    """
+    buff = RAID_BUFFS.get(cls)
+    if not buff:
+        return None
+    pulls, spell_id = [], None
+    for number, pull, _, extras in detail_pulls(numbered, name):
+        if not extras.get('raid_buffs') or not extras.get('duration'):
+            continue
+        classes = {p['name']: p.get('class') for p in (pull.get('analysis') or {}).get('players') or []}
+        copies = [a for n, r in extras['players'].items() if classes.get(n) == cls
+                  for a in r.get('auras') or [] if a['name'] == buff and a['kind'] == 'buff']
+        spell_id = spell_id or next((a['id'] for a in copies), None)
+        pulls.append({'number': number, 'share': min(1.0, sum(a['uptime'] for a in copies) / extras['duration'])})
+    if not pulls:
+        return None
+    missing = [p['number'] for p in pulls if p['share'] < RAID_BUFF_MIN]
+    return {'buff': buff, 'id': spell_id, 'pulls': pulls, 'share': sum(p['share'] for p in pulls) / len(pulls), 'missing': missing,
+            'verdict': 'off' if missing else 'good'}
+
+
 ON_OTHERS_GOOD, ON_OTHERS_OK = 0.9, 0.75   # how many you keep out on average, as a share of the top players'
 
 
@@ -523,11 +567,15 @@ def on_others_rows(numbered, name, top):
     ours, ids = {}, {}
     for _, _, me, _ in mine:
         for a in me['on_others']:
+            if a['name'] in RAID_WIDE_AURAS:
+                continue
             ours[a['name']] = ours.get(a['name'], 0) + a['uptime']
             ids.setdefault(a['name'], a['id'])
     tops = {}
     for p in top:
         for a in p['on_others']:
+            if a['name'] in RAID_WIDE_AURAS:
+                continue
             tops.setdefault(a['name'], []).append(a['uptime'] / p['duration'])
             ids.setdefault(a['name'], a['id'])
     rows = []

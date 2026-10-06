@@ -60,7 +60,7 @@ def _event_log_code(message_id):
 
 KIND_ICONS = {'mechanic': '💥', 'death': '💀', 'focus': '🎯', 'reaction': '⏱️', 'potion': '🧪', 'cooldowns': '⚔️',
               'rotation': '🔁', 'uptime': '⏳', 'procs': '♻️', 'active': '⏸️', 'parse': '🏆', 'star': '⭐',
-              'prep': '🍲', 'utility': '🛠️', 'kill': '✔️', 'note': '•'}
+              'prep': '🍲', 'utility': '🛠️', 'kill': '✔️', 'note': '•', 'raid_buff': '📯'}
 
 
 def _band(score):

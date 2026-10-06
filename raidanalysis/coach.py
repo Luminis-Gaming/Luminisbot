@@ -118,6 +118,12 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
                                     f"Pressing it this much usually means a higher-priority spell is waiting."))
             if not low and not over and cpm['verdict'] == 'good':
                 out.append(_insight('good', 15, 'rotation', f"Casts per minute on par with the top {label}"))
+        buff = throughput.raid_buff(numbered, name, ((data or {}).get('player') or {}).get('class'))
+        if buff and buff['missing']:  # the whole raid's damage / health / mana: worth more than any rotation tip
+            which = ', '.join(f'#{n}' for n in buff['missing'])
+            out.append(_insight('bad', 85, 'raid_buff',
+                                f"The raid went without {buff['buff']} in pull{'s' if len(buff['missing']) > 1 else ''} "
+                                f"{which} - cast it before every pull"))
         for u in throughput.uptime(numbered, name, top, tracked):
             if u['verdict'] == 'off':
                 what = 'on the boss' if u['kind'] == 'debuff' else 'on you'

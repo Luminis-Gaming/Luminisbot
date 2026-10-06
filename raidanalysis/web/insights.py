@@ -130,7 +130,7 @@ def build(pulls, tags, guide_for, code):
         body = players_bars(counts, 'Hits', notes={n: fmt_amount(d) for n, d in damage.items()})
         if single:
             # Hit timestamps live on the pull's own analysis (merging drops them).
-            own = next((a for a in analyses[0].get('abilities') or [] if a['id'] == ability['id']), {})
+            own = next((a for a in analyses[0].get('abilities') or [] if a['name'] == ability['name']), {})
             times = [(n, (own.get('players') or {}).get(n, {}).get('times') or [])
                      for n in sorted(counts, key=lambda n: -counts[n])]
             if any(t for _, t in times):
@@ -139,7 +139,7 @@ def build(pulls, tags, guide_for, code):
         else:
             per_pull = []
             for p in pulls:
-                hit = next((a for a in p['analysis'].get('abilities') or [] if a['id'] == ability['id']), None)
+                hit = next((a for a in p['analysis'].get('abilities') or [] if a['name'] == ability['name']), None)
                 n = 0
                 if hit:
                     for name, c in analyzer.mistake_counts(hit).items():

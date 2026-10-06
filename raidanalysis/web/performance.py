@@ -253,6 +253,24 @@ def _strip(row):
     return (f'<div class="uptime-strip" title="When it was up in pull #{row["band_pull"]}">{bands}</div>')
 
 
+def _raid_buff_tile(buff):
+    if buff['missing']:
+        which = ', '.join(f'#{n}' for n in buff['missing'])
+        note = (f'<div class="bad-text small">The raid went without it in {len(buff["missing"])} of '
+                f'{len(buff["pulls"])} pulls ({which}) - nobody of your class kept it up.</div>')
+    else:
+        n = len(buff['pulls'])
+        note = f'<div class="muted small">{"Up the whole pull." if n == 1 else f"Up in all {n} pulls."}</div>'
+    pill = '<span class="pill pill-wipe">Missing</span>' if buff['missing'] else _pill('good')
+    return f"""<div class="rot-tiles"><div class="rot-tile">
+        <div class="rot-head">{_spell(buff['buff'], buff['id'], info=spells.lookup([buff['id']]).get(buff['id'])
+                                      if buff['id'] else None)}{pill}</div>
+        <div class="rot-value"><b>{100 * buff['share']:.0f}%</b><span>of the fight the raid had it</span></div>
+        {_bar(buff['share'], 'bad' if buff['missing'] else 'good')}
+        {note}
+    </div></div>"""
+
+
 def _uptime_tiles(rows, lookup):
     tiles = []
     for r in rows:
@@ -360,6 +378,11 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
     sections = []
     if tiles:
         sections.append(stat_tiles(tiles))
+    buff = throughput.raid_buff(numbered, name, player.get('class'))
+    if buff:
+        sections.append(subsection('Raid buff', f"""
+            <p class="muted small">Your class's buff for the whole raid - cast it before every pull. Anyone of your
+               class keeping it up counts (with two of you, whoever cast it last owns it).</p>{_raid_buff_tile(buff)}"""))
     rotational = compare.rotation_tiles(data, back) if data and data.get('rows') else ''
     if rotational:
         sections.append(subsection('Keep on cooldown', f"""

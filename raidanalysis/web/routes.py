@@ -650,7 +650,7 @@ def _mech_detail(a, counts, pname, per_pull, pull_href, timeline, avoidable=Fals
     if per_pull:
         rows = []
         for p in per_pull:
-            own = next((x for x in p['analysis'].get('abilities') or [] if x['id'] == a['id']), None)
+            own = next((x for x in p['analysis'].get('abilities') or [] if x['name'] == a['name']), None)
             if not own:
                 continue
             own_counts = analyzer.mistake_counts(own)
@@ -1034,7 +1034,7 @@ def _avoidable_summary(analyses, tags, guide_for=lambda ability_id, name: None):
             tag = tags.get(a['id'])
             if tag not in analyzer.AVOIDABLE_TAGS:
                 continue
-            entry = totals.setdefault(a['id'], {'name': a['name'], 'icon': a.get('icon'), 'hits': 0,
+            entry = totals.setdefault(a['name'], {'id': a['id'], 'name': a['name'], 'icon': a.get('icon'), 'hits': 0,
                                                 'damage': 0, 'players': {}})
             counts = analyzer.mistake_counts(a)
             for name, s in (a.get('players') or {}).items():
@@ -1046,7 +1046,7 @@ def _avoidable_summary(analyses, tags, guide_for=lambda ability_id, name: None):
     if not totals:
         return '<p class="muted">No avoidable mechanics tagged (or nobody got hit).</p>'
     rows = []
-    for ability_id, t in sorted(totals.items(), key=lambda kv: -kv[1]['hits']):
+    for ability_id, t in sorted(((t['id'], t) for t in totals.values()), key=lambda kv: -kv[1]['hits']):
         worst = sorted(t['players'].items(), key=lambda kv: -kv[1])[:4]
         rows.append(f'<tr><td>{ability(t["name"], t["icon"], ability_id, guide_for(ability_id, t["name"]))}</td>'
                     f'<td class="num">{t["hits"]}</td>'
@@ -1471,8 +1471,8 @@ async def handle_boss(request):
     mechanics = {}
     for analysis in [a for a in (p.get('analysis') for p in pulls) if a]:
         raid = max(1, len(analysis.get('players') or []))
-        for a in analysis.get('abilities') or []:
-            m = mechanics.setdefault(a['id'], {'name': a['name'], 'icon': a.get('icon'), 'source': a.get('source'),
+        for a in analyzer.merge_same_name(analysis.get('abilities')):  # one row per mechanic, not per spell id
+            m = mechanics.setdefault(a['name'], {'id': a['id'], 'name': a['name'], 'icon': a.get('icon'), 'source': a.get('source'),
                                                'pulls': 0, 'damage': 0, 'hits': 0, 'share': 0.0, 'complete': True})
             m['pulls'] += 1
             m['damage'] += a['total']
@@ -1480,12 +1480,12 @@ async def handle_boss(request):
             m['complete'] = m['complete'] and a.get('complete')
             m['hits'] += sum(analyzer.mistake_counts(a).values())
     # Anything Mythic Trap or an officer already decided on isn't up for suggestion.
-    suggested = {s['id'] for s in analyzer.suggest_avoidable(
-        [p['analysis'] for p in pulls if p.get('analysis')], set(tags) | set(sources))}
+    suggested = {i for s in analyzer.suggest_avoidable(
+        [p['analysis'] for p in pulls if p.get('analysis')], set(tags) | set(sources)) for i in s['ids']}
     order = {analyzer.TAG_AVOIDABLE: 0, analyzer.TAG_AVOIDABLE_NON_TANK: 0, None: 1,
              guides.EXPECTED: 2, analyzer.TAG_IGNORE: 3}
     mech_rows = []
-    for ability_id, m in sorted(mechanics.items(),
+    for ability_id, m in sorted(((m['id'], m) for m in mechanics.values()),
                                 key=lambda kv: (order.get(tags.get(kv[0]), 1), kv[0] not in suggested, -kv[1]['damage'])):
         tag = tags.get(ability_id)
         pill = tag_pill(tag, sources.get(ability_id)) or (
