@@ -316,16 +316,18 @@ def top_auras(tables, start, duration):
 # Comparing (render time)
 # ============================================================================
 
-def target_ranking(numbered, stored=None):
+def target_ranking(numbered, stored=None, up=None):
     """
     Everyone's damage by target over these pulls: [{'name', 'type', 'total', 'pulls' (how many of these
     pulls it was in), 'main' (the pulls' biggest target), 'complete', 'players': [{'name', 'class', 'role',
     'damage', 'share' (of the target's total), 'dps', 'pulls'}]}] - targets by total.
-    Players are ranked by DPS on the target: their damage to it over the length of the pulls they were in
-    that had it - so someone in 4 of 9 pulls is measured on their 4, and a pull without that add doesn't
-    count against anyone. 'pulls': how many of those they were in.
+    Players are ranked by DPS on the target: their damage to it over the time it was up in the pulls they
+    were in that had it - so someone in 4 of 9 pulls is measured on their 4, a pull without that add doesn't
+    count against anyone, and an add up for 25 s is measured on those 25 s. 'pulls': how many of those they
+    were in.
     stored: {fight id: {target: {player: damage}}} (focus.by_target_cached - every player); a pull without
     it falls back to its DamageDone table, which lists only each player's top 5 targets ('complete' False).
+    up: {fight id: {target: seconds up}} (focus.up_cached); a target without it counts the whole pull.
     """
     targets, mains, complete = {}, {}, True
     seconds, present, in_pulls = {}, {}, {}  # (target, player) -> seconds / pulls of theirs that had it; target -> pulls
@@ -346,11 +348,12 @@ def target_ranking(numbered, stored=None):
             hits = [(name, target, damage, kind) for name, row in (extras.get('players') or {}).items()
                     for target, damage, kind in row.get('targets') or []]
         duration = ((pull.get('end_ms') or 0) - (pull.get('start_ms') or 0)) / 1000
+        times = (up or {}).get(pull.get('fight_id')) or {}
         here = {target for _, target, _, _ in hits}
         for target in here:
             in_pulls[target] = in_pulls.get(target, 0) + 1
             for name in roster:
-                seconds[(target, name)] = seconds.get((target, name), 0) + duration
+                seconds[(target, name)] = seconds.get((target, name), 0) + (times.get(target) or duration)
                 present[(target, name)] = present.get((target, name), 0) + 1
         for name, target, damage, kind in hits:
             t = targets.setdefault(target, {'name': target, 'type': kind, 'total': 0, 'players': {}})

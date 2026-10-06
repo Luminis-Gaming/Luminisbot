@@ -1285,3 +1285,18 @@ class TestCoach(unittest.TestCase):
         self.assertEqual([(p['name'], p['dps'], p['pulls']) for p in heart['players']],
                          [('Late', 15.0, 1), ('Steady', 10.0, 2)])                  # 1500 over 100 s vs 2000 over 200 s
         self.assertEqual(heart['pulls'], 2)
+        # With the add's up times: over the 10 s / 20 s it was there, not the 100 s pulls
+        up = {1: {'Heart': 10}, 2: {'Heart': 20}}
+        ranked = {t['name']: t for t in throughput.target_ranking([pull(1, ['Steady', 'Late']), pull(2, ['Steady'])],
+                                                                   stored, up)}
+        self.assertEqual([(p['name'], p['dps']) for p in ranked['Heart']['players']],
+                         [('Late', 150.0), ('Steady', 2000 / 30)])
+
+    def test_up_seconds(self):
+        """An add's up time: the stretches it was hit (short gaps bridged); hit nearly all pull: the whole pull."""
+        from raidanalysis import focus
+        bins = {'Heart': [0, 5, 5, 0, 0, 5, 0, 0, 0, 0, 0, 0, 5, 5, 0, 0, 0, 0, 0, 0],
+                'Second Boss': [5] * 19 + [0]}
+        self.assertEqual(focus.up_seconds(bins, 20), {'Heart': 7.0, 'Second Boss': 20.0})
+        self.assertIn('target.name = "Heart" and (source.name = "A" or source.owner.name = "A"',
+                      focus._up_filter({'Heart': ['A', 'B']}))

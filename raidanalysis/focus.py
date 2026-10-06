@@ -421,24 +421,64 @@ def priority_targets(code, pulls):
 
 # Everyone's damage per target (the Players view's damage by target, a player's opened row): WCL's plain
 # DamageDone table lists only each player's top 5 targets, so per pull one request with a table per target
-# (~12 WCL points), fetched when first looked at and kept in raid_focus.
+# (~12 WCL points), fetched when first looked at and kept in raid_focus. With it, how long each target was
+# up ('up', seconds - DPS on an add is over the time it was there to hit, not the pull): the main boss the
+# whole pull, an add the stretches its UP_HITTERS biggest damage dealers were hitting it (their damage
+# events on it - one more request, small: a few players, only while adds are up).
 TARGETS_KEY = '*targets*'
 TARGETS_VERSION = 1
 TARGET_MIN_SHARE = 0.003  # of the raid's damage in the pull: less isn't worth a table
 TARGETS_PULLS_PER_LOAD = 20
+UP_HITTERS = 2
+UP_MAX_EVENTS = 50000
 
 
 def by_target_cached(code, fight_id):
-    """{target: {player: damage}} stored for a pull, or None."""
+    """{target: {player: damage}} stored for a pull, or None - also while its up times aren't (stored before them)."""
     from . import db
     data = db.get_focus(code, fight_id, TARGETS_KEY)
-    return data['targets'] if data and data.get('v') == TARGETS_VERSION else None
+    return data['targets'] if data and data.get('v') == TARGETS_VERSION and 'up' in data else None
+
+
+def up_cached(code, fight_id, pull=None):
+    """
+    {target: seconds it was up} for a pull, or None: stored with everyone's damage per target, else (given
+    the pull) from the raid sample a focus view stored - up_ms(), as a player's own table has it.
+    """
+    from . import db
+    data = db.get_focus(code, fight_id, TARGETS_KEY)
+    if data and data.get('v') == TARGETS_VERSION and 'up' in data:
+        return data['up']
+    raid = db.get_focus(code, fight_id, RAID_KEY) if pull else None
+    if not raid or raid.get('v') != FOCUS_VERSION:
+        return None
+    n = max(1, -(-(pull['end_ms'] - pull['start_ms']) // BIN_MS))
+    built = build({}, raid, n, [], you_in_sample=True)
+    return {t: up_ms(built, t) / 1000 for t in built['raid']}
+
+
+def up_seconds(bins, n):
+    """{target: seconds up} from damage bins ({target: [per BIN_MS]}) over a pull of n bins (see up_ms)."""
+    data = {'n': n, 'bin_ms': BIN_MS, 'raid': {t: {'b': b} for t, b in bins.items()}}
+    return {t: up_ms(data, t) / 1000 for t in bins}
+
+
+def _up_filter(hitters):
+    """Damage by each target's hitters (pets included) on it: {target: [player names]}."""
+    def q(s):
+        return s.replace('"', '')
+    parts = []
+    for target, names in hitters.items():
+        who = ' or '.join(f'source.name = "{q(n)}" or source.owner.name = "{q(n)}"' for n in names)
+        parts.append(f'(target.name = "{q(target)}" and ({who}))')
+    return f'type = "damage" and ({" or ".join(parts)})'
 
 
 async def load_by_target(code, pulls):
     """
-    Fetch and store everyone's damage per target for these pulls (up to TARGETS_PULLS_PER_LOAD of the ones
-    not stored yet). Returns (ok, why-not message or None).
+    Fetch and store everyone's damage per target and the targets' up times for these pulls (up to
+    TARGETS_PULLS_PER_LOAD of the ones not stored yet; stored without up times: just those). Returns (ok,
+    why-not message or None).
     """
     import aiohttp
     from . import db, sync, wcl
@@ -450,20 +490,33 @@ async def load_by_target(code, pulls):
     try:
         async with aiohttp.ClientSession() as session:
             actors = await wcl.get_report_actors(session, code)
+            enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
             for pull in missing:
                 targets = ((pull.get('analysis') or {}).get('extras') or {}).get('targets') or []
-                total = sum(t.get('total') or 0 for t in targets) or 1
-                wanted = {t['name'] for t in targets if (t.get('total') or 0) >= TARGET_MIN_SHARE * total}
-                ids = {a['id']: a['name'] for a in actors if a.get('type') == 'NPC' and a['name'] in wanted}
-                tables = await wcl.get_damage_by_target(session, code, pull['fight_id'], list(ids))
-                out = {}
-                for aid, entries in tables.items():
-                    row = out.setdefault(ids[aid], {})
-                    for e in entries:
-                        if e.get('type') not in ('NPC', 'Pet') and e.get('total'):
-                            row[e['name']] = row.get(e['name'], 0) + e['total']
-                db.save_focus(code, pull['fight_id'], TARGETS_KEY,
-                              {'v': TARGETS_VERSION, 'targets': {t: r for t, r in out.items() if r}})
+                had = db.get_focus(code, pull['fight_id'], TARGETS_KEY)
+                if had and had.get('v') == TARGETS_VERSION:
+                    out = had['targets']
+                else:
+                    total = sum(t.get('total') or 0 for t in targets) or 1
+                    wanted = {t['name'] for t in targets if (t.get('total') or 0) >= TARGET_MIN_SHARE * total}
+                    ids = {a['id']: a['name'] for a in actors if a.get('type') == 'NPC' and a['name'] in wanted}
+                    tables = await wcl.get_damage_by_target(session, code, pull['fight_id'], list(ids))
+                    out = {}
+                    for aid, entries in tables.items():
+                        row = out.setdefault(ids[aid], {})
+                        for e in entries:
+                            if e.get('type') not in ('NPC', 'Pet') and e.get('total'):
+                                row[e['name']] = row.get(e['name'], 0) + e['total']
+                    out = {t: r for t, r in out.items() if r}
+                start, n = pull['start_ms'], max(1, -(-(pull['end_ms'] - pull['start_ms']) // BIN_MS))
+                main = targets[0]['name'] if targets else None
+                hitters = {t: [p for p, _ in sorted(r.items(), key=lambda kv: -kv[1])[:UP_HITTERS]]
+                           for t, r in out.items() if t != main}
+                events = await wcl.get_events(session, code, pull['fight_id'], 'DamageDone', _up_filter(hitters),
+                                              max_events=UP_MAX_EVENTS) if hitters else []
+                up = up_seconds(bin_damage(events, start, n, enemies), n)
+                up.update({t: n * BIN_MS / 1000 for t in out if t == main})
+                db.save_focus(code, pull['fight_id'], TARGETS_KEY, {'v': TARGETS_VERSION, 'targets': out, 'up': up})
     except wcl.WCLError as e:
         logger.warning(f'[RAIDS] Damage by target for {code} failed: {e}')
         return False, "Couldn't load everyone's damage from Warcraft Logs right now - try again in a bit."

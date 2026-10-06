@@ -1095,11 +1095,12 @@ async def _damage_by_target(request, code, numbered, scope):
         return web.json_response({'ok': ok, 'why': why}, headers=SECURITY_HEADERS)
     stored = {p['fight_id']: focus.by_target_cached(code, p['fight_id']) for p in pulls}
     stored = {k: v for k, v in stored.items() if v is not None}
+    up = {p['fight_id']: focus.up_cached(code, p['fight_id'], p) for p in pulls}
     missing = len(pulls) - len(stored)
     loading = focusview.loader(text=f"Summoning everyone's damage ({missing} pull{'s' if missing != 1 else ''})") \
         if missing else ''
-    return dtargets.section(throughput.target_ranking(numbered, stored), focus.priority_targets(code, pulls), scope,
-                            loading)
+    return dtargets.section(throughput.target_ranking(numbered, stored, up), focus.priority_targets(code, pulls),
+                            scope, loading)
 
 
 async def _focus_section(request, code, numbered, whole_night, name, damage_href):
@@ -1152,6 +1153,7 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
     stored = {p['fight_id']: focus.by_target_cached(code, p['fight_id']) for _, p in whole_night}
     pull_focus = {'number': number, 'colors': color_of, 'main': data.get('main'), 'pull': pull,
                   'stored': {k: v for k, v in stored.items() if v is not None},
+                  'up': {p['fight_id']: focus.up_cached(code, p['fight_id'], p) for _, p in whole_night},
                   'rows': {r['target']: r for r in focus.target_rows(data)}}
     switches = max(0, len(focus.your_targets(data, order)) - 1)
     return f"""{picker}

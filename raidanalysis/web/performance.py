@@ -138,9 +138,11 @@ def _focus(numbered, name, role, pull_focus=None):
     longest = max((p['up_s'] for p in pull_rows.values()), default=0) or 1
     fastest = max((p['dps'] for p in pull_rows.values()), default=0) or 1
     stored = (pull_focus or {}).get('stored') or {}
-    ranked_all = {t['name']: t for t in throughput.target_ranking(numbered, stored)}
+    up = (pull_focus or {}).get('up') or {}
+    ranked_all = {t['name']: t for t in throughput.target_ranking(numbered, stored, up)}
     the_pull = (pull_focus or {}).get('pull')
-    ranked_pull = {t['name']: t for t in throughput.target_ranking([(number, the_pull)], stored)} if the_pull else {}
+    ranked_pull = {t['name']: t for t in throughput.target_ranking([(number, the_pull)], stored, up)} \
+        if the_pull else {}
     columns = 1 + (3 if pull_focus else 0) + 2
     out = []
     for i, target in enumerate(names):

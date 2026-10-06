@@ -317,7 +317,8 @@ def night(code, character_names, load=True):
                                if u['name'] == character and u.get('kind') == 'potion']
                     stored = focus.by_target_cached(code, pull['fight_id'])
                     ranking = {t['name']: t for t in throughput.target_ranking(
-                        [(number, pull)], {pull['fight_id']: stored} if stored is not None else None)}
+                        [(number, pull)], {pull['fight_id']: stored} if stored is not None else None,
+                        {pull['fight_id']: focus.up_cached(code, pull['fight_id'], pull)})}
                     more = focus_insights(data_f, number, potions, ranking, character)
                     found += more
                     boss['star'] = next((i['target'] for i in more if i['kind'] == 'star' and i['impact'] >= 45), None)
