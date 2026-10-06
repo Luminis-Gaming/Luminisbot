@@ -25,7 +25,7 @@ TIMELINE_KINDS = (('potion', 'Combat potion'), ('mana', 'Mana potion'), ('health
 BOSS_TICK = '#9aa1b9'
 DEATH = '#ff6b6b'
 POTION_BUFF_FALLBACK_MS = 30000
-DEFAULT_ON = ('raid',)  # cooldown groups shown without clicking: raid cooldowns are few and matter to everyone
+DEFAULT_ON = ()  # cooldown groups shown without clicking: none - the boss and potions are what the timeline opens on
 ICON_BASE = 'https://assets.rpglogs.com/img/warcraft/abilities/'
 
 
@@ -119,8 +119,8 @@ def toolbar(pulls, single, cds, boss_items=()):
     """
     What the timeline shows, a dropdown per category (they double as its legend): Boss (phases, each kind
     of add, the enemy's abilities), Potions & healthstones (each kind), and each cooldown group with its
-    abilities - plus a Deaths chip. Only raid cooldowns (DEFAULT_ON) start visible among the cooldowns, to
-    keep the default view calm. PAGE_JS does the toggling.
+    abilities - plus a Deaths chip. The boss and potions start visible, the cooldown groups (but DEFAULT_ON)
+    don't, to keep the default view calm. PAGE_JS does the toggling.
     """
     dds = []
     if boss_items:
@@ -203,7 +203,7 @@ def _boss_section(source, adds, phase_names, npc_icons, at, longest):
         lines += [f'<i class="tl-phase fspawnline" data-k="{key}" style="left:{at(w["start"])};--c:{color}"></i>'
                   for w in kind_['spawns']]
         items.append((key, mark, target, len(kind_['spawns']), None,
-                      'A priority: the top DPS pile into it' if kind_['priority'] else None, kind_['priority']))
+                      'A priority: the top DPS pile into it' if kind_['priority'] else None, True))
     return labels, rows, lines, items
 
 

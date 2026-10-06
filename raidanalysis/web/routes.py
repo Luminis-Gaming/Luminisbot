@@ -66,7 +66,7 @@ SECURITY_HEADERS = {
     'Content-Security-Policy': (
         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
-        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com https://render.worldofwarcraft.com; "
+        "img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com; "
         "frame-src https://www.mythictrap.com; connect-src 'self'; "
         "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"),
     'X-Content-Type-Options': 'nosniff',
@@ -1127,8 +1127,11 @@ async def _damage_by_target(request, code, numbered, scope):
     missing = len(pulls) - len(stored)
     loading = focusview.loader(text=f"Summoning everyone's damage ({missing} pull{'s' if missing != 1 else ''})") \
         if missing else ''
-    return dtargets.section(throughput.target_ranking(numbered, stored, up), focus.priority_targets(code, pulls),
-                            scope, loading)
+    from .. import npcs
+    ranked = throughput.target_ranking(numbered, stored, up)
+    names = [t['name'] for t in ranked]
+    npcs.ensure(code, names)
+    return dtargets.section(ranked, focus.priority_targets(code, pulls), scope, loading, npcs.icons(names))
 
 
 async def _focus_section(request, code, numbered, whole_night, name, damage_href):

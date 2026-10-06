@@ -11,7 +11,7 @@ compact card each.
 Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from data-tip / data-spell).
 """
 from .. import focus, spells
-from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
+from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, npc_portrait, safe_icon
 
 # Categorical slots, dark steps, in fixed order (validated on the card surface #161a2c: all checks pass).
 COLORS = ('#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#8f6ce0')
@@ -32,12 +32,9 @@ def _pct(v):
     return f'{100 * v:.0f}%'
 
 
-def _swatch(color, icon=None):
+def _swatch(color, icon=None, size=''):
     """The target's colour - as a ring around its portrait (npcs.py) when it has one."""
-    src = safe_icon(icon)
-    if src:
-        return f'<img class="npc-icon" src="{esc(src)}" alt="" loading="lazy" style="--c:{color}">'
-    return f'<i class="fsw" style="background:{color}"></i>'
+    return npc_portrait(icon, color, size) or f'<i class="fsw" style="background:{color}"></i>'
 
 
 def _clock(ms):
@@ -466,8 +463,7 @@ def _spawn_pane(w, k, color, potions, cooldowns, wins):
 
 
 def _chip_mark(icon):
-    src = safe_icon(icon)
-    return f'<img class="chip-icon" src="{esc(src)}" alt="" loading="lazy">' if src else '<i></i>'
+    return npc_portrait(icon) or '<i></i>'
 
 
 def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, idx, wins, icon=None):
@@ -501,7 +497,7 @@ def _priority_card(kind, color, potions, cooldowns, top_share, my_share, label, 
                     for i, (t, _, body) in enumerate(tabs))
     return f"""
         <div class="fcard prio" style="--c:{color}" id="fcard-{idx}">
-            <div class="fcard-head">{_swatch(color, icon)}<b>{esc(kind['target'])}</b>
+            <div class="fcard-head">{_swatch(color, icon, 'md')}<b>{esc(kind['target'])}</b>
                 <span class="muted small">{len(spawns)} spawn{'s' if len(spawns) != 1 else ''}</span>
                 <span class="pill {cls}">{text}</span></div>
             <div class="ftabs" role="tablist">{buttons}</div>

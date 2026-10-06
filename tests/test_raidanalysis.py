@@ -1107,13 +1107,27 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('Off target', cards)
         self.assertIn('died 2:45', cards)
         self.assertIn('never hit', cards)
-        icons = {'Venomous Heart': 'https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-1.jpg'}
+        icons = {'Venomous Heart': 'https://wow.zamimg.com/modelviewer/live/webthumbs/npc/196/143812.webp'}
         with_icons = focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [], None, icons)
-        self.assertIn('class="npc-icon" src="https://render.worldofwarcraft.com/eu/npcs/zoom/creature-display-1.jpg"',
+        self.assertIn('background-image:url(https://wow.zamimg.com/modelviewer/live/webthumbs/npc/196/143812.webp)',
                       with_icons)
-        self.assertIn('creature-display-1.jpg', focusview.cards(d, color_of, potions, [], {}, {}, 'x', icons))
+        self.assertIn('143812.webp', focusview.cards(d, color_of, potions, [], {}, {}, 'x', icons))
         self.assertNotIn('evil.example', focusview.timeline(d, pull, 'Boops', color_of, order, [], potions, [], None,
                                                             {'Venomous Heart': 'https://evil.example/x.jpg'}))
+
+    def test_npc_portraits(self):
+        """NPC id -> display id (the Creature table, else the Wowhead page) -> Wowhead's model thumbnail."""
+        from raidanalysis import npcs
+        from raidanalysis.web.render import npc_portrait
+        table = ('ID,Name_lang,DisplayID_0,DisplayID_1\n220586,"Queen Ansurek",118230,0\n5,"Nobody",0,0\n')
+        self.assertEqual(npcs.parse_creature_table(table), {220586: 118230})
+        page = '<a data-mv-type="1" data-mv-type-id="263535" data-mv-display-id="143812">View in 3D</a>'
+        self.assertEqual(npcs.display_from_page(page), 143812)
+        self.assertIsNone(npcs.display_from_page('<html>no model</html>'))
+        self.assertEqual(npcs.thumb_url(143812), 'https://wow.zamimg.com/modelviewer/live/webthumbs/npc/196/143812.webp')
+        self.assertIn('background-image:url(https://wow.zamimg.com/', npc_portrait(npcs.thumb_url(1), '#fff', 'lg'))
+        self.assertEqual(npc_portrait('https://evil.example/x.webp'), '')
+        self.assertEqual(npc_portrait('https://wow.zamimg.com/x.webp);background:url(//evil'), '')
 
     def test_raid_timeline_boss_lanes_and_dropdowns(self):
         """The heart's spawns get their own lane and a dashed line through everyone; categories are dropdowns."""
@@ -1148,7 +1162,7 @@ class TestFocusTimeline(unittest.TestCase):
         self.assertIn('class="m dot" data-k="healing"', html)                       # ...and dot
         self.assertIn('<b class="sp431932"></b>', html)                             # the potion's icon on its bar
         self.assertIn('data-spell="97462"', html)                                   # the dropdown entry has its tooltip
-        self.assertIn('value="cd:raid:Rallying Cry" checked', html)                 # raid cooldowns on by default
+        self.assertIn('value="cd:raid:Rallying Cry">', html)                        # cooldowns off by default
         self.assertIn('class="m cd sp97462" data-k="cd:raid:Rallying Cry"', html)
         loading = consumables.timeline([pull], analysis['players'], loading='<div class="castbar-wrap"></div>')
         self.assertIn('castbar-wrap', loading)                                      # adds not loaded yet

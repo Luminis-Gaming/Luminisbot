@@ -272,6 +272,7 @@ tr.muted-row td { opacity: 0.7; }
 .tl-dd-menu .tl-dd-all { font-weight: 600; border-bottom: 1px solid var(--border); border-radius: 6px 6px 0 0;
     margin-bottom: 4px; padding-bottom: 6px; }
 .tl-dd-menu .ability-icon, .tl-dd-menu .npc-icon { width: 18px; height: 18px; }
+.dt-head .npc-icon { margin-right: 2px; }
 .tl-dd-menu .fsw { flex-shrink: 0; }
 @media (max-width: 600px) { .tl-dd-menu { position: fixed; left: 16px; right: 16px; top: auto; max-width: none; } }
 /* Legend marks in the dropdowns: the same shapes as on the timeline */
@@ -283,10 +284,13 @@ tr.muted-row td { opacity: 0.7; }
 .tl-key.k-phase { width: 14px; height: 10px; background: rgba(116,132,236,0.30); box-shadow: inset 1px 0 rgba(255,255,255,0.5); }
 .tl-key.k-tick { width: 3px; height: 12px; margin: 0 5px; background: var(--c); }
 /* Enemy portraits (npcs.py), ringed in their timeline colour */
-.npc-icon { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
-    box-shadow: 0 0 0 2px var(--c, var(--border-strong)); background: var(--surface-3); }
-.fcard-head .npc-icon { width: 26px; height: 26px; }
-.tl-chip .chip-icon { border-radius: 50%; }
+.npc-icon { display: inline-block; width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+    background-color: var(--surface-3); background-repeat: no-repeat; background-size: 170%;
+    background-position: center 45%; box-shadow: 0 0 0 2px var(--c, var(--border-strong)); }
+.npc-icon.md { width: 28px; height: 28px; }
+.npc-icon.lg { width: 44px; height: 44px; border-radius: 10px; background-size: 150%;
+    background-color: color-mix(in srgb, var(--c, #7484ec) 14%, var(--surface-3)); }
+.tl-chip .npc-icon { width: 16px; height: 16px; box-shadow: none; }
 /* Raid timeline's Boss lanes: phases, then a lane per kind of add */
 .cons-tl .tl-row.c-lane::before { display: none; }
 .cons-tl .tl-lab.c-phase, .cons-tl .tl-row.c-phase { height: 24px; }
@@ -1260,7 +1264,7 @@ def player_name(name, cls='', role=None):
 
 
 _ICON_FILE = __import__('re').compile(r'^[A-Za-z0-9_.-]{1,120}$')
-_ICON_HOSTS = ('https://assets.rpglogs.com/', 'https://wow.zamimg.com/', 'https://render.worldofwarcraft.com/')
+_ICON_HOSTS = ('https://assets.rpglogs.com/', 'https://wow.zamimg.com/')
 
 
 def safe_icon(icon):
@@ -1307,6 +1311,20 @@ def stat_tiles(tiles):
     """A row of key numbers: [(value_html, label)]."""
     items = ''.join(f'<div class="stat-tile"><b>{value}</b><span>{label}</span></div>' for value, label in tiles)
     return f'<div class="stat-tiles">{items}</div>'
+
+
+def npc_portrait(url, color=None, size=''):
+    """
+    An enemy's portrait (npcs.py: Wowhead's render of its model, transparent with room around it - shown
+    as a zoomed background so the creature fills the frame), ringed in its colour; '' without a safe URL.
+    size: '' (lanes, chips), 'md' (card heads) or 'lg' (damage-by-target cards).
+    """
+    src = safe_icon(url)
+    if not src or not src.startswith('http'):
+        return ''
+    ring = f';--c:{color}' if color else ''
+    return (f'<span class="npc-icon{" " + size if size else ""}" role="img" aria-hidden="true" '
+            f'style="background-image:url({src}){ring}"></span>')
 
 
 def boss_portrait(encounter_id, size='', killed=False):

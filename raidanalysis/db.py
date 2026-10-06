@@ -152,6 +152,7 @@ def ensure_guide_schema(cursor):
             fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
     """)
+    cursor.execute("ALTER TABLE raid_npcs ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1")
     # Spells the game's Cooldown Manager tracks as buffs (gamedata.py), from wago.tools
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_tracked_spells (
@@ -654,23 +655,26 @@ def character_owners():
 # ENEMY PORTRAITS (npcs.py)
 # ============================================================================
 
-def get_npcs(names):
-    """{name: icon url or None} for the enemies looked up already (failed lookups retried after a day)."""
+def get_npcs(names, version):
+    """
+    {name: icon url or None} for the enemies looked up already by this version of the lookup (failed
+    lookups retried after a day).
+    """
     if not names:
         return {}
     rows = _run("""
         SELECT name, icon FROM raid_npcs
-        WHERE name = ANY(%s) AND (status = 'ok' OR fetched_at > NOW() - INTERVAL '1 day')
-    """, (list(names),), fetch='all')
+        WHERE name = ANY(%s) AND version >= %s AND (status = 'ok' OR fetched_at > NOW() - INTERVAL '1 day')
+    """, (list(names), version), fetch='all')
     return {r['name']: r['icon'] for r in rows}
 
 
-def save_npc(name, game_id, icon, status):
+def save_npc(name, game_id, icon, status, version):
     _run("""
-        INSERT INTO raid_npcs (name, game_id, icon, status, fetched_at) VALUES (%s, %s, %s, %s, NOW())
+        INSERT INTO raid_npcs (name, game_id, icon, status, version, fetched_at) VALUES (%s, %s, %s, %s, %s, NOW())
         ON CONFLICT (name) DO UPDATE SET game_id = EXCLUDED.game_id, icon = EXCLUDED.icon, status = EXCLUDED.status,
-            fetched_at = NOW()
-    """, (name, game_id, icon, status))
+            version = EXCLUDED.version, fetched_at = NOW()
+    """, (name, game_id, icon, status, version))
 
 
 # ============================================================================
