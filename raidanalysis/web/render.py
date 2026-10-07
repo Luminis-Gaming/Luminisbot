@@ -539,8 +539,10 @@ tr.muted-row td { opacity: 0.7; }
     margin: -8px 0 20px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius);
     background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
-.night-bar .pull-chips { margin: 0; flex: 1 1 auto; }
-.night-bar .view-tabs { margin: 0; flex: 0 0 auto; padding: 3px; }
+/* The chips take what's left beside the switch and wrap among themselves - a long night's pulls flow onto a
+   second row instead of pushing Mechanics / Players down; only a narrow screen (< ~320px for chips) stacks them */
+.night-bar .pull-chips { margin: 0; flex: 1 1 320px; min-width: 0; }
+.night-bar .view-tabs { margin: 0; flex: 0 0 auto; padding: 3px; align-self: flex-start; }
 /* pinned, the Mechanics / Players switch is two compact pills - its explanation is the tooltip */
 .night-bar .view-tab { flex: 0 0 auto; gap: 7px; padding: 6px 14px; }
 .night-bar .view-tab .vt-icon { font-size: 16px; }
