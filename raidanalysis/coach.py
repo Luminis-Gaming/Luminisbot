@@ -155,15 +155,18 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
                                 f"{which} - cast it before every pull"))
         for u in throughput.uptime(numbered, name, top, tracked, data.get('talents')):
             if u['verdict'] == 'off':
+                aura = _spell_name(u['name'], u.get('id'), spell_names)
+                if not aura:
+                    continue  # a tip about "spell 1234" helps nobody
                 what = 'on the boss' if u['kind'] == 'debuff' else 'on you'
                 out.append(_insight('bad', 70 * (u['top'] - u['ours']), 'uptime',
-                                    f"{u['name']} up {_pct(u['ours'])} of the fight {what} - the top {label} "
+                                    f"{aura} up {_pct(u['ours'])} of the fight {what} - the top {label} "
                                     f"{_pct(u['top'])}"))
         for p in throughput.proc_rows(numbered, name, top, tracked):
             if p['verdict'] == 'off':
-                proc = p['name']
-                if str(proc).isdigit():
-                    proc = (spell_names or {}).get(p['id']) or 'a proc'
+                proc = _spell_name(p['name'], p['id'], spell_names)
+                if not proc:
+                    continue
                 out.append(_insight('bad', 70 * (p['ours'] - (p['top'] or 0)), 'procs',
                                     f"{_pct(p['ours'])} of your {proc} procs wasted - the top {label} "
                                     f"{_pct(p['top'] or 0)}. Spend it before the next one lands."))
@@ -176,6 +179,30 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
         elif mine >= 0.97:
             out.append(_insight('good', 10, 'active', f"Active {_pct(mine)} of the fight"))
     return out
+
+
+def _spell_name(name, spell_id=None, known=None):
+    """
+    A spell's name for a tip. Proc and aura events often carry only the spell id - then the comparison's spell
+    list (known: {id: name}), else our Wowhead cache, looked up right now if it never was (the coach runs in a
+    worker thread). None when it can't be named.
+    """
+    if name and not str(name).isdigit():
+        return name
+    spell_id = spell_id or (int(name) if name and str(name).isdigit() else None)
+    if not spell_id:
+        return None
+    if (known or {}).get(spell_id):
+        return known[spell_id]
+    from . import spells
+    info = db.get_spells([spell_id]).get(spell_id)
+    if not info and spell_id not in db.attempted_spell_ids([spell_id]):
+        try:
+            asyncio.run(spells.fetch_ids([spell_id]))
+            info = db.get_spells([spell_id]).get(spell_id)
+        except Exception as e:  # no lookup now (e.g. called inside an event loop): the tip just waits
+            logger.info(f'[RAIDS] Spell {spell_id} not named for the coach: {e}')
+    return (info or {}).get('name') or None
 
 
 def _role_word(role):

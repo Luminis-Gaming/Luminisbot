@@ -2855,3 +2855,28 @@ class TestDefensives(unittest.TestCase):
         pulls = [(1, {'start_ms': 0, 'end_ms': 60000, 'analysis': {'cooldowns': [
             {'t': 1000, 'name': 'A', 'ability_id': self.DEF, 'ability': 'Astral Shift', 'category': 'personal'}]}})]
         self.assertEqual(coach.defensive_insights(pulls, 'A', 'dps'), [])
+
+
+class TestCoachNamesProcs(unittest.TestCase):
+    """A proc / aura known only by its spell id gets its name (or no tip at all - never "your a proc procs")."""
+
+    def run_procs(self, cached):
+        from unittest import mock
+        from raidanalysis import coach, db, throughput
+        rows = [{'name': '392883', 'id': 392883, 'ours': 0.58, 'top': 0.25, 'verdict': 'off'}]
+        data = {'top': [{}], 'label': 'Mistweaver Monks', 'rows': [], 'player': {}}
+        with mock.patch.object(throughput, 'cpm', lambda *a: None), \
+                mock.patch.object(throughput, 'raid_buff', lambda *a: None), \
+                mock.patch.object(throughput, 'uptime', lambda *a: []), \
+                mock.patch.object(throughput, 'proc_rows', lambda *a: rows), \
+                mock.patch.object(throughput, 'active_time', lambda *a: (None, None)), \
+                mock.patch.object(db, 'get_spells', lambda ids: cached), \
+                mock.patch.object(db, 'attempted_spell_ids', lambda ids: set(ids)):
+            return [i['text'] for i in coach.rotation_insights([], 'Boopsboops', 'healer', data)]
+
+    def test_named_from_the_spell_cache(self):
+        texts = self.run_procs({392883: {'name': 'Vivacious Vivification'}})
+        self.assertEqual(texts[0].split(' - ')[0], '58% of your Vivacious Vivification procs wasted')
+
+    def test_no_name_no_tip(self):
+        self.assertEqual(self.run_procs({}), [])
