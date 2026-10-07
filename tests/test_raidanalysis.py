@@ -2702,3 +2702,79 @@ class TestWCLTokenRefresh(unittest.TestCase):
         with self.assertRaises(self.wcl.WCLError) as caught:
             asyncio.run(self.wcl.query(session, '{ ok }'))
         self.assertIn('WCL_CLIENT_ID', str(caught.exception))
+
+
+class TestCoachByRole(unittest.TestCase):
+    """Healers' parse is their healing parse; the coach's tips fit the role."""
+
+    @staticmethod
+    def ranking(*chars):
+        return {'data': [{'roles': {'healers': {'characters': [{'name': n, 'rankPercent': r} for n, r in chars]}}}]}
+
+    def test_healers_get_their_healing_parse(self):
+        from raidanalysis import throughput
+        roster = [{'name': 'Boopsboops', 'role': 'healer'}, {'name': 'Futhark', 'role': 'dps'}]
+        dps = {'data': [{'roles': {'healers': {'characters': [{'name': 'Boopsboops', 'rankPercent': 75}]},
+                                   'dps': {'characters': [{'name': 'Futhark', 'rankPercent': 60}]}}}]}
+        hps = self.ranking(('Boopsboops', 92), ('Futhark', 3))
+        parses = throughput.parses_for_roles(roster, dps, hps)
+        self.assertEqual((parses['Boopsboops']['rank'], parses['Futhark']['rank']), (92, 60))
+
+    def test_focus_tips_by_role(self):
+        from unittest import mock
+        from raidanalysis import coach
+        found = [coach._insight('bad', 40, 'reaction', '5.2 s to the add'), coach._insight('good', 45, 'star', 'Most on the add')]
+        with mock.patch.object(coach, '_focus_insights', lambda *a: list(found)):
+            self.assertEqual(len(coach.focus_insights({}, 1, [], role='dps')), 2)
+            self.assertEqual(coach.focus_insights({}, 1, [], role='healer'), [])
+            self.assertEqual([i['text'] for i in coach.focus_insights({}, 1, [], role='tank')], ['Most on the add'])
+
+    def test_healer_rotation_is_a_nudge_and_never_over_pressing(self):
+        from unittest import mock
+        from raidanalysis import coach, throughput
+        cpm = {'verdict': 'off', 'abilities': [
+            {'name': 'Rising Sun Kick', 'verdict': 'off', 'ours': 2.0, 'top': 5.0},
+            {'name': 'Vivify', 'verdict': 'way_over', 'ours': 12.0, 'top': 3.0}]}
+        data = {'top': [{}], 'label': 'Mistweaver Monks', 'rows': [], 'player': {}}
+        with mock.patch.object(throughput, 'cpm', lambda *a: cpm), \
+                mock.patch.object(throughput, 'raid_buff', lambda *a: None), \
+                mock.patch.object(throughput, 'uptime', lambda *a: []), \
+                mock.patch.object(throughput, 'proc_rows', lambda *a: []), \
+                mock.patch.object(throughput, 'active_time', lambda *a: (None, None)):
+            healer = coach.rotation_insights([], 'Boopsboops', 'healer', data)
+            dps = coach.rotation_insights([], 'Boopsboops', 'dps', data)
+        self.assertEqual([i['text'].split(':')[0] for i in healer], ['Rising Sun Kick'])
+        self.assertIn('Worth fitting in more often', healer[0]['text'])
+        self.assertLess(healer[0]['impact'], dps[0]['impact'])
+        self.assertIn('Vivify', ' '.join(i['text'] for i in dps))
+
+    def test_healer_output(self):
+        from unittest import mock
+        from raidanalysis import coach, throughput
+        rows = [{'parse': 92, 'kill': True, 'raid_rank': 1, 'raid_size': 5},
+                {'parse': None, 'kill': False, 'raid_rank': 1, 'raid_size': 5},
+                {'parse': None, 'kill': False, 'raid_rank': 3, 'raid_size': 5}]
+        with mock.patch.object(throughput, 'per_pull', lambda *a: rows):
+            found, best = coach.output_insights([], 'Boopsboops', 'healer')
+        texts = [i['text'] for i in found]
+        self.assertEqual(best, 92)
+        self.assertIn("Most healing of the raid's 5 healers in 2 of 3 pulls", texts)
+        self.assertIn('Best healing parse 92', texts)
+
+    def test_backfill_writes_the_healing_parse(self):
+        from unittest import mock
+        from raidanalysis import db
+        analysis = {'players': [{'name': 'Boopsboops', 'role': 'healer'}, {'name': 'Futhark', 'role': 'dps'}],
+                    'slim_extras': {'Boopsboops': {'parse': {'rank': 75}}, 'Futhark': {'parse': {'rank': 60}}}}
+        written = []
+
+        def fake_run(sql, params=(), fetch=None):
+            if sql.startswith('SELECT'):
+                return {'analysis': analysis}
+            written.append(params[0].adapted)
+        with mock.patch.object(db, '_run', fake_run):
+            db.save_healer_parses('CODE', 3, {'Boopsboops': {'rank': 92, 'metric': 'hps'}})
+        saved = written[0]
+        self.assertEqual(saved['slim_extras']['Boopsboops']['parse']['rank'], 92)
+        self.assertEqual(saved['slim_extras']['Futhark']['parse']['rank'], 60)  # DPS untouched
+        self.assertTrue(saved['healer_parses'])

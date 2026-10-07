@@ -61,7 +61,7 @@ def _event_log_code(message_id):
 KIND_ICONS = {'mechanic': '💥', 'death': '💀', 'focus': '🎯', 'reaction': '⏱️', 'potion': '🧪', 'cooldowns': '⚔️',
               'rotation': '🔁', 'uptime': '⏳', 'procs': '♻️', 'active': '⏸️', 'parse': '🏆', 'star': '⭐',
               'prep': '🍲', 'utility': '🛠️', 'kill': '✔️', 'note': '•', 'raid_buff': '📯',
-              'boss_mechanic': '⚠️'}
+              'boss_mechanic': '⚠️', 'healing': '💚'}
 
 
 def _band(score):
@@ -96,7 +96,8 @@ def _boss_line(b):
     diff = DIFFICULTY_NAMES.get(b['difficulty'], b['difficulty'])
     result = '✔' if b['killed'] else '✖'
     progress = '' if b['killed'] or b['best'] is None else f' · best {b["best"]:.1f}%'
-    parse = f' · parse **{b["parse"]:.0f}**' if b.get('parse') is not None else ''
+    what = 'healing parse' if b.get('role') == 'healer' else 'parse'
+    parse = f' · {what} **{b["parse"]:.0f}**' if b.get('parse') is not None else ''
     star = f' · ⭐ {b["star"]}' if b.get('star') else ''
     return (f'{result} **{b["name"]}** ({diff}) · {b["pulls"]} pull{"s" if b["pulls"] != 1 else ""}{progress} · '
             f'score **{b["score"]}**{parse}{star}')
@@ -114,7 +115,8 @@ def recap_message(recap):
     lines = [f'Playing **{recap["character"]}** · {len(bosses)} boss{"es" if len(bosses) != 1 else ""} · '
              f'{kills} kill{"s" if kills != 1 else ""} · {pulls} pull{"s" if pulls != 1 else ""}']
     if best:
-        lines.append(f'🏆 Best parse **{best["parse"]:.0f}** on {best["name"]}')
+        what = 'healing parse' if best.get('role') == 'healer' else 'parse'
+        lines.append(f'🏆 Best {what} **{best["parse"]:.0f}** on {best["name"]}')
     if recap['other_characters']:
         lines.append(f'Also played: {", ".join(recap["other_characters"])}')
     _, color = _band(main['score']) if main else ('', 0x6D7CFF)

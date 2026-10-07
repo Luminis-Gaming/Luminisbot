@@ -258,10 +258,11 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
             proc_events = await wcl.get_events(session, code, fight['id'], 'Buffs',
                                                f"source.id = target.id and ability.id in ({','.join(map(str, procs))})",
                                                max_events=PROC_EVENTS_MAX)
-        parses = throughput.parses_from_rankings(extras.get('rankings'))
+        parses = throughput.parses_for_roles(roster, extras.get('rankings'), extras.get('healer_rankings'))
         if not parses and fight.get('kill') and extras.get('rankings') is None and not wcl.v2_blocked():
             try:  # the rest came from v1, which has no parses: one small v2 request
-                parses = throughput.parses_from_rankings(await wcl.get_report_rankings(session, code, fight['id']))
+                ranked = await wcl.get_report_rankings(session, code, fight['id'])
+                parses = throughput.parses_for_roles(roster, ranked.get('dps'), ranked.get('hps'))
             except wcl.WCLError as e:  # rate limited too: the kill just goes without a parse
                 logger.info(f"[RAIDS] Parses for {code}#{fight['id']} not fetched: {e}")
         if not parses and not fight.get('kill'):
@@ -483,6 +484,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                 try:  # players' realms for logs synced before they were recorded
                     await _backfill_realms(session)
                     await _backfill_zones(session)
+                    await _backfill_healer_parses(session)
                 except wcl.WCLRateLimited as e:
                     errors.append(_rate_limited(e))
                 except Exception as e:
@@ -548,6 +550,28 @@ async def _backfill_realms(session):
             return
         actors = await wcl.get_report_actors(session, code)
         db.save_realms(code, {a['name']: a.get('server') for a in actors if a.get('type') == 'Player'})
+
+
+HEALER_PARSES_PER_RUN = 8
+
+
+async def _backfill_healer_parses(session):
+    """
+    Kills synced before healers' parses were fetched as healing parses (WCL's default ranks their damage):
+    the healing ones, a few kills per run - archived nights too, so the character pages' history is right.
+    """
+    from . import throughput
+    for pull in db.pulls_missing_healer_parses(HEALER_PARSES_PER_RUN):
+        if not await _budget_ok(session):
+            return
+        try:
+            ranked = await wcl.get_report_rankings(session, pull['report_code'], pull['fight_id'], ('hps',))
+        except wcl.WCLError as e:
+            logger.info(f"[RAIDS] Healer parses for {pull['report_code']}#{pull['fight_id']} not fetched: {e}")
+            continue
+        parses = throughput.parses_for_roles(pull['players'], None, ranked.get('hps'))
+        db.save_healer_parses(pull['report_code'], pull['fight_id'],
+                              {n: dict(v, metric='hps') for n, v in parses.items()})
 
 
 async def _backfill_zones(session):

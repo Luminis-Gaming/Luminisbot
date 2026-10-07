@@ -251,14 +251,19 @@ async def get_fight_tables(session, code, fight_id):
             for key, value in report.items()}
 
 
-async def get_report_rankings(session, code, fight_id):
-    """WCL's parses for one pull (kills only) - v2 only, for when the rest came from v1."""
+async def get_report_rankings(session, code, fight_id, metrics=('dps', 'hps')):
+    """
+    WCL's parses for one pull (kills only) - v2 only, for when the rest came from v1: {metric: rankings}.
+    WCL ranks everyone on damage unless asked (healers too): 'hps' is the healers' real parse.
+    """
+    fields = ' '.join(f'{m}: rankings(fightIDs: $fights, playerMetric: {m})' for m in metrics if m in ('dps', 'hps'))
     data = await query(session, """
         query($code: String!, $fights: [Int]!) {
-          reportData { report(code: $code) { rankings(fightIDs: $fights) } }
+          reportData { report(code: $code) { """ + fields + """ } }
         }
     """, {'code': code, 'fights': [fight_id]})
-    return ((data.get('reportData') or {}).get('report') or {}).get('rankings')
+    report = (data.get('reportData') or {}).get('report') or {}
+    return {m: report.get(m) for m in metrics}
 
 
 _actors = {}  # report code -> {player name: actor id} (the focus view asks once per report)
@@ -325,14 +330,16 @@ async def get_fight_extras(session, code, fight_id):
               damageDone: table(fightIDs: $fights, dataType: DamageDone)
               healing: table(fightIDs: $fights, dataType: Healing)
               enemyDamage: table(fightIDs: $fights, dataType: DamageTaken, hostilityType: Enemies)
-              rankings(fightIDs: $fights)
+              rankings: rankings(fightIDs: $fights, playerMetric: dps)
+              healerRankings: rankings(fightIDs: $fights, playerMetric: hps)
             }
           }
         }
     """, {'code': code, 'fights': [fight_id]})
     report = (data.get('reportData') or {}).get('report') or {}
     return {'damageDone': _unwrap(report.get('damageDone')), 'healing': _unwrap(report.get('healing')),
-            'rankings': report.get('rankings'), 'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
+            'rankings': report.get('rankings'), 'healer_rankings': report.get('healerRankings'),
+            'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
 
 
 async def get_damage_by_target(session, code, fight_id, target_ids):

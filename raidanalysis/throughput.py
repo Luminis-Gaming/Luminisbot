@@ -72,6 +72,18 @@ def parses_from_rankings(rankings):
     return out
 
 
+def parses_for_roles(roster, dps_rankings, hps_rankings):
+    """
+    Each player's parse in their role's metric: healers' from the healing rankings, everyone else's from the
+    damage ones (WCL ranks a healer's damage too - that's not their parse). {name: {'rank', 'bracket', 'amount'}}.
+    """
+    healers = {p['name'] for p in roster or [] if p.get('role') == 'healer'}
+    dps, hps = parses_from_rankings(dps_rankings), parses_from_rankings(hps_rankings)
+    out = {n: v for n, v in dps.items() if n not in healers}
+    out.update({n: v for n, v in hps.items() if n in healers})
+    return out
+
+
 def counted_parses(parses):
     """
     [(parse, kill)] -> (the parses that count, from_wipes). Kill parses whenever there are any: Warcraft Logs only
@@ -313,7 +325,9 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
             t = raid.setdefault(name, {'name': name, 'type': kind, 'total': 0})
             t['total'] += damage
     # raid_buffs: stored with the raid buffs kept (_worth_keeping) - older pulls can't tell "missing" from "not kept"
-    return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'duration': duration, 'players': players,
+    # healer_parses: healers' parses are their healing parse (older pulls: their damage one, fixed by a backfill)
+    return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'healer_parses': True, 'duration': duration,
+            'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 
 

@@ -459,6 +459,46 @@ def extras_state(code, version):
     return {r['fight_id']: (r['detail'] if r['current'] else None) for r in rows}
 
 
+_NEEDS_HEALER_PARSES = """
+    p.kill AND NOT (p.analysis ? 'healer_parses')
+    AND NOT COALESCE((p.analysis->'extras'->>'healer_parses')::boolean, false)
+    AND (p.analysis ? 'extras' OR p.analysis ? 'slim_extras')
+    AND p.analysis->'players' @> '[{"role": "healer"}]'::jsonb
+"""
+
+
+def pulls_missing_healer_parses(limit):
+    """Kills with healers whose stored parses are still their damage ones (healer_parses), newest first."""
+    rows = _run(f"""
+        SELECT p.report_code, p.fight_id, p.analysis->'players' AS players
+        FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        WHERE {_NEEDS_HEALER_PARSES}
+        ORDER BY r.start_time DESC, p.fight_id LIMIT %s
+    """, (limit,), fetch='all')
+    return rows or []
+
+
+def save_healer_parses(code, fight_id, parses):
+    """
+    Healers' healing parses into a stored kill - its extras, or an archived pull's slim_extras - and the pull
+    marked done (healer_parses), with or without any (WCL may not rank it).
+    """
+    row = _run("SELECT analysis FROM raid_pulls WHERE report_code = %s AND fight_id = %s", (code, fight_id),
+               fetch='one')
+    if not row or not isinstance(row['analysis'], dict):
+        return
+    analysis = row['analysis']
+    players = ((analysis.get('extras') or {}).get('players')
+               if isinstance((analysis.get('extras') or {}).get('players'), dict) else analysis.get('slim_extras'))
+    healers = {p['name'] for p in analysis.get('players') or [] if p.get('role') == 'healer'}
+    for name in healers:
+        if isinstance(players, dict) and isinstance(players.get(name), dict):
+            players[name]['parse'] = parses.get(name)  # none: no healing parse - better than the damage one
+    analysis['healer_parses'] = True
+    _run("UPDATE raid_pulls SET analysis = %s WHERE report_code = %s AND fight_id = %s",
+         (Json(analysis), code, fight_id))
+
+
 def set_pull_extras(code, fight_id, extras):
     _run("""
         UPDATE raid_pulls SET analysis = jsonb_set(analysis, '{extras}', %s)

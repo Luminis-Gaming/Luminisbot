@@ -10,6 +10,11 @@ the later bosses of the raid and the ones you pulled most; an easy one- or two-p
 nobody needs three tips about a boss that died first try. The best-weighted few become "work on" and
 "going well".
 
+Tips fit the role. DPS get everything. Healers get no add tips (damage share, reaction, potion timing
+against spawns - not their job), gentler rotation tips (a healer casts to the damage coming in, not on
+cooldown) and their healing parse; a "most healing of the raid's healers" when it's so. Tanks keep the add
+praise but not the add complaints (picking up and holding things isn't topping the damage on them).
+
 Focus insights need a pull's focus data from Warcraft Logs: `night(load=True)` fetches it (and everyone's
 damage per target) for the key pull - the kill, else the furthest wipe - of the most important bosses.
 Runs in a worker thread (the Discord button: asyncio.to_thread), so the loads use asyncio.run.
@@ -123,12 +128,18 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
                    and a['top'] - a['ours'] >= ROTATION_MIN_GAP]
             if low:
                 a = min(low, key=lambda a: a['ours'] / a['top'])
-                out.append(_insight('bad', 60 * (1 - a['ours'] / a['top']), 'rotation',
-                                    f"{a['name']}: {a['ours']:.1f} casts a minute - the top {label} {a['top']:.1f}. "
-                                    f"Press it whenever it's ready."))
+                if role == 'healer':  # healers cast to the damage coming in: a nudge, not "on cooldown"
+                    out.append(_insight('bad', 30 * (1 - a['ours'] / a['top']), 'rotation',
+                                        f"{a['name']}: {a['ours']:.1f} casts a minute - the top {label} {a['top']:.1f}. "
+                                        f"Worth fitting in more often."))
+                else:
+                    out.append(_insight('bad', 60 * (1 - a['ours'] / a['top']), 'rotation',
+                                        f"{a['name']}: {a['ours']:.1f} casts a minute - the top {label} {a['top']:.1f}. "
+                                        f"Press it whenever it's ready."))
             # ...or the other way: a filler pressed far more than they do is in the place of something better
+            # (not for healers: a heal spammed through heavy damage is the job, not a mistake)
             over = [a for a in cpm['abilities'] if a['verdict'] in ('over', 'way_over')
-                    and a['top'] >= ROTATION_MIN_CPM]
+                    and a['top'] >= ROTATION_MIN_CPM] if role != 'healer' else []
             if over:
                 a = max(over, key=lambda a: a['ours'] / a['top'])
                 out.append(_insight('bad', 40 * min(1.0, (a['ours'] / a['top'] - 1) / 2), 'rotation',
@@ -171,13 +182,20 @@ def _role_word(role):
     return 'healers' if role == 'healer' else 'tanks' if role == 'tank' else 'DPS'
 
 
-def focus_insights(data, number, potions, ranking=None, name=None):
+def focus_insights(data, number, potions, ranking=None, name=None, role='dps'):
     """
     The key pull's priority adds: your share of damage against the top DPS's, how fast you got on them,
     the potion against the spawn it was for (one potion can't cover every add - one note if it was pressed
     near none of them); most damage to one in the raid. data: focus.load()'s; potions: your combat potions
-    that pull; ranking: throughput.target_ranking() of that pull.
+    that pull; ranking: throughput.target_ranking() of that pull. Healers: none of it; tanks: the praise only.
     """
+    if role == 'healer':
+        return []
+    found = _focus_insights(data, number, potions, ranking, name)
+    return [i for i in found if i['tone'] == 'good'] if role == 'tank' else found
+
+
+def _focus_insights(data, number, potions, ranking, name):
     from .web.focusview import potion_lead
     out, lined_up = [], False
     wins = focus.windows(data)
@@ -258,12 +276,25 @@ def boss_mechanic_insights(encounter_id, numbered, name):
 
 
 def output_insights(numbered, name, role):
-    """Your best kill parse, when it's worth a mention - a wipe's doesn't count (throughput.counted_parses)."""
-    parses = [r['parse'] for r in throughput.per_pull(numbered, name, role) if r['parse'] is not None and r['kill']]
-    if not parses or max(parses) < 75:
-        return [], (max(parses) if parses else None)
-    best = max(parses)
-    return [_insight('good', 20 + (best - 75), 'parse', f"Best parse {best:.0f}")], best
+    """
+    Your best kill parse in your role's metric (a healer's healing parse), when it's worth a mention - a wipe's
+    doesn't count (throughput.counted_parses); for healers, most healing of the raid's healers when it's so.
+    """
+    rows = throughput.per_pull(numbered, name, role)
+    out = []
+    if role == 'healer':
+        ranked = [r for r in rows if r['raid_rank'] and r['raid_size'] >= 2]
+        top = [r for r in ranked if r['raid_rank'] == 1]
+        if ranked and len(top) * 2 >= len(ranked):
+            out.append(_insight('good', 30, 'healing',
+                                f"Most healing of the raid's {ranked[0]['raid_size']} healers"
+                                + (f" in {len(top)} of {len(ranked)} pulls" if len(ranked) > 1 else '')))
+    parses = [r['parse'] for r in rows if r['parse'] is not None and r['kill']]
+    best = max(parses) if parses else None
+    if best is not None and best >= 75:
+        what = 'healing parse' if role == 'healer' else 'parse'
+        out.append(_insight('good', 20 + (best - 75), 'parse', f"Best {what} {best:.0f}"))
+    return out, best
 
 
 # ============================================================================
@@ -347,6 +378,7 @@ def night(code, character_names, load=True):
     detail = [b for b in sorted(bosses, key=lambda b: -b['weight']) if b['weight'] >= DETAIL_MIN_WEIGHT][:DETAIL_BOSSES]
     for boss in bosses:
         numbered, role = boss['numbered'], boss['row'].get('role')
+        boss['role'] = role
         found = feedback_insights(boss['row'])
         found += boss_mechanic_insights(boss['key'][0], numbered, character)
         try:
@@ -363,7 +395,7 @@ def night(code, character_names, load=True):
         found += more
         if boss['killed'] and boss['pulls'] <= EASY_KILL_PULLS and not boss['deaths']:
             found.append(_insight('good', 15, 'kill', f"Clean kill in {boss['pulls']} pull{'s' if boss['pulls'] != 1 else ''}"))
-        if boss in detail:
+        if boss in detail and role != 'healer':  # healers get no add tips: no need to load (and pay for) them
             key = focus.key_pull(numbered, character)
             if key:
                 number, pull = key
@@ -380,7 +412,7 @@ def night(code, character_names, load=True):
                     ranking = {t['name']: t for t in throughput.target_ranking(
                         [(number, pull)], {pull['fight_id']: stored} if stored is not None else None,
                         {pull['fight_id']: focus.up_cached(code, pull['fight_id'], pull)})}
-                    more = focus_insights(data_f, number, potions, ranking, character)
+                    more = focus_insights(data_f, number, potions, ranking, character, role)
                     found += more
                     boss['star'] = next((i['target'] for i in more if i['kind'] == 'star' and i['impact'] >= 45), None)
         for i in found:
