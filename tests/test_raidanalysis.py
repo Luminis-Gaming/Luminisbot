@@ -2096,15 +2096,19 @@ class TestItemTooltips(unittest.TestCase):
 
 
 class TestCharacterFilters(unittest.TestCase):
-    def test_latest_tier_and_most_pulled_difficulty_by_default(self):
+    def test_latest_tier_and_hardest_real_difficulty_by_default(self):
         from raidanalysis import character
         pull = lambda code, zone, diff, start: {'report_code': code, 'zone_id': zone, 'zone_name': f'Zone {zone}',  # noqa: E731
                                                 'difficulty': diff, 'report_start': start}
-        pulls = ([pull('old', 38, 5, 1)] * 3 + [pull('new', 42, 5, 9)] * 4 + [pull('new', 42, 4, 9)] * 2
+        pulls = ([pull('old', 38, 5, 1)] * 3 + [pull('new', 42, 5, 4)] * 4 + [pull('new', 42, 4, 9)] * 9
                  + [pull('new2', 42, 4, 10)])
+        # Mostly Heroic farm, but Mythic is a real part of it (4 of 14 pulls): Mythic
         chosen, tier, diff, diffs = character.filter_pulls(pulls)
         self.assertEqual((tier, diff, len(chosen)), (42, 5, 4))
-        self.assertEqual(diffs, [(5, 4), (4, 3)])
+        self.assertEqual(diffs, [(5, 4), (4, 10)])
+        # ...but one stray Mythic pull among 30 Heroic ones isn't: Heroic
+        stray = [pull('new', 42, 5, 4)] + [pull('new', 42, 4, 9)] * 30
+        self.assertEqual(character.filter_pulls(stray)[2], 4)
         self.assertEqual([t['zone_id'] for t in character.tiers_of(pulls)], [42, 38])
         chosen, tier, diff, _ = character.filter_pulls(pulls, 38, None)
         self.assertEqual((tier, diff, len(chosen)), (38, 5, 3))
