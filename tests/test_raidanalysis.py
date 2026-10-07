@@ -531,6 +531,156 @@ class TestDeathsOnlyMechanics(unittest.TestCase):
         self.assertNotIn('Hit by <strong>Gravebound', html)
 
 
+class TestHelicalToxins(unittest.TestCase):
+    """Entombed Sentinels, from real pulls: pairs that make 4, a 2 and a 3 making 5, a locked one bumping on, one alone."""
+
+    def setUp(self):
+        from raidanalysis import bossmech
+        self.mech = next(m for m in bossmech.for_encounter(3445) if m.key == 'helical')
+        people = ['Moerade', 'Stonasloth', 'Zorromix', 'Asiriel', 'Barathrûm', 'Haldrik', 'P7', 'P8']
+        self.names = {i: n for i, n in enumerate(people, 1)}
+        self.ids = {n: i for i, n in self.names.items()}
+        self.roster = set(people)
+
+    def ev(self, t, kind, who, stack=None):
+        e = {'timestamp': t, 'type': kind, 'sourceID': -1, 'targetID': self.ids[who]}
+        if stack:
+            e['stack'] = stack
+        return e
+
+    def data(self):
+        ev = [self.ev(161210 + i, 'applydebuff', n) for i, n in enumerate(['Moerade', 'Stonasloth', 'Zorromix',
+                                                                            'Asiriel', 'Barathrûm', 'Haldrik'])]
+        ev += [self.ev(163510, 'removedebuff', 'Moerade'), self.ev(163510, 'removedebuff', 'Stonasloth'),  # made 4
+               self.ev(163690, 'applydebuffstack', 'Zorromix', 5), self.ev(163690, 'applydebuffstack', 'Asiriel', 5),
+               self.ev(165000, 'applydebuffstack', 'Zorromix', 7),                                          # locked 5
+               self.ev(165000, 'applydebuffstack', 'Barathrûm', 7),                                         # + a 2
+               self.ev(189270, 'removedebuff', 'Zorromix'), self.ev(189340, 'removedebuff', 'Asiriel'),
+               self.ev(189300, 'removedebuff', 'Barathrûm'),
+               self.ev(189290, 'removedebuff', 'Haldrik')]                                                  # ran out
+        return self.mech.collect({'toxins': ev}, 0, self.names, self.roster)
+
+    def analysis(self):
+        return {'players': [{'name': n} for n in self.roster], 'deaths': [], 'boss_mechanics': {'helical': self.data()}}
+
+    def test_outcomes(self):
+        from raidanalysis import bossmech
+        fails = bossmech.failures(self.analysis(), self.mech)
+        self.assertEqual([(f['players'], f['kind']) for f in fails],
+                         [(['Zorromix', 'Asiriel'], 'wrong'), (['Zorromix', 'Barathrûm'], 'wrong')])
+        self.assertIn('made 5, not 4', fails[0]['detail'])
+        self.assertIn('made 7 (5 + 2), not 4', fails[1]['detail'])                  # a known 5: the other was a 2
+        # Running out alone isn't on them (their match may have gone into a wrong pair): a note, never a fail
+        notes = bossmech.notes(self.analysis(), self.mech)
+        self.assertEqual([n['players'] for n in notes], [['Haldrik']])
+        self.assertIn('had no match left - it ran out after 28 s (not counted', notes[0]['detail'])
+        self.assertEqual(bossmech.uses(self.analysis(), self.mech, 'Moerade'), 1)    # matched right
+        self.assertEqual(bossmech.uses(self.analysis(), self.mech, 'Zorromix'), 0)
+
+    def test_night_summary_shows_the_unmatched_without_blaming(self):
+        from raidanalysis.web import insights
+        a = dict(self.analysis(), _duration=200000, abilities=[])
+        for p in a['players']:
+            p.update({'class': 'Mage', 'role': 'dps'})
+        html = insights.build([{'number': 9, 'fight_id': 9, 'kill': False, 'reason': None, 'phases': [], 'analysis': a}],
+                              {}, lambda i, n: None, 'x')
+        self.assertIn('Helical Toxins: matched wrong', html)
+        self.assertIn('<h4>Also</h4>', html)
+        self.assertIn('had no match left', html)
+        who = html[html.index('Who failed it'):html.index('<h4>When</h4>')]
+        self.assertNotIn('Haldrik', who)                                            # not in the blame chart
+
+    def test_coaching(self):
+        from raidanalysis import coach
+        numbered = [(9, {'analysis': self.analysis()})]
+        tip = {i['text'] for i in coach.boss_mechanic_insights(3445, numbered, 'Zorromix')}
+        self.assertTrue(any('You matched wrong on Helical Toxins 2 times' in t and 'with Asiriel (5), Barathrûm (7)' in t
+                            and 'a 2 goes with a 2, a 1 with a 3' in t for t in tip))
+        self.assertFalse([i for i in coach.boss_mechanic_insights(3445, numbered, 'Haldrik') if i['tone'] == 'bad'])
+        wrong = next(i for i in coach.boss_mechanic_insights(3445, numbered, 'Asiriel') if i['tone'] == 'bad')
+        self.assertEqual(wrong['ability'], {'id': 1284590, 'name': 'Helical Toxins'})
+        good = coach.boss_mechanic_insights(3445, numbered, 'Moerade')
+        self.assertIn('Helical Toxins: matched right every time (1×)', {i['text'] for i in good})
+
+
+class TestProtovenomCollision(unittest.TestCase):
+    """Entombed Sentinels, a real pull: two pairs clear their rings together; Azzazel runs into Qeek, then Mangor."""
+
+    def setUp(self):
+        from raidanalysis import bossmech
+        self.mech = next(m for m in bossmech.for_encounter(3445) if m.key == 'protovenom')
+        people = ['Mangor', 'Scrumsh', 'Azzazel', 'Boopsboops', 'Qeek', 'Mageblazee', 'Alliuda', 'Stonasloth']
+        self.names = {i: n for i, n in enumerate(people, 1)}
+        self.names[99] = 'Vashnik'
+        self.ids = {n: i for i, n in self.names.items()}
+        self.roster = set(people)
+
+    def ring(self, t, who, kind='applydebuff'):
+        return {'timestamp': t, 'type': kind, 'sourceID': 99, 'targetID': self.ids[who]}
+
+    def hit(self, t, who, x, y):
+        return {'timestamp': t, 'type': 'damage', 'sourceID': 99, 'targetID': self.ids[who], 'x': x, 'y': y}
+
+    def data(self):
+        rings = [self.ring(36560, n) for n in ('Mangor', 'Scrumsh')] + \
+                [self.ring(38710, n, 'removedebuff') for n in ('Mangor', 'Scrumsh')] + \
+                [self.ring(101570, n) for n in ('Azzazel', 'Boopsboops')]               # these two never pair up
+        eruptions = [self.hit(103390, 'Qeek', 34545, 70579), self.hit(103390, 'Boopsboops', 35180, 70128),
+                     self.hit(103390, 'Azzazel', 34481, 70936),                         # Qeek 3.6 yd from Azzazel
+                     self.hit(104370, 'Scrumsh', 33269, 70402), self.hit(104370, 'Mageblazee', 32147, 71473),
+                     self.hit(104370, 'Mangor', 32701, 70646), self.hit(104370, 'Alliuda', 32929, 69805),
+                     self.hit(104370, 'Azzazel', 32758, 70709),                         # Mangor 0.8 yd away
+                     self.hit(104440, 'Azzazel', 32758, 70709),                         # same burst, logged again
+                     self.hit(160000, 'Stonasloth', 30000, 70000)]                      # no ring in it: not a collision
+        return self.mech.collect({'rings': rings, 'eruptions': eruptions}, 0, self.names, self.roster)
+
+    def test_who_ran_into_whom(self):
+        data = self.data()
+        self.assertEqual([c[1:3] for c in data['collisions']], [['Azzazel', 'Qeek'], ['Azzazel', 'Mangor']])
+        self.assertEqual([c[3] for c in data['collisions']], [3.6, 0.8])
+        analysis = {'players': [{'name': n} for n in self.roster], 'deaths': [], 'boss_mechanics': {'protovenom': data}}
+        from raidanalysis import bossmech
+        fails = bossmech.failures(analysis, self.mech)
+        self.assertEqual(fails[0]['players'], ['Azzazel', 'Qeek'])
+        self.assertIn('Azzazel had the red ring, Qeek didn\'t (3 players caught in the eruption)', fails[0]['detail'])
+        self.assertEqual(bossmech.uses(analysis, self.mech, 'Mangor'), 1)              # paired cleanly
+        self.assertEqual(bossmech.uses(analysis, self.mech, 'Azzazel'), 0)
+
+    def test_coaching_per_side(self):
+        from raidanalysis import coach
+        numbered = [(4, {'analysis': {'players': [{'name': n} for n in self.roster], 'deaths': [],
+                                      'boss_mechanics': {'protovenom': self.data()}}})]
+        ring = coach.boss_mechanic_insights(3445, numbered, 'Azzazel')[0]['text']
+        self.assertIn('With the red ring you ran into players without one 2 times', ring)
+        self.assertIn("calm down, don't run people over", ring)
+        bumped = coach.boss_mechanic_insights(3445, numbered, 'Qeek')[0]['text']
+        self.assertIn('You got run into by a red ring 1 time (#4 at 1:43: Azzazel)', bumped)
+        self.assertIn('part the sea', bumped)
+        both = coach.boss_mechanic_insights(3445, numbered, 'Mangor')[0]          # paired once, run into once
+        self.assertEqual(both['tone'], 'bad')
+        self.assertIn('got run into by a red ring', both['text'])
+        self.assertEqual(coach.boss_mechanic_insights(3445, numbered, 'Scrumsh')[0]['tone'], 'good')
+
+    def test_clip_goes_with_it(self):
+        """Mythic Trap's Shifting Protovenom clip on the night's line and on the player's tip."""
+        from raidanalysis import coach
+        from raidanalysis.web import insights
+        guide = {'name': 'Shifting Protovenom', 'video_url': 'https://assets2.mythictrap.com/v.mp4', 'tip': 'Touch',
+                 'embed_url': 'https://www.mythictrap.com/en/embed-ability/venomous-abyss/entombed-sentinels/entsentShiPro'}
+        analysis = {'players': [{'name': n, 'class': 'Mage', 'role': 'dps'} for n in self.roster], 'deaths': [],
+                    'boss_mechanics': {'protovenom': self.data()}, '_duration': 200000, 'abilities': []}
+        seen = []
+
+        def guide_for(i, n):
+            seen.append((i, n))
+            return guide if (i, n) == (1296878, 'Shifting Protovenom') else None
+        html = insights.build([{'number': 4, 'fight_id': 4, 'kill': False, 'reason': None, 'phases': [],
+                                'analysis': analysis}], {}, guide_for, 'x')
+        self.assertIn('entsentShiPro', html)
+        tip = coach.boss_mechanic_insights(3445, [(4, {'analysis': analysis})], 'Qeek')[0]
+        self.assertEqual(tip['ability'], {'id': 1296878, 'name': 'Shifting Protovenom'})
+
+
 class TestMushroomBounce(unittest.TestCase):
     """The Lost Explorers: two pulls from the log - Naautilus alone 0.5 s after it appeared; the raid 23 s later."""
     MUSHROOM = 99
@@ -557,12 +707,12 @@ class TestMushroomBounce(unittest.TestCase):
     def test_alone_right_after_it_appeared_fails(self):
         from raidanalysis import bossmech
         mech = bossmech.for_encounter(3497)[0]
-        early = mech.collect(self.events(0, 81109, [(81595, 1)]), 0, self.names, self.roster)
+        early = mech.collect({'bounce': self.events(0, 81109, [(81595, 1)])}, 0, self.names, self.roster)
         self.assertEqual(early, [[81109, ['Naautilus'], 81595]])                    # the mushroom's own events aren't bounces
         self.assertEqual(bossmech.failures(self.analysis(early), mech), [{
             't': 81595, 'players': ['Naautilus'],
             'detail': 'bounced 0.5 s after the mushroom appeared, alone - it was gone before the rest could'}])
-        together = mech.collect(self.events(0, 81046, [(104494 + 100 * i, i) for i in range(2, 12)]), 0,
+        together = mech.collect({'bounce': self.events(0, 81046, [(104494 + 100 * i, i) for i in range(2, 12)])}, 0,
                                 self.names, self.roster)
         self.assertEqual(len(together[0][1]), 10)
         self.assertEqual(bossmech.failures(self.analysis(together), mech), [])     # the raid together: fine

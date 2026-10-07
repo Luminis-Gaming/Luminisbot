@@ -197,8 +197,8 @@ async def _events(session, code, start, end, view, filter_expression, max_events
 
 
 async def get_events(session, code, fight_id, data_type, filter_expression, max_events=20000,
-                     hostility='Friendlies'):
-    start, end = await _window(session, code, fight_id)
+                     hostility='Friendlies', include_resources=False):
+    start, end = await _window(session, code, fight_id)  # (v1 has no resources switch)
     # Resources, CombatantInfo, All: the summary view, narrowed by the filter (which names the type)
     view = EVENT_VIEWS.get(data_type, 'summary')
     return await _events(session, code, start, end, view, filter_expression, max_events,

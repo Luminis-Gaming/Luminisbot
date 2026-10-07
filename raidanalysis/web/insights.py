@@ -111,9 +111,18 @@ def build(pulls, tags, guide_for, code):
         if not checked:
             continue  # not this boss, or analyzed before the check existed
         failed = [(p, f) for p, f in checked if f]
+        clip = guide_button(guide_for(*mech.guide), mech.guide[1]) if mech.guide else ''
+        # Worth seeing but on nobody (bossmech notes) - e.g. a toxin left without a match: muted, never counted
+        noted = []
+        for p, _ in checked:
+            pull = '' if single else f'#{p["number"]} '
+            noted += [f'<p class="small muted">{pull}{fmt_duration(n["t"])} - {", ".join(pname(x) for x in n["players"])} '
+                      f'{esc(n["detail"])}</p>' for n in bossmech.notes(p['analysis'], mech)]
+        notes_html = f'<h4>Also</h4>{"".join(noted)}' if noted else ''
         if not failed:
             over = '' if single else ' in ' + _plural(len(checked), 'pull')
-            groups['Boss mechanics'].append(_row(mech.icon, f'{esc(mech.ok_title)}{over}', '', 'good'))
+            groups['Boss mechanics'].append(_row(mech.icon, f'{esc(mech.ok_title)}{over}{clip}', notes_html,
+                                                 '' if noted else 'good'))
             continue
         who, lines = {}, []
         for p, fails in failed:
@@ -124,9 +133,9 @@ def build(pulls, tags, guide_for, code):
                 lines.append(f'<p class="small">{pull}{fmt_duration(f["t"])} - {", ".join(pname(n) for n in f["players"])} '
                              f'{esc(f["detail"])}</p>')
         numbers = ', '.join(f'#{p["number"]}' for p, _ in failed)
-        sentence = (f'{esc(mech.fail_title)} — <strong>{_plural(len(failed), "pull")}</strong>'
+        sentence = (f'{esc(mech.fail_title)}{clip} — <strong>{_plural(len(failed), "pull")}</strong>'
                     + ('' if single else f' <span class="muted small">({numbers})</span>'))
-        body = f'<h4>Who failed it</h4>{players_bars(who, "Times")}<h4>When</h4>{"".join(lines)}'
+        body = f'<h4>Who failed it</h4>{players_bars(who, "Times")}<h4>When</h4>{"".join(lines)}{notes_html}'
         groups['Boss mechanics'].append(_row(mech.icon, sentence, body, 'bad'))
 
     # --- Avoidable mechanics ----------------------------------------------------

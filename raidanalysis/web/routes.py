@@ -8,6 +8,7 @@ loaded by then) and reuse its session auth, CSS and nav.
 """
 import asyncio
 import contextvars
+import json
 import logging
 import re
 from urllib.parse import quote
@@ -49,6 +50,7 @@ def register_routes(app):
     get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', _admin_cached(handle_player_trend))
     get('/admin/raids/character/{name}', _admin_cached(handle_character))
     get('/admin/raids/character/{realm}/{name}', _admin_cached(handle_character))
+    get('/admin/raids/report/{code}/{fight_id}/events', handle_events_dump)  # officers only: raw events, for new checks
 
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
     get('/raids', _public(handle_overview))
@@ -1862,6 +1864,63 @@ async def _focus_section(request, code, numbered, whole_night, name, damage_href
                             (db.get_report(code) or {}).get('phase_names'), npc_icons)}
         {focusview.cards(data, color_of, potions, cooldowns, top_share, my_share, label, npc_icons,
                          npcs.wowhead_links(enemies))}""", pull_focus
+
+
+async def handle_events_dump(request):
+    """
+    GET /admin/raids/report/{code}/{fight_id}/events?abilities=Name,Other Name - one pull's raw WCL events for
+    those abilities (every event type, both hostilities, with positions and hit points) plus its deaths, as JSON
+    with names instead of ids. For working out a new boss mechanic check (bossmech.py) from real data.
+    Officers only; ?save=1 downloads it as a file.
+    """
+    _session(request)  # logged in, or off to the login page
+    code = request.match_info['code']
+    try:
+        fight_id = int(request.match_info['fight_id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    names = [n.strip().replace('"', '') for n in (request.query.get('abilities') or '').split(',') if n.strip()][:8]
+    if not names:
+        return web.json_response({'error': 'Add ?abilities=Ability Name,Other Name'}, status=400)
+    import aiohttp
+    from .. import wcl
+    async with aiohttp.ClientSession() as session:
+        overview = await wcl.get_report_overview(session, code)
+        fight = next((f for f in overview.get('fights') or [] if f.get('id') == fight_id), None)
+        if not fight:
+            raise web.HTTPNotFound()
+        actors = {a['id']: a for a in await wcl.get_report_actors(session, code)}
+        abilities = await wcl.get_report_abilities(session, code)
+        expression = 'ability.name in (' + ', '.join(f'"{n}"' for n in names) + ')'
+        events, seen = [], set()
+        for hostility in ('Friendlies', 'Enemies'):
+            for e in await wcl.get_events(session, code, fight_id, 'All', expression, max_events=50000,
+                                          hostility=hostility, include_resources=True):
+                key = (e.get('timestamp'), e.get('type'), e.get('sourceID'), e.get('targetID'), e.get('abilityGameID'),
+                       e.get('amount'))
+                if key not in seen:
+                    seen.add(key)
+                    events.append(e)
+        deaths = await wcl.get_events(session, code, fight_id, 'Deaths', 'type = "death"')
+
+    def name(aid):
+        a = actors.get(aid)
+        return f"{a['name']} ({a.get('subType') or a.get('type')})" if a else aid
+
+    def tidy(e):
+        out = {'t': (e.get('timestamp') or 0) - fight['startTime'], 'type': e.get('type'),
+               'ability': (abilities.get(e.get('abilityGameID')) or (None,))[0] or e.get('abilityGameID'),
+               'source': name(e.get('sourceID')), 'target': name(e.get('targetID'))}
+        out.update({k: v for k, v in e.items() if k not in ('timestamp', 'type', 'sourceID', 'targetID', 'fight',
+                                                             'abilityGameID', 'classResources')})
+        return out
+    body = {'report': code, 'fight': {k: fight.get(k) for k in ('id', 'name', 'kill', 'startTime', 'endTime')},
+            'abilities': names, 'events': [tidy(e) for e in sorted(events, key=lambda e: e.get('timestamp') or 0)],
+            'deaths': [tidy(e) for e in deaths]}
+    headers = dict(SECURITY_HEADERS)
+    if request.query.get('save'):
+        headers['Content-Disposition'] = f'attachment; filename="{code}-{fight_id}-events.json"'
+    return web.json_response(body, headers=headers, dumps=lambda o: json.dumps(o, indent=1))
 
 
 async def handle_spell(request):

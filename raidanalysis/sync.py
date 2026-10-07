@@ -111,11 +111,12 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
         roster = {p['name'] for p in analysis.get('players') or []}
         analysis['boss_mechanics'] = {}
         for mech in special:
-            events = []
-            for data_type, expression in mech.fetches():
+            events = {}
+            for name, data_type, expression, positions in mech.fetches():
                 for hostility in ('Friendlies', 'Enemies'):
-                    events += await wcl.get_events(session, code, fight['id'], data_type, expression,
-                                                   hostility=hostility)
+                    events.setdefault(name, []).extend(await wcl.get_events(
+                        session, code, fight['id'], data_type, expression, hostility=hostility,
+                        include_resources=positions))
             analysis['boss_mechanics'][mech.key] = mech.collect(events, fight['startTime'], names_by_id, roster)
     # Everyone's talents this pull: an ability you never pressed is only "not talented" when it really wasn't
     analysis['talents'] = analyzer.talent_entries({a['id']: a['name'] for a in actors},

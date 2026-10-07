@@ -249,11 +249,11 @@ def boss_mechanic_insights(encounter_id, numbered, name):
                 continue  # analyzed before the check
             mine += [(number, f) for f in fails if name in f['players']]
             used += bossmech.uses(analysis, mech, name)
+        guide = {'id': mech.guide[0], 'name': mech.guide[1]} if mech.guide else None  # its Mythic Trap clip
         if mine:
-            when = ', '.join(f"#{n} at {_clock(f['t'])}" for n, f in mine[:4]) + (' …' if len(mine) > 4 else '')
-            out.append(_insight('bad', 90, 'boss_mechanic', mech.you_failed(len({n for n, _ in mine}), when)))
+            out.append(_insight('bad', 90, 'boss_mechanic', mech.you_failed(name, mine), guide))
         elif used:
-            out.append(_insight('good', 20, 'boss_mechanic', mech.you_ok(used)))
+            out.append(_insight('good', 20, 'boss_mechanic', mech.you_ok(used), guide))
     return out
 
 

@@ -407,8 +407,11 @@ PAGE_END = 1e13  # "until the end": a later page's endTime (the fight ids bound 
 
 @_v1_fallback
 async def get_events(session, code, fight_id, data_type, filter_expression, max_events=20000,
-                     hostility='Friendlies'):
-    """All events matching filter_expression in one pull, following pagination."""
+                     hostility='Friendlies', include_resources=False):
+    """
+    All events matching filter_expression in one pull, following pagination. include_resources: each event also
+    carries its actor's hit points and position (x, y, facing) - much bigger, for mechanics about who was where.
+    """
     events = []
     start = None
     while True:
@@ -426,7 +429,7 @@ async def get_events(session, code, fight_id, data_type, filter_expression, max_
               reportData {{
                 report(code: $code) {{
                   events(fightIDs: $fights, dataType: $dataType, hostilityType: $hostility,
-                         filterExpression: $filter, limit: 10000{start_arg}) {{
+                         filterExpression: $filter, limit: 10000{start_arg}{', includeResources: true' if include_resources else ''}) {{
                     data
                     nextPageTimestamp
                   }}
