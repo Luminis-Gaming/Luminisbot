@@ -1336,8 +1336,9 @@ def _mechanics_table(analysis, tags, sources, guide_for, pname, encounter_id, di
         hidden = '' if dict((k, on) for k, _, on in MECH_GROUPS)[group] else ' hidden'
         rows.append(f"""
             <tr class="mech-row" data-mg="{group}"{hidden} tabindex="0" title="Click for details">
-                <td><span class="mech-caret" aria-hidden="true">{CHEVRON}</span>{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
-                    {tag_pill(tag, sources.get(a['id'])) if tag != analyzer.TAG_IGNORE else ''}</td>
+                <td><div class="mech-name"><span class="mech-caret" aria-hidden="true">{CHEVRON}</span>
+                    <div class="mech-what">{ability(a['name'], a.get('icon'), a['id'], guide_for(a['id'], a['name']))}
+                    {tag_pill(tag, sources.get(a['id'])) if tag != analyzer.TAG_IGNORE else ''}</div></div></td>
                 <td class="small muted">{esc(a.get('source') or '')}</td>
                 <td class="num" data-v="{a['total']}">{fmt_amount(a['total'])}</td>
                 <td class="num" data-v="{len(players)}">{len(players) if a.get('complete') else '5+'}/{raid_size}</td>

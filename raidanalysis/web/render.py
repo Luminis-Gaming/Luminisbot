@@ -189,6 +189,10 @@ tr.mech-row.open td { background: var(--accent-soft); }
     background: var(--surface-3); color: var(--text); transition: transform .15s, background .15s, border-color .15s; }
 .mech-caret svg { width: 12px; height: 12px; }
 tr.mech-row:hover .mech-caret { border-color: var(--accent); color: #fff; }
+/* The caret stays left of the name: a long name, its clip and its tag wrap in their own column beside it */
+.mech-name { display: flex; align-items: center; gap: 8px; }
+.mech-name .mech-caret { margin-right: 0; flex-shrink: 0; }
+.mech-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 tr.mech-row.open .mech-caret { transform: rotate(90deg); background: var(--accent); border-color: var(--accent); color: #fff; }
 tr.mech-detail > td { background: var(--surface-2); padding: 12px 16px 16px; }
 .mech-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px 24px; }
