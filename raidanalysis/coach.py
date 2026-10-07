@@ -251,9 +251,9 @@ def boss_mechanic_insights(encounter_id, numbered, name):
             used += bossmech.uses(analysis, mech, name)
         guide = {'id': mech.guide[0], 'name': mech.guide[1]} if mech.guide else None  # its Mythic Trap clip
         if mine:
-            out.append(_insight('bad', 90, 'boss_mechanic', mech.you_failed(name, mine), guide))
+            out.append(dict(_insight('bad', 90, 'boss_mechanic', mech.you_failed(name, mine), guide), mechanic=mech.key))
         elif used:
-            out.append(_insight('good', 20, 'boss_mechanic', mech.you_ok(used), guide))
+            out.append(dict(_insight('good', 20, 'boss_mechanic', mech.you_ok(used), guide), mechanic=mech.key))
     return out
 
 
@@ -271,12 +271,15 @@ def output_insights(numbered, name, role):
 # ============================================================================
 
 def _pick(insights, tone, count):
-    """The best-weighted `count` of one tone - one per (boss, kind), so three rotation tips don't crowd out the rest."""
+    """
+    The best-weighted `count` of one tone - one per (boss, kind), so three rotation tips don't crowd out the rest;
+    each boss mechanic (bossmech.py) counts as its own kind - failing two on one boss is two things to work on.
+    """
     best = {}
     for i in insights:
         if i['tone'] != tone or i['score'] < MIN_SCORE:
             continue
-        key = (i['boss'], i['kind'])
+        key = (i['boss'], i['kind'], i.get('mechanic'))
         if key not in best or i['score'] > best[key]['score']:
             best[key] = i
     return sorted(best.values(), key=lambda i: -i['score'])[:count]

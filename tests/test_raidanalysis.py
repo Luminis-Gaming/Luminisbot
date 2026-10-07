@@ -577,6 +577,15 @@ class TestHelicalToxins(unittest.TestCase):
         self.assertEqual(bossmech.uses(self.analysis(), self.mech, 'Moerade'), 1)    # matched right
         self.assertEqual(bossmech.uses(self.analysis(), self.mech, 'Zorromix'), 0)
 
+    def test_both_sentinels_mechanics_make_it_to_work_on(self):
+        """Failing Protovenom and Helical Toxins on the same boss: two separate things to work on, not one."""
+        from raidanalysis import coach
+        tips = [dict(coach._insight('bad', 90, 'boss_mechanic', t), mechanic=m, boss='Entombed Sentinels', score=90)
+                for t, m in (('rings', 'protovenom'), ('toxins', 'helical'))]
+        tips.append(dict(coach._insight('bad', 50, 'rotation', 'x'), boss='Entombed Sentinels', score=50))
+        picked = coach._pick(tips, 'bad', 3)
+        self.assertEqual({i['text'] for i in picked}, {'rings', 'toxins', 'x'})
+
     def test_night_summary_shows_the_unmatched_without_blaming(self):
         from raidanalysis.web import insights
         a = dict(self.analysis(), _duration=200000, abilities=[])
