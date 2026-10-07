@@ -59,6 +59,11 @@ def _num(value):
     return f'{value:,.0f}'.replace(',', '\u2009')  # thin-space thousands, like the game's tooltips
 
 
+def _rating_tip(name, rating):
+    """The stat's rating on hover - nothing when Blizzard didn't say (not a misleading "0 rating")."""
+    return f' title="{esc(name)}: {_num(rating)} rating"' if rating else ''
+
+
 def sheet(data, stale=False, refreshing=False):
     """The character sheet under the gear: attributes, enhancements, the set's bonuses - each part only when known."""
     st = armory.stats(data)
@@ -71,7 +76,7 @@ def sheet(data, stale=False, refreshing=False):
             rows.append((st['power'][0], _num(st['power'][1]), ''))
         rows.append(('Armor', _num(st['armor']), ''))
         attributes = ''.join(f'<div class="ar-srow"><span>{esc(n)}</span><b>{v}</b></div>' for n, v, _ in rows)
-        enh = ''.join(f'<div class="ar-srow" title="{esc(n)}: {_num(r)} rating"><span>{esc(n)}</span><b>{p:.2f}%</b></div>'
+        enh = ''.join(f'<div class="ar-srow"{_rating_tip(n, r)}><span>{esc(n)}</span><b>{p:.2f}%</b></div>'
                       for n, p, r in st['secondary'] + st['tertiary'])
         parts.append(f'<div class="ar-panel"><h4>Attributes</h4>{attributes}</div>')
         parts.append(f'<div class="ar-panel"><h4>Enhancements</h4>{enh}</div>')

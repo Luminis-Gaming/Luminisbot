@@ -2185,6 +2185,15 @@ class TestItemTooltips(unittest.TestCase):
         self.assertIn('Attributes', html)
         self.assertIn('27.90%', html)
         self.assertIsNone(armory.stats({}))
+        # Blizzard's current shape: 'rating_normalized' in place of 'rating' (which could overflow)
+        data['statistics'].update({'melee_crit': {'rating_normalized': 611, 'rating_bonus': 0.87, 'value': 5.87},
+                                   'mastery': {'rating': 4294967066, 'value': 44.8}})
+        st = armory.stats(data)
+        self.assertEqual(st['secondary'][0][2], 611)
+        self.assertEqual(st['secondary'][2][2], 0)                   # the old overflow: not a rating
+        html = view.sheet(data)
+        self.assertIn('title="Critical Strike: 611 rating"', html)
+        self.assertIn('<div class="ar-srow"><span>Mastery</span>', html)  # unknown: no tip, not "0 rating"
 
     def test_tier_set_from_blizzard_and_wowhead(self):
         from raidanalysis import armory

@@ -25,6 +25,31 @@ logger = logging.getLogger(__name__)
 TAGS = (TAG_AVOIDABLE, TAG_AVOIDABLE_NON_TANK, TAG_DEATH_ONLY, TAG_IGNORE)
 
 
+def _use_fast_json():
+    """
+    Reading JSON out of the database with orjson - about twice as fast as the standard library, the same results;
+    turning a night's analyses into Python is most of what its pages cost. Anything orjson won't read (an integer
+    past 64 bits) goes to the standard one.
+    """
+    import json
+    try:
+        import orjson
+    except ImportError:
+        return
+
+    def loads(text):
+        try:
+            return orjson.loads(text)
+        except orjson.JSONDecodeError:
+            return json.loads(text)
+    from psycopg2.extras import register_default_json, register_default_jsonb
+    register_default_json(loads=loads, globally=True)
+    register_default_jsonb(loads=loads, globally=True)
+
+
+_use_fast_json()
+
+
 def ensure_schema(cursor):
     """Create raid analysis tables. Runs inside run_migrations()'s transaction."""
     cursor.execute("""

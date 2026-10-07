@@ -202,6 +202,19 @@ def _our_raids():
     return _our_raids_cache[1]
 
 
+RATING_OVERFLOW = 2 ** 31  # Blizzard's old 'rating' could overflow (4294967066): not a rating
+
+
+def _rating(value):
+    """
+    A stat's rating from Blizzard's statistics: 'rating_normalized' - they replaced 'rating', which could overflow
+    - else the old 'rating' (copies stored before the change); a plain number as is. 0 when unknown.
+    """
+    if isinstance(value, dict):
+        value = value.get('rating_normalized', value.get('rating'))
+    return value if isinstance(value, (int, float)) and 0 < value < RATING_OVERFLOW else 0
+
+
 def stats(data):
     """
     The character sheet's stats, from Blizzard's armory (statistics), or None without them:
@@ -218,20 +231,20 @@ def stats(data):
 
     def rated(key):
         v = st.get(key) or {}
-        return (v.get('value') or 0, v.get('rating') or 0) if isinstance(v, dict) else (0, 0)
+        return (v.get('value') or 0, _rating(v)) if isinstance(v, dict) else (0, 0)
 
     primary = max((('Strength', eff('strength')), ('Agility', eff('agility')), ('Intellect', eff('intellect'))),
                   key=lambda p: p[1])
     caster = primary[0] == 'Intellect'
     crit, haste = rated('spell_crit' if caster else 'melee_crit'), rated('spell_haste' if caster else 'melee_haste')
     secondary = [('Critical Strike', *crit), ('Haste', *haste), ('Mastery', *rated('mastery')),
-                 ('Versatility', st.get('versatility_damage_done_bonus') or 0, st.get('versatility') or 0)]
+                 ('Versatility', st.get('versatility_damage_done_bonus') or 0, _rating(st.get('versatility')))]
     tertiary = []
     for name, key in (('Leech', 'lifesteal'), ('Avoidance', 'avoidance'), ('Speed', 'speed')):
         v = st.get(key) or {}
         pct = (v.get('value') or v.get('rating_bonus') or 0) if isinstance(v, dict) else 0
         if pct > 0:
-            tertiary.append((name, pct, v.get('rating') or 0))
+            tertiary.append((name, pct, _rating(v)))
     power = (st.get('power_type') or {}).get('name')
     return {'primary': primary, 'stamina': eff('stamina'), 'health': st.get('health') or 0, 'armor': eff('armor'),
             'power': (power, st.get('power') or 0) if power and st.get('power') else None,
