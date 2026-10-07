@@ -619,7 +619,10 @@ tr[data-href]:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .ch-scope { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: -6px; }
 .ch-hero.no-model { grid-template-columns: 1fr; }
 /* The player's characters over their character page: this one lit, the others a click away */
-.ch-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -4px 0 14px; }
+.ch-top-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin: -4px 0 14px; min-height: 30px; }
+.ch-back { font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.ch-back:hover { color: var(--accent); text-decoration: none; }
+.ch-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ch-switch .ch-flabel { margin-right: 4px; }
 .ch-switch-tab { display: inline-flex; align-items: center; gap: 9px; padding: 5px 14px 5px 5px; border-radius: 999px;
     border: 1px solid var(--border); background: var(--surface); color: var(--text); opacity: 0.75;
@@ -694,9 +697,8 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .pl-art::before { content: ''; position: absolute; left: 14%; right: 14%; bottom: 6%; height: 46%; border-radius: 50%;
     background: radial-gradient(closest-side, color-mix(in srgb, var(--c) 34%, transparent), transparent); transition: opacity 0.2s; opacity: 0.7; }
 .pl-tile:hover .pl-art::before { opacity: 1; }
-/* Blizzard's render is 1600 x 1200 with the character in the middle: at 3.1x the tile's width it's a portrait,
-   head to thigh, fading out at the bottom */
-.pl-art img { position: absolute; width: 310%; left: -105%; top: -29%; pointer-events: none;
+/* The portrait (portraits.py: the render cropped head to thigh, tile-sized), fading out at the bottom */
+.pl-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none;
     filter: drop-shadow(0 6px 14px rgba(0,0,0,0.5)); transition: transform 0.25s ease; transform-origin: 50% 40%; }
 .pl-tile:hover .pl-art img { transform: scale(1.05); }
 .pl-initial { position: absolute; inset: 22% 22% 16%; display: grid; place-items: center; border-radius: 50%;
@@ -874,6 +876,7 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .ar-live { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; font-size: 12px;
     font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.ar-live[hidden] { display: none; }
 .ar-live.done { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent);
     border-color: color-mix(in srgb, var(--good) 35%, transparent); }
 .ar-live.failed { color: var(--muted); background: var(--surface-3); border-color: var(--border); }
@@ -1784,6 +1787,17 @@ document.addEventListener('click', e => {
   e.preventDefault();
   swapTo(hrefOf(link), link.dataset.swap || 'page', !!link.dataset.swap);
 });
+// The front page's tab, once it's on screen (not when a hover prefetches it): the nav's "Raid Analysis" reopens it.
+onEach('[data-home-tab]', home => {
+  document.cookie = 'raid_home_tab=' + encodeURIComponent(home.dataset.homeTab) + '; path=/; max-age=31536000; samesite=lax';
+});
+// A portrait that can't be had (the render went away): the class-coloured initial instead of a broken image.
+onEach('.pl-art img[data-initial]', img => img.addEventListener('error', () => {
+  const initial = document.createElement('b');
+  initial.className = 'pl-initial';
+  initial.textContent = img.dataset.initial;
+  img.replaceWith(initial);
+}));
 // Filter forms (the front page's tier / difficulty / team): a changed choice swaps the results in like a link -
 // the loading bar along the top and the old list fading while it loads - instead of a silent full page load.
 onEach('form[data-swap-form]', form => form.addEventListener('change', () => {

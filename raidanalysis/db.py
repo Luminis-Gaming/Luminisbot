@@ -4,10 +4,16 @@ Raid analysis database layer: schema + SQL helpers.
 Schema is created idempotently by ensure_schema(), called from
 run_migrations.py on every boot (migrations/012 is the documentation copy).
 """
+import contextvars
 import logging
+import os
 import re
+import threading
+import time
 
+import psycopg2
 from psycopg2.extras import Json, RealDictCursor
+from psycopg2.pool import PoolError, ThreadedConnectionPool
 
 from mythicplus.db import get_db_connection
 
@@ -202,6 +208,28 @@ def ensure_guide_schema(cursor):
             fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
     """)
+    # Each pull's player list on its own (a trigger keeps it equal to analysis->'players'): who was in which pull is
+    # asked a lot (the Players tab, character pages, benchmarks), and reading it out of the analysis means
+    # unpacking every pull's whole analysis - every cast, aura and hit - for a list of names.
+    # ...and when its analysis last changed (re-analyzed, detail fetched later): data_version() - the page caches
+    # keep a page until the data under it changes.
+    cursor.execute("ALTER TABLE raid_pulls ADD COLUMN IF NOT EXISTS players JSONB")
+    cursor.execute("ALTER TABLE raid_pulls ADD COLUMN IF NOT EXISTS changed_at TIMESTAMP WITH TIME ZONE")
+    cursor.execute("""
+        CREATE OR REPLACE FUNCTION raid_pulls_players() RETURNS trigger AS $$
+        BEGIN
+            NEW.players := COALESCE(NEW.analysis->'players', '[]'::jsonb);
+            NEW.changed_at := NOW();
+            RETURN NEW;
+        END $$ LANGUAGE plpgsql
+    """)
+    cursor.execute("DROP TRIGGER IF EXISTS raid_pulls_players ON raid_pulls")
+    cursor.execute("""
+        CREATE TRIGGER raid_pulls_players BEFORE INSERT OR UPDATE OF analysis ON raid_pulls
+        FOR EACH ROW EXECUTE FUNCTION raid_pulls_players()
+    """)
+    cursor.execute("UPDATE raid_pulls SET players = COALESCE(analysis->'players', '[]'::jsonb) WHERE players IS NULL")
+    cursor.execute("CREATE INDEX IF NOT EXISTS raid_pulls_players_gin ON raid_pulls USING gin (players jsonb_path_ops)")
     # Officers' calls on a spec's abilities: a major cooldown (timed), rotational (pressed on cooldown)
     # or hidden - overriding benchmarks.ability_kind(). Class / spec as WCL names them ('DeathKnight').
     cursor.execute("""
@@ -217,20 +245,72 @@ def ensure_guide_schema(cursor):
     """)
 
 
+# Connections are kept and reused (a pool): opening one - connecting and logging in - for every query added up to
+# a lot on pages that make dozens. Thread-safe (the Discord recap queries from a worker thread). A pool that's all
+# in use, or a kept connection that went stale (the database restarted), falls back to a fresh one.
+POOL_MAX = 10
+_pool = None
+_pool_lock = threading.Lock()
+
+# The queries of the page being built (web/routes.py's _timed): set per request, so slow pages are logged with
+# where the time went. None outside a request.
+QUERY_LOG = contextvars.ContextVar('raid_query_log', default=None)
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadedConnectionPool(1, POOL_MAX, host=os.getenv('DB_HOST', 'postgres'),
+                                               port=os.getenv('DB_PORT', '5432'),
+                                               database=os.getenv('DB_NAME', 'luminisbot'),
+                                               user=os.getenv('DB_USER', 'luminisbot'),
+                                               password=os.getenv('DB_PASSWORD', 'changeme123'))
+    return _pool
+
+
+def _query(conn, sql, params, fetch):
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, params)
+        result = None
+        if fetch == 'one':
+            result = cur.fetchone()
+        elif fetch == 'all':
+            result = cur.fetchall()
+    conn.commit()
+    return result
+
+
 def _run(sql, params=(), fetch=None):
-    conn = get_db_connection()
+    started = time.perf_counter()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, params)
-            result = None
-            if fetch == 'one':
-                result = cur.fetchone()
-            elif fetch == 'all':
-                result = cur.fetchall()
-        conn.commit()
-        return result
+        try:
+            pool = _get_pool()
+            conn = pool.getconn()
+        except PoolError:  # every kept connection in use: a one-off
+            pool, conn = None, get_db_connection()
+        try:
+            return _query(conn, sql, params, fetch)
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            if pool is None or not conn.closed:
+                raise  # a real error, not a dropped connection
+            pool.putconn(conn, close=True)  # stale (the database restarted): once more on a fresh one
+            pool, conn = None, get_db_connection()
+            return _query(conn, sql, params, fetch)
+        except Exception:
+            if not conn.closed:
+                conn.rollback()
+            raise
+        finally:
+            if pool is not None:
+                pool.putconn(conn, close=bool(conn.closed))
+            else:
+                conn.close()
     finally:
-        conn.close()
+        log = QUERY_LOG.get()
+        if log is not None:
+            log.append((time.perf_counter() - started, ' '.join(sql.split())[:100]))
 
 
 # ============================================================================
@@ -768,7 +848,7 @@ def list_characters(zone_id=None, difficulty=None, team=None, names=None):
                array_agg(DISTINCT r.start_time) AS night_starts
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         {_EVENT_JOIN}
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
         LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = x->>'name'
         WHERE r.source <> 'manual' AND COALESCE(x->>'name', '') <> '' {where}
         GROUP BY x->>'name', rr.realm
@@ -816,7 +896,7 @@ def character_pulls(name, realm=None):
                r.title AS report_title, r.start_time AS report_start, r.zone_name, r.zone_id
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = %s
-        WHERE r.source <> 'manual' AND p.analysis->'players' @> %s::jsonb {realm_where}
+        WHERE r.source <> 'manual' AND p.players @> %s::jsonb {realm_where}
         ORDER BY r.start_time, p.start_ms
     """, (name, name, name, name, Json([{'name': name}])) + ((realm,) if realm else ()), fetch='all')
 
@@ -896,6 +976,19 @@ def get_armory(name, realm=None):
         SELECT realm, data, fetched_at FROM raid_armory WHERE name_key = lower(%s) AND (%s::text IS NULL OR realm = %s)
         ORDER BY fetched_at DESC LIMIT 1
     """, (name, realm, realm), fetch='one')
+
+
+def data_version():
+    """
+    A fingerprint of what the raid pages show - pulls (how many, the last analysis change), top players, reports:
+    the page caches keep a page until it changes, instead of starting over at every sync whether or not it
+    brought anything.
+    """
+    row = _run("""
+        SELECT (SELECT COUNT(*) FROM raid_pulls) AS pulls, (SELECT MAX(changed_at) FROM raid_pulls) AS changed,
+               (SELECT MAX(fetched_at) FROM raid_benchmarks) AS benchmarks, (SELECT MAX(synced_at) FROM raid_reports) AS reports
+    """, fetch='one')
+    return f"{row['pulls']}|{row['changed']}|{row['benchmarks']}|{row['reports']}"
 
 
 def armory_images():
@@ -1040,7 +1133,7 @@ def benchmarks_needed(limit, refresh_days, difficulties):
             SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec,
                    MAX(x->>'role') AS role, MAX(r.start_time + p.start_ms) AS last_played
             FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code,
-                 jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
+                 jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
             -- imports by source, not created_at alone: the column was added with every older night
             -- getting the migration's time
             WHERE (r.code IN (SELECT code FROM latest)

@@ -15,6 +15,11 @@ def resolve_owners(signups, linked, displays=None):
 
     signups: [(character, discord_id, times_signed)]; linked: [(character, discord_id)];
     displays: {discord_id: display name}.
+
+    A Discord user whose linked characters include one somebody else signs up with shares a Battle.net account
+    (Gastronomic's links Naautilus' characters too): of their linked characters, only the ones they sign up with
+    themselves are known to be theirs - the rest (an alt nobody has signed up with yet, which could be either's)
+    each stand alone ({'key': 'c<name>', 'discord_id': None}) until someone signs up with it.
     """
     displays = displays or {}
     best = {}
@@ -23,10 +28,21 @@ def resolve_owners(signups, linked, displays=None):
         if name not in best or times > best[name][1]:
             best[name] = (discord_id, times)
     owners = {name: discord_id for name, (discord_id, _) in best.items()}
+    shared = {discord_id for character, discord_id in linked
+              if character.lower() in owners and owners[character.lower()] != discord_id}
+    unsure = set()
     for character, discord_id in linked:
-        owners.setdefault(character.lower(), discord_id)
-    return {name: {'key': f'd{discord_id}', 'discord_id': discord_id, 'display': displays.get(discord_id)}
-            for name, discord_id in owners.items()}
+        name = character.lower()
+        if name in owners:
+            continue
+        if discord_id in shared:
+            unsure.add(name)
+        else:
+            owners[name] = discord_id
+    out = {name: {'key': f'd{discord_id}', 'discord_id': discord_id, 'display': displays.get(discord_id)}
+           for name, discord_id in owners.items()}
+    out.update({name: {'key': f'c{name}', 'discord_id': None, 'display': None} for name in unsure - set(owners)})
+    return out
 
 
 def own_characters(discord_id, linked_names, owners, signed_with=()):

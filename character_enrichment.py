@@ -243,30 +243,51 @@ class CharacterEnricher:
                 logger.error(f"Error fetching from Raider.IO: {e}")
                 return None
     
-    async def fetch_item_icon(self, media_href: str) -> Optional[str]:
-        """Fetch item icon URL from Blizzard item media endpoint"""
-        token = await self.get_blizzard_token()
-        if not token:
-            return None
-        
-        async with aiohttp.ClientSession() as session:
-            headers = {'Authorization': f'Bearer {token}'}
-            
-            try:
-                async with session.get(media_href, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        # Find the icon asset
-                        for asset in data.get('assets', []):
-                            if asset.get('key') == 'icon':
-                                return asset.get('value')
-                        return None
-                    else:
-                        return None
-            except Exception as e:
-                logger.debug(f"Error fetching item icon: {e}")
+    # Item icons: Blizzard's equipment has none, so each item's media is a request of its own (~16 per character).
+    # An item's icon never changes - kept for the process; requests share a connection, at most ICON_CONCURRENCY in
+    # flight across every character being fetched, and a timeout / rate limit / server error is retried.
+    ICON_CONCURRENCY = 6
+    ICON_ATTEMPTS = 3
+    ICON_TIMEOUT = 8
+    _icon_cache = {}  # media href -> icon url (None: the item has no icon - not asked again)
+    _icon_slots = None
+
+    async def fetch_item_icon(self, media_href: str, session: Optional[aiohttp.ClientSession] = None) -> Optional[str]:
+        """Fetch item icon URL from Blizzard item media endpoint (cached; retried; session: shared, optional)"""
+        cls = CharacterEnricher
+        if media_href in cls._icon_cache:
+            return cls._icon_cache[media_href]
+        if cls._icon_slots is None:
+            cls._icon_slots = asyncio.Semaphore(cls.ICON_CONCURRENCY)
+        if session is None:
+            async with aiohttp.ClientSession() as own:
+                return await self.fetch_item_icon(media_href, own)
+        for attempt in range(cls.ICON_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(0.6 * 2 ** (attempt - 1))  # 0.6 s, then 1.2 s
+            token = await self.get_blizzard_token()
+            if not token:
                 return None
-    
+            try:
+                async with cls._icon_slots:
+                    async with session.get(media_href, headers={'Authorization': f'Bearer {token}'},
+                                           timeout=aiohttp.ClientTimeout(total=cls.ICON_TIMEOUT)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            icon = next((a.get('value') for a in data.get('assets', []) if a.get('key') == 'icon'), None)
+                            cls._icon_cache[media_href] = icon
+                            return icon
+                        if resp.status == 404:
+                            cls._icon_cache[media_href] = None
+                            return None
+                        if resp.status != 429 and resp.status < 500:
+                            return None  # a client error won't get better by asking again
+                        logger.debug(f"Item icon {media_href}: HTTP {resp.status} (attempt {attempt + 1})")
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                logger.debug(f"Item icon {media_href}: {e!r} (attempt {attempt + 1})")
+        logger.info(f"Item icon {media_href}: gave up after {cls.ICON_ATTEMPTS} attempts")
+        return None
+
     async def enrich_character(self, realm: str, name: str, region: str = 'eu') -> Dict[str, Any]:
         """
         Fetch all data for a character from multiple sources
@@ -321,14 +342,15 @@ class CharacterEnricher:
             
             # Fetch icon URLs for each item (in parallel)
             if equipped_items:
-                icon_tasks = []
-                for item in equipped_items:
-                    if item.get('media') and item['media'].get('key', {}).get('href'):
-                        icon_tasks.append(self.fetch_item_icon(item['media']['key']['href']))
-                    else:
-                        icon_tasks.append(asyncio.sleep(0))  # placeholder task
-                
-                icon_results = await asyncio.gather(*icon_tasks, return_exceptions=True)
+                async with aiohttp.ClientSession() as icon_session:  # one connection for all of them
+                    icon_tasks = []
+                    for item in equipped_items:
+                        if item.get('media') and item['media'].get('key', {}).get('href'):
+                            icon_tasks.append(self.fetch_item_icon(item['media']['key']['href'], icon_session))
+                        else:
+                            icon_tasks.append(asyncio.sleep(0))  # placeholder task
+
+                    icon_results = await asyncio.gather(*icon_tasks, return_exceptions=True)
                 
                 # Attach icon URLs to items
                 for i, item in enumerate(equipped_items):

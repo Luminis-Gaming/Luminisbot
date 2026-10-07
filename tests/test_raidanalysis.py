@@ -289,6 +289,23 @@ class TestCharacterOwners(unittest.TestCase):
         self.assertEqual(own_characters('G', ['Gastronomic', 'Naautilus'], owners), {'gastronomic'})
         self.assertEqual(own_characters('N', [], owners, signed_with=['Naautilus']), {'naautilus'})
 
+    def test_shared_battlenet_alt_nobody_signed_up_with_stands_alone(self):
+        from raidanalysis.people import own_characters, resolve_owners
+        # Gastronomic's Discord links the shared account: her characters and Naautilus' (Naautilus, his alt
+        # Metropolis). Nobody has signed up with Metropolis: it could be either's - so it's nobody's for now.
+        owners = resolve_owners(signups=[('Gastronomic', 'G', 4), ('Irio', 'G', 1), ('Naautilus', 'N', 5)],
+                                linked=[('Gastronomic', 'G'), ('Irio', 'G'), ('Naautilus', 'G'), ('Metropolis', 'G'),
+                                        ('Boopsproops', 'B')])
+        self.assertEqual(owners['irio']['key'], 'dG')            # signed up with it herself: hers
+        self.assertEqual(owners['metropolis']['key'], 'cmetropolis')  # on its own
+        self.assertIsNone(owners['metropolis']['discord_id'])
+        self.assertEqual(owners['boopsproops']['key'], 'dB')    # an account nobody shares: its links stand
+        self.assertNotIn('metropolis', own_characters('G', ['Gastronomic', 'Irio', 'Naautilus', 'Metropolis'], owners))
+        # Naautilus signs up with Metropolis once: his
+        owners = resolve_owners(signups=[('Gastronomic', 'G', 4), ('Naautilus', 'N', 5), ('Metropolis', 'N', 1)],
+                                linked=[('Gastronomic', 'G'), ('Naautilus', 'G'), ('Metropolis', 'G')])
+        self.assertEqual(owners['metropolis']['key'], 'dN')
+
     def test_alt_without_signups_follows_battlenet_link(self):
         from raidanalysis.people import resolve_owners
         owners = resolve_owners(signups=[('Boopsboops', 'B', 3)],
@@ -1889,6 +1906,16 @@ class TestArmory(unittest.TestCase):
         self.assertIn('No enchant', html)
         self.assertIn('https://www.wowhead.com/item=3', html)
         self.assertIn('data-slot="BACK"', html)  # what PAGE_JS compares to light up changed gear
+        # Blizzard's per-item icon request failed: Raider.IO's icon for the same item fills in
+        from raidanalysis import armory
+        blizzard = {'equipped_items': [{'slot': {'type': 'FINGER_1'}, 'name': 'Band of the Amani Warlord',
+                                        'item': {'id': 77}, 'level': {'value': 321}, 'quality': {'type': 'EPIC'}},
+                                       {'slot': {'type': 'FINGER_2'}, 'name': 'Masterwork Band', 'item': {'id': 78},
+                                        'icon_url': 'https://render.worldofwarcraft.com/icons/56/ring.jpg'}],
+                    'raiderio': {'gear': {'items': {'finger1': {'item_id': 77, 'icon': 'inv_ring_amani'}}}}}
+        gear = armory.items(blizzard)
+        self.assertEqual(gear['FINGER_1']['icon'], 'https://wow.zamimg.com/images/wow/icons/large/inv_ring_amani.jpg')
+        self.assertEqual(gear['FINGER_2']['icon'], 'https://render.worldofwarcraft.com/icons/56/ring.jpg')
         self.assertNotIn('data-armory-refresh', html)
         # A fresh copy on its way: the page waits for it and swaps the card in (PAGE_JS) - no "reload" advice
         live = view.tab(data, {'name': 'Futhark', 'class': 'Hunter'}, stale=True, refreshing=True)
@@ -1995,8 +2022,10 @@ class TestCharacterPage(unittest.TestCase):
                   c('Naautilus', 'DemonHunter', 'Devourer', 'dps', 9), c('Gastronomic', 'Druid', 'Restoration', 'healer', 10),
                   c('Pugsy', 'Warrior', 'Arms', 'dps', 1)]
         # Naautilus and Gastronomic share a Battle.net account, but signed up as themselves: two players
-        owners = {'boopsboops': {'key': 'd1', 'display': 'Boops'}, 'boopsproops': {'key': 'd1', 'display': 'Boops'},
-                  'naautilus': {'key': 'd2', 'display': 'Naau'}, 'gastronomic': {'key': 'd3', 'display': 'Gastro'}}
+        owners = {'boopsboops': {'key': 'd1', 'discord_id': '1', 'display': 'Boops'},
+                  'boopsproops': {'key': 'd1', 'discord_id': '1', 'display': 'Boops'},
+                  'naautilus': {'key': 'd2', 'discord_id': '2', 'display': 'Naau'},
+                  'gastronomic': {'key': 'd3', 'discord_id': '3', 'display': 'Gastro'}}
         players = routes._players(roster, owners)
         self.assertEqual([(p['main']['name'], [a['name'] for a in p['alts']], p['nights']) for p in players],
                          [('Boopsboops', ['Boopsproops'], 11), ('Gastronomic', [], 10), ('Naautilus', [], 9)])  # no pug
@@ -2024,7 +2053,8 @@ class TestCharacterPage(unittest.TestCase):
                   c('Once', [12]),                     # one of the latest: not yet
                   c('Mainy', nights[6:11]), c('Alty', [11, 12], 'Evoker'),
                   c('Stonasloth', nights[6:], 'Paladin')]  # in every raid, but nobody signed up with or linked him
-        owners = {n: {'key': n, 'display': None} for n in ('veteran', 'everyother', 'newhealer', 'once', 'mainy')}
+        owners = {n: {'key': n, 'discord_id': n, 'display': None}
+                  for n in ('veteran', 'everyother', 'newhealer', 'once', 'mainy')}
         owners['alty'] = owners['mainy']
         players = routes._players(roster, owners)
         mainy = next(p for p in players if p['main']['name'] == 'Mainy')
@@ -2035,6 +2065,10 @@ class TestCharacterPage(unittest.TestCase):
         # The one left out for not being linked: named for officers, never on the public site
         unlinked = routes._unlinked(roster, owners)
         self.assertEqual([(ch['name'], n) for ch, n in unlinked], [('Stonasloth', 6)])
+        # On a shared Battle.net account and nobody has signed up with it yet: left out like a pug, named for officers
+        owners['stonasloth'] = {'key': 'cstonasloth', 'discord_id': None, 'display': None}
+        self.assertNotIn('Stonasloth', [p['main']['name'] for p in routes._players(roster, owners)])
+        self.assertEqual([ch['name'] for ch, _ in routes._unlinked(roster, owners)], ['Stonasloth'])
         self.assertIn('Stonasloth</a> (6 of the last 6)', routes._home_characters(players, unlinked=unlinked))
         self.assertNotIn('Stonasloth', routes._home_characters(players, public=True, unlinked=unlinked))
 
@@ -2060,7 +2094,8 @@ class TestCharacterPage(unittest.TestCase):
         self.assertIn('href="/admin/raids/character/frostwhisper/Futhark"', html)
         self.assertIn('data-search="futhark frostwhisper survival hunter"', html)
         self.assertIn('1 players · 1 characters', html)
-        self.assertEqual(routes._home_href({'tier': '3'}, 'nights'), '/admin/raids?tier=3')  # the default tab
+        # Every tab link names its tab: the bare address is "the tab used last" (the nav's Raid Analysis)
+        self.assertEqual(routes._home_href({'tier': '3'}, 'nights'), '/admin/raids?tier=3&tab=nights')
         self.assertEqual(routes._home_href({'tier': '3'}, 'bosses'), '/admin/raids?tier=3&tab=bosses')
         self.assertEqual(routes._home_href({}, 'characters'), '/admin/raids?tab=characters')
 
@@ -2288,3 +2323,123 @@ class TestArmoryRaidProgress(unittest.TestCase):
                                             'effects': [{'display_string': 'Set: Rising Sun Kick hits harder.',
                                                          'required_count': 2, 'is_active': True}]}}]}
         self.assertEqual(armory.tier_set(data)['bonuses'][0]['text'], 'Rising Sun Kick hits harder.')
+
+
+class TestItemIconRetry(unittest.IsolatedAsyncioTestCase):
+    """character_enrichment: an item icon that hits a rate limit is asked again, and kept once known."""
+
+    async def test_retry_then_cache(self):
+        from unittest import mock
+        from aiohttp import ClientSession, web
+        from aiohttp.test_utils import TestServer
+        from character_enrichment import CharacterEnricher
+        calls = {'ring': 0, 'gone': 0}
+
+        async def media(request):
+            item = request.match_info['item']
+            calls[item] += 1
+            if item == 'gone':
+                return web.Response(status=404)
+            if calls[item] == 1:
+                return web.Response(status=429)  # rate limited the first time
+            return web.json_response({'assets': [{'key': 'icon', 'value': 'https://render/ring.jpg'}]})
+        app = web.Application()
+        app.router.add_get('/media/{item}', media)
+        server = TestServer(app)
+        await server.start_server()
+        enricher = CharacterEnricher()
+        CharacterEnricher._icon_cache.clear()
+        try:
+            with mock.patch.object(CharacterEnricher, 'get_blizzard_token', mock.AsyncMock(return_value='t')), \
+                    mock.patch('asyncio.sleep', mock.AsyncMock()):
+                async with ClientSession() as session:
+                    ring, gone = str(server.make_url('/media/ring')), str(server.make_url('/media/gone'))
+                    self.assertEqual(await enricher.fetch_item_icon(ring, session), 'https://render/ring.jpg')
+                    self.assertEqual(calls['ring'], 2)  # the 429, then the answer
+                    self.assertEqual(await enricher.fetch_item_icon(ring, session), 'https://render/ring.jpg')
+                    self.assertEqual(calls['ring'], 2)  # kept: not asked again
+                    self.assertIsNone(await enricher.fetch_item_icon(gone, session))
+                    self.assertIsNone(await enricher.fetch_item_icon(gone, session))
+                    self.assertEqual(calls['gone'], 1)  # no icon for it: not asked again either
+        finally:
+            CharacterEnricher._icon_cache.clear()
+            await server.close()
+
+
+class TestFasterPages(unittest.IsolatedAsyncioTestCase):
+    """The site's CSS / JS as kept files; portraits cropped small - and only ever of Blizzard's renders."""
+
+    async def test_static_files_are_versioned_and_kept(self):
+        from raidanalysis.web import routes
+        self.assertRegex(routes.STATIC_CSS_URL, r'^/raids/static/app-[0-9a-f]{12}\.css$')
+        response = await routes.handle_static_js(None)
+        self.assertIn('immutable', response.headers['Cache-Control'])
+        self.assertIn('onEach', response.text)
+
+    async def test_portraits(self):
+        import io
+        from PIL import Image
+        from raidanalysis import portraits
+        self.assertIsNone(await portraits.get('https://evil.example/x.png'))  # not Blizzard's: never fetched
+        self.assertIsNone(await portraits.get(None))
+        render = Image.new('RGBA', (1600, 1200), (0, 0, 0, 0))
+        render.paste((200, 30, 30, 255), (700, 200, 900, 1000))  # a character in the middle
+        raw = io.BytesIO()
+        render.save(raw, 'PNG')
+        with Image.open(io.BytesIO(portraits.crop(raw.getvalue()))) as out:
+            self.assertEqual(out.format, 'WEBP')
+            self.assertEqual(out.width, portraits.WIDTH)
+            self.assertEqual(out.mode, 'RGBA')                       # still see-through around them
+            self.assertEqual(out.getpixel((0, 0))[3], 0)
+            self.assertGreater(out.getpixel((out.width // 2, out.height // 2))[3], 200)
+
+
+class TestSharedPageCache(unittest.IsolatedAsyncioTestCase):
+    """A page built once serves every officer (and the public view every raider); the warmer builds them ahead."""
+
+    async def test_shared_and_warmed(self):
+        from unittest import mock
+        from aiohttp.test_utils import make_mocked_request
+        from raidanalysis import sync
+        from raidanalysis.web import routes
+        built = []
+
+        async def night(request):
+            built.append((request.path, bool(request.get('public'))))
+            session = routes._session(request)
+            return routes._page('Night', session, f'<div class="card">night {request.match_info["code"]}</div>')
+        routes._bodies.clear()
+        with mock.patch.dict(sync.status, {'data_version': 'v1', 'running': False}), \
+                mock.patch.object(routes, 'handle_night', night), \
+                mock.patch.object(routes, 'handle_overview', mock.AsyncMock()), \
+                mock.patch.object(routes.db, 'list_reports', return_value=[{'code': 'abc'}]), \
+                mock.patch('oauth_server.get_session', side_effect=lambda r: {'username': r.headers.get('X-User'), 'role': 'admin'}):
+            await routes.warm_pages()
+            self.assertEqual(sorted(built), [('/admin/raids/report/abc', False), ('/raids/report/abc', True)])
+            # An officer and a raider open the night: both get the warmed page, nothing is built again
+            officer = make_mocked_request('GET', '/admin/raids/report/abc', headers={'X-User': 'philip'},
+                                          match_info={'code': 'abc'})
+            response = await routes._admin_cached(night)(officer)
+            self.assertIn('night abc', response.text)
+            raider = make_mocked_request('GET', '/raids/report/abc', match_info={'code': 'abc'})
+            response = await routes._public(night)(raider)
+            self.assertIn('night abc', response.text)
+            self.assertEqual(len(built), 2)
+            # New data: built anew
+            sync.status['data_version'] = 'v2'
+            await routes._admin_cached(night)(officer)
+            self.assertEqual(len(built), 3)
+        routes._bodies.clear()
+
+    def test_front_page_key_follows_team_and_tab(self):
+        from unittest import mock
+        from aiohttp.test_utils import make_mocked_request
+        from raidanalysis import sync
+        from raidanalysis.web import routes
+        with mock.patch.dict(sync.status, {'data_version': 'v1'}):
+            warmed = routes._body_key(make_mocked_request('GET', '/raids?tab=characters&team=moon'), True)
+            # A raider coming back by the nav: no tab or team in the address - their browser's choices
+            visit = make_mocked_request('GET', '/raids', headers={'Cookie': 'raid_team=moon; raid_home_tab=characters'})
+            self.assertEqual(routes._body_key(visit, True), warmed)
+            other = make_mocked_request('GET', '/raids', headers={'Cookie': 'raid_team=sun; raid_home_tab=characters'})
+            self.assertNotEqual(routes._body_key(other, True), warmed)

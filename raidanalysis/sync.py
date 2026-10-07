@@ -15,7 +15,42 @@ logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
 status = {'running': False, 'current': None, 'last_finished': None, 'last_result': None,
-          'last_error': None, 'last_new': 0, 'wcl': None, 'last_points': None, 'paused_until': None}
+          'last_error': None, 'last_new': 0, 'wcl': None, 'last_points': None, 'paused_until': None,
+          'data_version': None}  # db.data_version() after the last sync: the page caches' key
+
+
+after_new_data = []  # async callables run after a sync that changed the data (web/routes.py: warm_pages)
+
+
+def _note_data_version():
+    """
+    After a sync: what the pages show, fingerprinted - unchanged keeps every cached page (web/routes.py). Changed
+    (and not the first look, at startup): the after_new_data hooks run in the background.
+    """
+    before = status.get('data_version')
+    try:
+        status['data_version'] = db.data_version()
+    except Exception:
+        logger.warning('[RAIDS] Data version unavailable', exc_info=True)
+        status['data_version'] = None  # the caches fall back to the sync's time
+        return
+    if before is not None and status['data_version'] != before:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # not in the bot's loop (a worker thread): nothing to warm from here
+        for hook in after_new_data:
+            loop.create_task(_run_hook(hook))
+
+
+async def _run_hook(hook):
+    status_before = status.get('data_version')
+    await asyncio.sleep(1)  # the sync's status settles (not running) before the pages are built
+    if status.get('data_version') == status_before:
+        try:
+            await hook()
+        except Exception:
+            logger.exception('[RAIDS] After-sync hook failed')
 
 
 def _phase_names(report):
@@ -493,6 +528,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
             logger.exception("[RAIDS] Spell tooltip lookup failed")
         finally:
             _share = WCL_BUDGET_SHARE
+            _note_data_version()
             status.update(running=False, current=None, last_finished=time.time(), last_new=total,
                           last_result=f"{total} new pull(s) from {reports} report(s) "
                                       f"in {time.time() - started:.0f}s",
@@ -571,6 +607,7 @@ async def fetch_all_benchmarks(full_budget=False):
             left = max(0, total - done)
             cost = (f", {points:.0f} WCL points" + (f" (~{points / done:.0f} per combo)" if done else '')
                     if points is not None else '')
+            _note_data_version()
             status.update(running=False, current=None, last_finished=time.time(), last_new=0,
                           last_result=f"Top players fetched for {done} spec/boss combo(s) in "
                                       f"{time.time() - started:.0f}s{cost}"

@@ -7,6 +7,7 @@ calls at startup, so this module can import oauth_server freely (it is fully
 loaded by then) and reuse its session auth, CSS and nav.
 """
 import asyncio
+import contextvars
 import logging
 import re
 from urllib.parse import quote
@@ -31,69 +32,132 @@ REPORT_CODE_RE = re.compile(r'(?:reports/)?([A-Za-z0-9]{16})\b')
 
 
 def register_routes(app):
-    app.router.add_get('/admin/raids', handle_overview)
+    def get(path, handler):  # every page timed: slow ones are logged with where the time went
+        app.router.add_get(path, _timed(handler))
+
+    get('/admin/raids', handle_overview)
     app.router.add_post('/admin/raids/sync', _changes(handle_sync))
     app.router.add_post('/admin/raids/benchmarks', _changes(handle_fetch_benchmarks))
-    app.router.add_get('/admin/raids/sync/status', handle_sync_status)
-    app.router.add_get('/admin/raids/report/{code}', _admin_cached(handle_night))
-    app.router.add_get('/admin/raids/report/{code}/{fight_id}', _admin_cached(handle_pull))
-    app.router.add_get('/admin/raids/report/{code}/player/{name}', _admin_cached(handle_player))
-    app.router.add_get('/admin/raids/report/{code}/compare/{name}', _admin_cached(handle_compare))
-    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}', _admin_cached(handle_boss))
+    get('/admin/raids/sync/status', handle_sync_status)
+    get('/admin/raids/report/{code}', _admin_cached(handle_night))
+    get('/admin/raids/report/{code}/{fight_id}', _admin_cached(handle_pull))
+    get('/admin/raids/report/{code}/player/{name}', _admin_cached(handle_player))
+    get('/admin/raids/report/{code}/compare/{name}', _admin_cached(handle_compare))
+    get('/admin/raids/boss/{encounter_id}/{difficulty}', _admin_cached(handle_boss))
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/tag', _changes(handle_tag))
     app.router.add_post('/admin/raids/spec-ability', _changes(handle_spec_ability))
-    app.router.add_get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', _admin_cached(handle_player_trend))
-    app.router.add_get('/admin/raids/character/{name}', _admin_cached(handle_character))
-    app.router.add_get('/admin/raids/character/{realm}/{name}', _admin_cached(handle_character))
+    get('/admin/raids/boss/{encounter_id}/{difficulty}/player/{name}', _admin_cached(handle_player_trend))
+    get('/admin/raids/character/{name}', _admin_cached(handle_character))
+    get('/admin/raids/character/{realm}/{name}', _admin_cached(handle_character))
 
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
-    app.router.add_get('/raids', _public(handle_overview))
-    app.router.add_get('/raids/spell/{spell_id}', handle_spell)
-    app.router.add_get('/raids/item/{item_id}', handle_item)
-    app.router.add_get('/raids/favicon.png', handle_favicon)
-    app.router.add_get('/raids/report/{code}', _public(handle_night))
-    app.router.add_get('/raids/report/{code}/{fight_id}', _public(handle_pull))
-    app.router.add_get('/raids/report/{code}/player/{name}', _public(handle_player))
-    app.router.add_get('/raids/report/{code}/compare/{name}', _public(handle_compare))
-    app.router.add_get('/raids/boss/{encounter_id}/{difficulty}', _public(handle_boss))
-    app.router.add_get('/raids/boss/{encounter_id}/{difficulty}/player/{name}', _public(handle_player_trend))
-    app.router.add_get('/raids/character/{name}', _public(handle_character))
-    app.router.add_get('/raids/character/{realm}/{name}', _public(handle_character))
+    get('/raids', _public(handle_overview))
+    get('/raids/spell/{spell_id}', handle_spell)
+    get('/raids/item/{item_id}', handle_item)
+    get('/raids/favicon.png', handle_favicon)
+    get(STATIC_CSS_URL, handle_static_css)
+    get('/raids/portrait/{realm}/{name}', handle_portrait)
+    get(STATIC_JS_URL, handle_static_js)
+    get('/raids/report/{code}', _public(handle_night))
+    get('/raids/report/{code}/{fight_id}', _public(handle_pull))
+    get('/raids/report/{code}/player/{name}', _public(handle_player))
+    get('/raids/report/{code}/compare/{name}', _public(handle_compare))
+    get('/raids/boss/{encounter_id}/{difficulty}', _public(handle_boss))
+    get('/raids/boss/{encounter_id}/{difficulty}/player/{name}', _public(handle_player_trend))
+    get('/raids/character/{name}', _public(handle_character))
+    get('/raids/character/{realm}/{name}', _public(handle_character))
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', _changes(handle_rescan_guides))
+    sync.after_new_data.append(warm_pages)  # a sync that brought something: the busiest pages built right away
+    try:  # ...and once after starting (a deploy starts with nothing kept)
+        app.on_startup.append(_warm_after_start)
+    except RuntimeError:  # the app is already running: no startup hook
+        pass
     logger.info("[RAIDS] Admin web routes registered")
+
+
+SLOW_PAGE_SECONDS = 1.0
+
+
+def _timed(handler):
+    """
+    A page that takes SLOW_PAGE_SECONDS or more is logged with its queries: how many, their total time and the
+    slowest - so "it's slow" comes with where the time went (database, or building the page).
+    """
+    import time
+
+    async def wrapper(request):
+        log, started = [], time.perf_counter()
+        token = db.QUERY_LOG.set(log)
+        try:
+            return await handler(request)
+        finally:
+            db.QUERY_LOG.reset(token)
+            took = time.perf_counter() - started
+            if took >= SLOW_PAGE_SECONDS:
+                in_db = sum(t for t, _ in log)
+                slowest = max(log, default=(0, ''))
+                logger.info(f'[RAIDS] Slow page {request.path_qs}: {took:.1f}s - {len(log)} queries took {in_db:.1f}s '
+                            f'(slowest {slowest[0]:.1f}s: {slowest[1]}), the rest {took - in_db:.1f}s')
+    return wrapper
 
 
 PUBLIC_SESSION = {'username': 'guest', 'role': 'public'}
 
-# The heavy admin pages (a night, a pull, a player, a boss) are kept for a minute per user, like the
-# public ones, so flipping between pulls and tabs is instant. Anything that changes what they show -
-# a sync finishing (its time is in the key), a tag, a re-sort, a re-analyze (POSTs clear it) - starts over.
-# A page still loading WCL data (the cast bar) is never kept.
-ADMIN_CACHE_SECONDS = 60
-ADMIN_CACHE_MAX = 400
-_admin_cache = {}
+# Pages are kept once built - their body (everything under the nav), shared by every viewer of the same view:
+# officers all see the admin page, raiders the public one, so a page one person opened is instant for the next,
+# and the warmer (warm_pages) can build the busiest ones before anybody asks. The nav and the sync banner are put
+# around it per request, so they're always current. A page is kept until the data under it changes (the data
+# version is in the key; a tag or re-analyze clears everything, an armory refresh its character's pages) - and at
+# most BODY_CACHE_SECONDS. A page still loading WCL data (the cast bar, the gear refreshing) is never kept.
+BODY_CACHE_SECONDS = 3600
+BODY_CACHE_MAX = 800
+_bodies = {}  # _body_key() -> {'until', 'title', 'body', 'waiting'}
+_RENDERED = contextvars.ContextVar('raid_rendered', default=None)  # _page() hands the body it built to the cache
+
+
+def _body_key(request, public):
+    """
+    One entry per view of a page: the path (public and admin addresses alike), its query (the team and the front
+    page's tab as they apply - from the address or the browser's choice), admin or public, the data's version.
+    """
+    path = request.path
+    if public and path.startswith('/raids'):
+        path = '/admin' + path
+    front = path == '/admin/raids'
+    by_team = front or path.startswith('/admin/raids/boss/')  # the pages that follow the chosen team
+    query = tuple(sorted((k, v) for k, v in request.query.items() if k not in ('team', 'pick', 'tab' if front else '')))
+    return (path, query, public, _team(request) if by_team else None, _home_tab(request) if front else None,
+            _data_key())
+
+
+async def _serve_cached(request, handler, public, session):
+    import time
+    key = _body_key(request, public)
+    hit = _bodies.get(key)
+    if hit and hit['until'] > time.time():
+        return _page(hit['title'], session, hit['body'], hit['waiting'])
+    holder = {}
+    token = _RENDERED.set(holder)
+    try:
+        response = await handler(request)
+    finally:
+        _RENDERED.reset(token)
+    if (holder and not holder['waiting'] and response.status == 200 and response.content_type == 'text/html'
+            and not _still_loading(holder['body'])):
+        if len(_bodies) >= BODY_CACHE_MAX:
+            _bodies.clear()
+        _bodies[key] = dict(holder, until=time.time() + BODY_CACHE_SECONDS)
+    return response
 
 
 def _admin_cached(handler):
-    import time
-
     async def wrapper(request):
         from oauth_server import get_session
-        session = None if request.get('public') or request.query.get('focus_load') else get_session(request)
+        session = (None if request.get('public') or request.query.get('focus_load')
+                   else request.get('warm_session') or get_session(request))
         if not session or session.get('must_change_password'):
             return await handler(request)
-        key = (request.path_qs, session.get('username'), sync.status.get('last_finished'))
-        hit = _admin_cache.get(key)
-        if hit and hit[0] > time.time():
-            response = web.Response(text=hit[1], content_type='text/html', headers=SECURITY_HEADERS)
-            response.enable_compression()
-            return response
-        response = await handler(request)
-        if response.status == 200 and response.content_type == 'text/html' and not _still_loading(response.text):
-            if len(_admin_cache) >= ADMIN_CACHE_MAX:
-                _admin_cache.clear()
-            _admin_cache[key] = (time.time() + ADMIN_CACHE_SECONDS, response.text)
-        return response
+        return await _serve_cached(request, handler, False, session)
     return wrapper
 
 
@@ -102,16 +166,74 @@ def _still_loading(html):
     return 'data-focus-load' in html or 'data-armory-refresh' in html
 
 
+def _data_key():
+    """What cached pages are kept against: the data's version (sync.status['data_version'], refreshed after every
+    sync - unchanged when a sync brought nothing; worked out here before the first one), else the last sync's time."""
+    import time
+    if sync.status.get('data_version') is None and not sync.status.get('running') \
+            and time.time() - _version_tried[0] > 60:
+        _version_tried[0] = time.time()
+        sync._note_data_version()
+    return sync.status.get('data_version') or sync.status.get('last_finished')
+
+
+_version_tried = [0.0]
+
+
 def _changes(handler):
     """A POST that changes what pages show: the admin page cache starts over."""
     async def wrapper(request):
-        _admin_cache.clear()
-        _public_cache.clear()
+        for cache in (_bodies, _home_content, _roster_cache):
+            cache.clear()
         return await handler(request)
     return wrapper
 
 # The public site's tab icon (the guild's Day Time Raider emoji): linked once the file is there.
 FAVICON = __import__('pathlib').Path(__file__).parent / 'static' / 'favicon.png'
+
+
+# The site's stylesheet and script (render.py, ~130 KB) as files - downloaded once and kept by the browser, not
+# sent inside every page (and every soft swap). Their address carries a hash of the content: a deploy that changes
+# them is a new address, so "keep it for a year" is safe.
+def _static_url(text, ext):
+    import hashlib
+    return f'/raids/static/app-{hashlib.sha256(text.encode()).hexdigest()[:12]}.{ext}'
+
+
+STATIC_CSS_URL = _static_url(PAGE_CSS, 'css')
+STATIC_JS_URL = _static_url(PAGE_JS, 'js')
+STATIC_HEADERS = {'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff'}
+
+
+async def handle_static_css(request):
+    response = web.Response(text=PAGE_CSS, content_type='text/css', headers=STATIC_HEADERS)
+    response.enable_compression()
+    return response
+
+
+async def handle_static_js(request):
+    response = web.Response(text=PAGE_JS, content_type='application/javascript', headers=STATIC_HEADERS)
+    response.enable_compression()
+    return response
+
+
+def portrait_url(name, realm_slug, render):
+    """The Players tab's small portrait of a character (portraits.py) - its render's address in it, so a new one
+    is a new address (browsers keep each for a day)."""
+    import hashlib
+    version = hashlib.sha256(render.encode()).hexdigest()[:10]
+    return f'/raids/portrait/{quote(realm_slug)}/{quote(name.lower())}?v={version}'
+
+
+async def handle_portrait(request):
+    """GET /raids/portrait/{realm}/{name} - a stored character's render, cropped and shrunk (portraits.py)."""
+    from .. import armory, portraits
+    render = (armory.portraits().get((request.match_info['name'].lower(), request.match_info['realm'])) or {}).get('render')
+    data = await portraits.get(render)
+    if data is None:
+        raise web.HTTPNotFound()
+    return web.Response(body=data, content_type='image/webp',
+                        headers={'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff'})
 
 
 async def handle_favicon(request):
@@ -140,6 +262,8 @@ SECURITY_HEADERS = {
 def _session(request):
     if request.get('public'):
         return PUBLIC_SESSION
+    if request.get('warm_session'):  # warm_pages building the admin view (set only on its own requests)
+        return request['warm_session']
     from oauth_server import get_session
     session = get_session(request)
     if not session:
@@ -169,36 +293,64 @@ def _publicize(html):
     return html.replace('/admin/raids', '/raids')
 
 
-# Public pages are the same for everyone (apart from the remembered team), heavy to build, and
-# reachable without login: keep each rendered page for a minute, so hammering one can't tie up the bot.
-PUBLIC_CACHE_SECONDS = 60
-PUBLIC_CACHE_MAX = 300
-_public_cache = {}
+WARM_NIGHTS = 3  # the latest raid nights' pages are built after a sync too - the Discord recap links to them
+WARM_SESSION = {'username': 'cache-warmer', 'role': 'admin'}
+
+
+async def warm_pages():
+    """
+    After a sync that brought something new (sync.after_new_data): build the pages people open first - the front
+    page's tabs for every team, and the latest raid nights - for officers and raiders both, so whoever opens
+    them first finds them ready (the shared page cache, _bodies). One at a time, in the background.
+    """
+    import time
+    from aiohttp.test_utils import make_mocked_request
+    started, built = time.perf_counter(), 0
+    jobs = []
+    for tab, _, _ in HOME_TABS:
+        for team in [teams.ALL] + [key for key, _ in teams.options()]:
+            query = f'tab={tab}&team={team}'
+            jobs.append((f'/raids?{query}', {}, _public(handle_overview), False))
+            jobs.append((f'/admin/raids?{query}', {}, handle_overview, True))  # its tab's lists (_home_content)
+    for report in db.list_reports(limit=WARM_NIGHTS):
+        code = report['code']
+        jobs.append((f'/raids/report/{quote(code)}', {'code': code}, _public(handle_night), False))
+        jobs.append((f'/admin/raids/report/{quote(code)}', {'code': code}, _admin_cached(handle_night), True))
+    for url, match_info, handler, admin in jobs:
+        request = make_mocked_request('GET', url, match_info=match_info)
+        if admin:
+            request['warm_session'] = WARM_SESSION
+        try:
+            await handler(request)
+            built += 1
+        except web.HTTPException:
+            pass  # a redirect (nothing there yet) - fine
+        except Exception:
+            logger.exception(f'[RAIDS] Warming {url} failed')
+        await asyncio.sleep(0)  # let real visitors in between
+    logger.info(f'[RAIDS] Warmed {built} of {len(jobs)} pages in {time.perf_counter() - started:.1f}s')
+
+
+WARM_AFTER_START_SECONDS = 30
+
+
+async def _warm_after_start(app):
+    async def later():
+        await asyncio.sleep(WARM_AFTER_START_SECONDS)  # the bot settles in first
+        await warm_pages()
+    asyncio.get_running_loop().create_task(later())
 
 
 def _public(handler):
-    """Serve an admin page handler read-only at /raids/..., without login (cached briefly)."""
-    import time
-
+    """Serve an admin page handler read-only at /raids/..., without login - kept like the admin pages (_bodies)."""
     async def wrapper(request):
         request['public'] = True
-        key = (request.path_qs, request.cookies.get(TEAM_COOKIE))
-        cacheable = 'pick' not in request.query  # picking a team sets a cookie: never cached
-        hit = _public_cache.get(key) if cacheable else None
-        if hit and hit[0] > time.time():
-            response = web.Response(text=hit[1], content_type='text/html', headers=SECURITY_HEADERS)
-            response.enable_compression()
-            return response
         try:
-            response = await handler(request)
+            if 'pick' in request.query:  # picking a team sets a cookie: always built
+                return await handler(request)
+            return await _serve_cached(request, handler, True, PUBLIC_SESSION)
         except web.HTTPFound as redirect:
             raise web.HTTPFound(redirect.location.replace('/admin/raids', '/raids', 1)) from None
-        if cacheable and response.status == 200 and response.content_type == 'text/html' \
-                and not _still_loading(response.text):
-            if len(_public_cache) >= PUBLIC_CACHE_MAX:
-                _public_cache.clear()
-            _public_cache[key] = (time.time() + PUBLIC_CACHE_SECONDS, response.text)
-        return response
     return wrapper
 
 
@@ -215,6 +367,9 @@ def public_base_url():
 
 def _page(title, session, body, waiting=False):
     from oauth_server import ADMIN_CSS, render_nav
+    holder = _RENDERED.get()
+    if holder is not None:  # being built for the page cache (_serve_cached): the body, as the admin page has it
+        holder.update(title=title, body=body, waiting=waiting)
     banner = ''
     if session is PUBLIC_SESSION:
         body = _publicize(body)
@@ -235,7 +390,8 @@ def _page(title, session, body, waiting=False):
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>{ADMIN_CSS}{PAGE_CSS}</style>
+    <style>{ADMIN_CSS}</style>
+    <link rel="stylesheet" href="{STATIC_CSS_URL}">
 </head>
 <body>
     <div class="container">
@@ -244,7 +400,7 @@ def _page(title, session, body, waiting=False):
         <main id="page">{body}</main>
     </div>
     {CLIP_MODAL}
-    <script>{PAGE_JS}</script>
+    <script src="{STATIC_JS_URL}"></script>
 </body>
 </html>""", content_type='text/html', headers=SECURITY_HEADERS)
     response.enable_compression()  # pages are big but very repetitive - gzip shrinks them ~10x
@@ -385,15 +541,25 @@ def _overview_filters(request, tiers, tab=None):
 
 
 HOME_TABS = (('nights', '📅', 'Raid nights'), ('bosses', '🐉', 'Bosses'), ('characters', '🧙', 'Players'))
-HOME_DEFAULT = 'nights'  # the first tab: the bare /admin/raids (the night pages' "← All raid nights")
+_home_content = {}  # (tab, tier, difficulty, team, public, data version) -> the tab's HTML
+HOME_DEFAULT = 'nights'  # the first tab - for a first visit; after that the bare /admin/raids (the nav's "Raid
+HOME_TAB_COOKIE = 'raid_home_tab'  # Analysis") reopens the tab used last, so tabs always carry ?tab= in their links
+
+
+def _home_tab(request):
+    """The front page's tab: the address's, else the one this browser used last (cookie), else HOME_DEFAULT."""
+    known = {key for key, _, _ in HOME_TABS}
+    for tab in (request.query.get('tab'), request.cookies.get(HOME_TAB_COOKIE)):
+        if tab in known:
+            return tab
+    return HOME_DEFAULT
 
 
 async def handle_overview(request):
     session = _session(request)
-    tab = request.query.get('tab')
-    tab = tab if tab in {key for key, _, _ in HOME_TABS} else HOME_DEFAULT
+    tab = _home_tab(request)
     zone_id, difficulty, team, filter_bar = _overview_filters(request, db.list_tiers(),
-                                                              tab if tab != HOME_DEFAULT else None)
+                                                              tab)
     team_q = _team_query(team)
 
     st = sync.status
@@ -417,18 +583,26 @@ async def handle_overview(request):
                        f'points this hour{resets}{last}'
                        f'{" · raid analysis uses WCL v1 first" if _v1_first() else ""}</p>')
 
-    if tab == 'bosses':
+    public = session is PUBLIC_SESSION
+    content_key = (tab, zone_id, difficulty, team, public, _data_key())
+    content = _home_content.get(content_key) if tab != 'characters' else None
+    if content is not None:
+        pass  # kept: the tab's lists only change with the data
+    elif tab == 'bosses':
         content = _home_bosses(db.list_bosses(zone_id=zone_id, difficulty=difficulty, team=team), team, team_q)
     elif tab == 'nights':
         content = _home_nights(db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty, team=team))
     else:
-        from .. import armory, character
+        from .. import armory
         roster, owners = _roster(zone_id, difficulty, team), db.character_owners()
         players = _players(roster, owners)
         images = armory.portraits()
         _fill_portraits(players, images)
-        content = _home_characters(players, images, public=session is PUBLIC_SESSION,
-                                   unlinked=_unlinked(roster, owners))
+        content = _home_characters(players, images, public=public, unlinked=_unlinked(roster, owners))
+    if tab != 'characters':  # (the Players tab's parts are kept on their own - its faces fill in between syncs)
+        if len(_home_content) > 200:
+            _home_content.clear()
+        _home_content[content_key] = content
     filters = {k: v for k, v in request.query.items() if k in ('tier', 'difficulty', 'team')}
     tabs = ''.join(
         f'<a class="ptab{" active" if key == tab else ""}" data-swap="home" href="{_home_href(filters, key)}">'
@@ -458,7 +632,7 @@ async def handle_overview(request):
         {_benchmarks_line(st['running']) if session is not PUBLIC_SESSION else ''}
         {pins}
     </div>
-    <div class="card home-card" id="home">
+    <div class="card home-card" id="home" data-home-tab="{tab}">
         <nav class="ptabs home-tabs">{tabs}</nav>
         {filter_bar}
         {content}
@@ -467,7 +641,7 @@ async def handle_overview(request):
 
 
 def _home_href(filters, tab):
-    query = dict(filters, **({} if tab == HOME_DEFAULT else {'tab': tab}))
+    query = dict(filters, tab=tab)  # always: the bare address means "the tab used last"
     return '/admin/raids' + ('?' + '&'.join(f'{k}={quote(v)}' for k, v in query.items()) if query else '')
 
 
@@ -522,7 +696,8 @@ def _home_nights(reports):
 RECENT_NIGHTS, RECENT_MIN = 6, 2  # a regular (a portrait): in at least 2 of the latest 6 nights (of the filters) -
                                   # every-other-week raiders too; who raided a lot but not lately is "also raided"
 REGULAR_SHARE = 0.3        # ...without night dates: in at least this share of the most-seen player's nights
-PORTRAIT_FILLS_PER_VIEW = 3  # regulars without a stored picture: fetched in the background, this many per view
+PORTRAIT_FILLS_AT_ONCE = 2  # characters without a stored picture: fetched in the background, at most this many at
+                            # a time (each is ~20 Blizzard requests - more at once and its item icons time out)
 ROLE_GROUPS = (('tank', '🛡️', 'Tanks'), ('healer', '💚', 'Healers'), ('dps', '⚔️', 'DPS'))
 
 
@@ -530,14 +705,15 @@ def _players(roster, owners):
     """
     The roster as people: [{'main', 'alts', 'nights', 'display'}] - one per player (character_owners: raid signups
     first, then linked Battle.net characters - so two people sharing a Battle.net account stay two). A character
-    nobody signed up with or linked is a pug: left out (unless nobody's known at all - then everyone, one each).
+    nobody signed up with or linked is a pug: left out (unless nobody's known at all - then everyone, one each) -
+    and so is one on a shared Battle.net account that nobody has signed up with yet (people.resolve_owners).
     main: the character they played the most nights on (then the latest seen); alts the rest, the same way.
     nights: over all of them. Most nights first.
     """
     groups = {}
     for c in roster:
         owner = owners.get(c['name'].lower())
-        if owners and not owner:
+        if owners and not (owner and owner.get('discord_id')):
             continue
         key = owner['key'] if owner else f"c:{c['name'].lower()}:{c['realm'] or ''}"
         g = groups.setdefault(key, {'chars': [], 'display': (owner or {}).get('display')})
@@ -552,13 +728,13 @@ def _players(roster, owners):
     return sorted(out, key=lambda p: (-p['nights'], p['main']['name']))
 
 
-_roster_cache = {}  # (tier, difficulty, team, last sync) -> roster: it only changes when a sync brings in logs
+_roster_cache = {}  # (tier, difficulty, team, data version) -> roster: it only changes with the data
 
 
 def _roster(zone_id, difficulty, team):
     """character.roster() - expanding every player of every pull is the slow part of the Players tab: kept per sync."""
     from .. import character
-    key = (zone_id, difficulty, team, sync.status.get('last_finished'))
+    key = (zone_id, difficulty, team, _data_key())
     if key not in _roster_cache:
         if len(_roster_cache) > 50:
             _roster_cache.clear()
@@ -569,13 +745,15 @@ def _roster(zone_id, difficulty, team):
 def _unlinked(roster, owners):
     """
     [(character, nights of the latest RECENT_NIGHTS)] - characters in the latest nights (a regular's share) that
-    nobody has signed up with or linked, so the Players tab leaves them out like a pug: officers get a hint.
+    nobody has signed up with or linked (or that are on a shared Battle.net account and nobody has signed up with),
+    so the Players tab leaves them out like a pug: officers get a hint.
     """
     if not owners:
         return []
     latest = set(sorted({t for c in roster for t in c.get('night_starts') or ()}, reverse=True)[:RECENT_NIGHTS])
     need = min(RECENT_MIN, len(latest))
-    found = [(c, len(set(c.get('night_starts') or ()) & latest)) for c in roster if c['name'].lower() not in owners]
+    found = [(c, len(set(c.get('night_starts') or ()) & latest)) for c in roster
+             if not (owners.get(c['name'].lower()) or {}).get('discord_id')]
     return sorted((x for x in found if latest and x[1] >= need), key=lambda x: (-x[1], x[0]['name']))
 
 
@@ -601,14 +779,12 @@ def _fill_portraits(players, images):
     regulars' first, then everyone else's.
     """
     from .. import armory
-    started = 0
     regulars, rest = _regulars(players)
     for c in (c for p in regulars + rest for c in [p['main']] + p['alts']):
-        if started >= PORTRAIT_FILLS_PER_VIEW:
+        if len(_armory_refreshing) >= PORTRAIT_FILLS_AT_ONCE:
             break
-        if c['realm'] and (c['name'].lower(), armory.realm_slug(c['realm'])) not in images \
-                and _refresh_armory(None, c['name'], c['realm'], True):
-            started += 1
+        if c['realm'] and (c['name'].lower(), armory.realm_slug(c['realm'])) not in images:
+            _refresh_armory(None, c['name'], c['realm'], True)
 
 
 def _home_characters(players, images=None, public=False, unlinked=()):
@@ -658,8 +834,10 @@ def _home_characters(players, images=None, public=False, unlinked=()):
         for p in (p for p in regulars if (p['main']['role'] or 'dps') == role):
             c, alts = p['main'], p['alts']
             m, xs = info(c), [info(a) for a in alts]
-            art = (f'<img src="{esc(m["pic"]["render"])}" alt="" loading="lazy" decoding="async">' if m['pic'].get('render')
-                   else f'<b class="pl-initial">{esc(c["name"][:1])}</b>')
+            initial = f'<b class="pl-initial">{esc(c["name"][:1])}</b>'
+            art = (f'<img src="{portrait_url(c["name"], armory.realm_slug(c["realm"] or ""), m["pic"]["render"])}" '
+                   f'alt="" loading="lazy" decoding="async" data-initial="{esc(c["name"][:1])}">'
+                   if m['pic'].get('render') else initial)
             who = f"\nPlayed by {p['display']}" if p['display'] and not public else ''
             pin = json.dumps({'name': c['name'], 'realm': armory.realm_slug(c['realm']) if c['realm'] else '',
                               'cls': c['class'], 'spec': c['spec'], 'img': m['pic'].get('avatar') or '',
@@ -695,8 +873,8 @@ def _home_characters(players, images=None, public=False, unlinked=()):
             f'({len(others)})</span></summary><div class="pl-names">{"".join(others)}</div></details>' if others else '')
     count = sum(1 + len(p['alts']) for p in players)
     missing = '' if public or not unlinked else (
-        '<p class="muted small pl-unlinked">👻 Not shown - in the latest nights, but nobody has signed up with or '
-        '/connectwow-linked them yet: ' + ', '.join(
+        '<p class="muted small pl-unlinked">👻 Not shown - in the latest nights, but nobody has signed up for a raid '
+        'with them (or /connectwow-linked them) yet: ' + ', '.join(
             f'<a style="color:{CLASS_COLORS.get(c["class"], "#9aa1b9")}" href="{cview.url(c["name"], c["realm"])}">'
             f'{esc(c["name"])}</a> ({n} of the last {RECENT_NIGHTS})' for c, n in unlinked) + '</p>')
     return f"""
@@ -777,6 +955,7 @@ def _refresh_armory(code, name, realm, stale):
     _armory_tried[key] = time.time()
 
     async def refresh():
+        db.QUERY_LOG.set(None)  # its queries aren't the page's that started it
         try:
             data, why = await armory.load(code, name, realm)
             if not data:
@@ -814,9 +993,8 @@ async def _armory_wait(name, realm):
 def _forget_pages(name):
     """Drop the kept (cached) pages that show a character's gear: their character page and player pages."""
     marks = {f'/{kind}/{n}' for kind in ('character', 'player') for n in (name, quote(name))}
-    for cache in (_admin_cache, _public_cache):
-        for key in [k for k in cache if any(m in k[0] for m in marks)]:
-            cache.pop(key, None)
+    for key in [k for k in _bodies if any(m in k[0] for m in marks)]:
+        _bodies.pop(key, None)
 
 
 # ============================================================================
@@ -1024,7 +1202,7 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
                 f'{db.KEEP_IMPORTED_DAYS} days).</p>' if db.report_archived(code) else '')
     return f"""
     <div class="card">
-        <p><a href="/admin/raids">← All raid nights</a></p>
+        <p><a href="/admin/raids?tab=nights">← All raid nights</a></p>
         <h1>{esc(report['title'])}</h1>
         {_flash(request)}
         {archived}
@@ -1231,7 +1409,7 @@ async def handle_night(request):
         if sync.status['running']:
             body = f"""
             <div class="card">
-                <p><a href="/admin/raids">← All raid nights</a></p>
+                <p><a href="/admin/raids?tab=nights">← All raid nights</a></p>
                 <h1>Importing {esc(code)}…</h1>
                 <p class="muted">Fetching the report from Warcraft Logs and analyzing every pull.
                    This page fills in by itself when it's done.</p>

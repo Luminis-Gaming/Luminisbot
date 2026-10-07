@@ -518,7 +518,9 @@ def page(prof, data, armory_html, chars=(), images=None):
     images = images or {}
     latest = prof['nights'][-1]
     main = max(latest['entries'], key=lambda e: (e['difficulty'], e['pulls']))
-    return (switcher(prof, chars, images)
+    top = (f'<div class="ch-top-row"><a class="ch-back" href="/admin/raids?tab=characters">← All players</a>'
+           f'{switcher(prof, chars, images)}</div>')
+    return (top
             + hero(prof, data, player_href(latest['code'], prof['name'], main['key']), with_model=not data,
                    alts=pin_alts(prof, chars, images))
             + armory_html + filters(prof)

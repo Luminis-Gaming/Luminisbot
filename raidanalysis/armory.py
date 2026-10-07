@@ -70,6 +70,11 @@ def _class_spec(data):
 
 def _items(data):
     out = {}
+    rio_items = (_rio(data).get('gear') or {}).get('items') or data.get('rio_gear') or {}
+    # Blizzard's item icons each take a request of their own (character_enrichment) and some fail or time out -
+    # Raider.IO's gear names the same item's icon: the fallback
+    rio_icons = {it.get('item_id'): ICON_URL.format(icon=it['icon']) for it in rio_items.values()
+                 if isinstance(it, dict) and it.get('item_id') and it.get('icon')}
     for it in data.get('equipped_items') or []:
         slot = (it.get('slot') or {}).get('type')
         if slot not in SLOT_NAMES:
@@ -80,7 +85,8 @@ def _items(data):
         permanent = next((e for e in it.get('enchantments') or []
                           if (e.get('enchantment_slot') or {}).get('type') in (None, 'PERMANENT')), {})
         out[slot] = {'slot': slot, 'name': it.get('name') or '?', 'ilvl': (it.get('level') or {}).get('value'),
-                     'quality': QUALITY.get((it.get('quality') or {}).get('type'), 4), 'icon': it.get('icon_url'),
+                     'quality': QUALITY.get((it.get('quality') or {}).get('type'), 4),
+                     'icon': it.get('icon_url') or rio_icons.get((it.get('item') or {}).get('id')),
                      'enchant': ', '.join(enchants) or None,
                      'gems': [s['item'].get('name') for s in sockets if s.get('item')], 'sockets': len(sockets),
                      'item_id': (it.get('item') or {}).get('id'), 'tier': bool(it.get('set')),
@@ -89,7 +95,7 @@ def _items(data):
                      'gem_ids': [s['item']['id'] for s in sockets if (s.get('item') or {}).get('id')]}
     if out:
         return out
-    for key, it in ((_rio(data).get('gear') or {}).get('items') or data.get('rio_gear') or {}).items():
+    for key, it in rio_items.items():
         slot = RIO_SLOTS.get(key)
         if not slot or not isinstance(it, dict):
             continue
@@ -122,11 +128,19 @@ def avatar_url(data):
     return url if url.endswith('-avatar.jpg') else None
 
 
+PORTRAITS_SECONDS = 600
+_portraits = {'at': 0, 'data': None}  # kept a while - every stored character's armory is read for a few links;
+                                      # load() starts it over when a character is fetched
+
+
 def portraits():
     """
     {(lower-case name, realm slug): {'render', 'avatar'}} for every character we have pictures of (stored or
-    linked) - the front page's character wall. One query, only the picture fields.
+    linked) - the front page's character wall. One query, only the picture fields; kept PORTRAITS_SECONDS.
     """
+    import time
+    if _portraits['data'] is not None and time.time() - _portraits['at'] < PORTRAITS_SECONDS:
+        return _portraits['data']
     from . import db
     out = {}
     for row in db.armory_images():
@@ -136,6 +150,7 @@ def portraits():
         key = (row['name_key'], row['realm'])
         if found['render'] or found['avatar']:
             out[key] = {k: v or (out.get(key) or {}).get(k) for k, v in found.items()}
+    _portraits.update(at=time.time(), data=out)
     return out
 
 
@@ -414,4 +429,5 @@ async def load(code, name, realm=None):
     if not tier_set(keep):
         keep['tier_set'] = await _wowhead_set(keep)
     db.save_armory(name, realm, keep)
+    _portraits['data'] = None  # a new face for the character wall
     return keep, None
