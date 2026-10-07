@@ -128,9 +128,8 @@ def avatar_url(data):
     return url if url.endswith('-avatar.jpg') else None
 
 
-PORTRAITS_SECONDS = 600
-_portraits = {'at': 0, 'data': None}  # kept a while - every stored character's armory is read for a few links;
-                                      # load() starts it over when a character is fetched
+PORTRAITS_SECONDS = 6 * 3600
+_portraits = {'at': 0, 'data': None}  # kept a while; load() puts a fetched character's new face in by itself
 
 
 def portraits():
@@ -146,12 +145,15 @@ def portraits():
     for row in db.armory_images():
         data = {'character_render_url': row['render'], 'avatar_url': row['avatar'], 'thumbnail_url': row['thumb'],
                 'raiderio': {'thumbnail_url': row['rio_thumb']} if row['rio_thumb'] else {}}
-        found = {'render': render_url(data), 'avatar': avatar_url(data)}
-        key = (row['name_key'], row['realm'])
-        if found['render'] or found['avatar']:
-            out[key] = {k: v or (out.get(key) or {}).get(k) for k, v in found.items()}
+        _add_portrait(out, (row['name_key'], row['realm']), data)
     _portraits.update(at=time.time(), data=out)
     return out
+
+
+def _add_portrait(out, key, data):
+    found = {'render': render_url(data), 'avatar': avatar_url(data)}
+    if found['render'] or found['avatar']:
+        out[key] = {k: v or (out.get(key) or {}).get(k) for k, v in found.items()}
 
 
 def summary(data):
@@ -442,5 +444,6 @@ async def load(code, name, realm=None):
     if not tier_set(keep):
         keep['tier_set'] = await _wowhead_set(keep)
     db.save_armory(name, realm, keep)
-    _portraits['data'] = None  # a new face for the character wall
+    if _portraits['data'] is not None:  # their (new) face on the character wall, without reading everyone again
+        _add_portrait(_portraits['data'], (name.lower(), realm), keep)
     return keep, None

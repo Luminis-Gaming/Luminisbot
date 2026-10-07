@@ -144,7 +144,7 @@ async def _mechanic_events(session, code, fight, tables):
     """
     from . import guides
     hostile = analyzer.hostile_damage_entries(tables.get('damageTaken'))
-    tags, _ = guides.effective_tags(fight['encounterID'])
+    tags, _ = guides.effective_tags(fight['encounterID'], fresh=True)  # this sync's own guide scans count
     tagged_names = {e.get('name') for e in hostile if tags.get(e['guid']) in analyzer.AVOIDABLE_TAGS}
     tagged = sorted({e['guid'] for e in hostile if e.get('name') in tagged_names})
     rest = [i for i in analyzer.event_ability_ids(hostile) if i not in set(tagged)]

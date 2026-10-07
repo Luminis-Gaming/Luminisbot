@@ -529,7 +529,7 @@ def uptime(numbered, name, top, tracked=frozenset(), talents=None):
         ours = up / total if total else 0
         if min(shares) >= ALWAYS_UP and ours >= ALWAYS_UP:
             continue  # a passive: always up for everyone, nothing to see
-        not_taken = _not_taken(aura, up, our_casts, talents)
+        not_taken = _not_taken(aura, ours, our_casts, talents)
         gap = top_share - ours
         verdict = None if not_taken else 'good' if gap <= UPTIME_GOOD_GAP else 'ok' if gap <= UPTIME_OK_GAP else 'off'
         strip = next((a for a in longest[2]['auras'] if a['name'] == aura and a['kind'] == kind), None)
@@ -545,12 +545,16 @@ def _cast_names(mine):
     return {ability for _, _, me, _ in mine for ability in me.get('casts') or {}}
 
 
-def _not_taken(aura, up, our_casts, talents):
+NEAR_ZERO = 0.02  # up (or out) less than this share of the fight: as good as never - a stray proc, a borrowed buff
+
+
+def _not_taken(aura, share, our_casts, talents):
     """
-    Never up: a talent you didn't take - your talents say so, or when they don't know it (no talents kept, or a
-    buff named apart from its talent), you never cast it either.
+    (Practically) never up: a talent you didn't take - your talents say so, or when they don't know it (no talents
+    kept, or a buff named apart from its talent), you never cast it either. share: how much of the fight it was up
+    (uptime) or how many were out on average (buffs on others).
     """
-    if up:
+    if share >= NEAR_ZERO:
         return False
     if talents is not None and aura in talents.known:
         return aura in talents.missing
@@ -618,7 +622,7 @@ def on_others_rows(numbered, name, top, talents=None):
         mean = ours.get(aura, 0) / total if total else 0
         shares = tops.get(aura, [])
         top_mean = _median(shares) if len(shares) >= need and shares else None
-        not_taken = _not_taken(aura, ours.get(aura, 0), our_casts, talents)
+        not_taken = _not_taken(aura, mean, our_casts, talents)
         verdict = None
         if top_mean and not not_taken:
             ratio = mean / top_mean

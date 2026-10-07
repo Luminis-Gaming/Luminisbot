@@ -1107,6 +1107,28 @@ class TestTalents(unittest.TestCase):
         self.assertEqual(throughput.on_others_rows(numbered, 'Boops', top, talents=had)[0]['verdict'], 'off')
         skipped = Talents(frozenset({'Healing Elixir'}), frozenset({'Healing Elixir'}))
         self.assertTrue(throughput.uptime(numbered, 'Boops', top, talents=skipped)[0]['not_taken'])
+        # A sliver of it (0.3% - "up 0% of the fight") without talents to go on: still not taken, nothing to coach
+        me['auras'] = [{'id': 1, 'name': 'Healing Elixir', 'kind': 'buff', 'uptime': 900, 'bands': []}]
+        row = throughput.uptime(numbered, 'Boops', top)[0]
+        self.assertEqual((row['not_taken'], row['verdict']), (True, None))
+        me['auras'] = [{'id': 1, 'name': 'Healing Elixir', 'kind': 'buff', 'uptime': 30000, 'bands': []}]  # 10%: had it
+        self.assertEqual(throughput.uptime(numbered, 'Boops', top)[0]['verdict'], 'off')
+
+    def test_my_performance_agrees_with_the_rotation_tab(self):
+        """The Discord coach looks at the whole night: a sliver of a buff in one pull isn't "had the talent"."""
+        from raidanalysis import coach, throughput
+        def pull(n, uptime):
+            me = {'auras': [{'id': 1, 'name': 'Predictive Training', 'kind': 'buff', 'uptime': uptime, 'bands': []}]
+                  if uptime else [], 'casts': {'Keg Smash': 40}, 'on_others': []}
+            return (n, {'fight_id': n, 'start_ms': 0, 'end_ms': 300000,
+                        'analysis': {'extras': {'duration': 300000, 'players': {'Mangor': me}}}})
+        night = [pull(1, 900), pull(2, 0), pull(3, 0)]  # up 0.3% of one pull - "0% of the fight"
+        top = [{'duration': 300000, 'auras': [{'id': 1, 'name': 'Predictive Training', 'kind': 'buff', 'uptime': 261000}],
+                'cast_names': {'Keg Smash': 40}, 'on_others': []} for _ in range(5)]
+        data = {'top': top, 'label': 'Brewmaster Monks', 'rows': [], 'player': {'class': 'Monk'}, 'talents': None}
+        tips = coach.rotation_insights(night, 'Mangor', 'tank', data, frozenset({1}))
+        self.assertFalse([t for t in tips if t['kind'] == 'uptime'])
+        self.assertTrue(all(r['not_taken'] for r in throughput.uptime(night, 'Mangor', top, frozenset({1}))))
 
 
 class TestDisciplineRamp(unittest.TestCase):
@@ -1943,7 +1965,11 @@ class TestCharacterPage(unittest.TestCase):
                                    'end_ms': i * 1000 + 300000, 'fight_pct': 0 if kill else 50 - night * 10 - i,
                                    'analysis': a, 'report_title': f'Night {night}', 'zone_name': 'Undermine',
                                    'report_start': 1757000000000 + night * 604800000})
-        patches = [mock.patch.object(db, 'character_pulls', lambda name, realm=None: self.pulls),
+        character.forget()  # nothing kept from another test
+        index = [{k: v for k, v in p.items() if k != 'analysis'} for p in self.pulls]
+        patches = [mock.patch.object(db, 'character_pull_index', lambda name, realm=None: index),
+                   mock.patch.object(db, 'group_pulls', lambda groups: [
+                       p for p in self.pulls if (p['report_code'], p['encounter_id'], p['difficulty']) in set(groups)]),
                    mock.patch.object(guides, 'effective_tags', lambda enc: ({CAUSTIC: analyzer.TAG_AVOIDABLE}, {})),
                    mock.patch.object(guides, 'apply_death_only', lambda *a, **k: None)]
         for p in patches:
@@ -2422,6 +2448,7 @@ class TestSharedPageCache(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(routes, 'handle_night', night), \
                 mock.patch.object(routes, 'handle_overview', mock.AsyncMock()), \
                 mock.patch.object(routes.db, 'list_reports', return_value=[{'code': 'abc'}]), \
+                mock.patch.object(routes.db, 'list_tiers', return_value=[]), \
                 mock.patch('oauth_server.get_session', side_effect=lambda r: {'username': r.headers.get('X-User'), 'role': 'admin'}):
             await routes.warm_pages()
             self.assertEqual(sorted(built), [('/admin/raids/report/abc', False), ('/raids/report/abc', True)])

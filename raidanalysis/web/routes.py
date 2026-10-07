@@ -93,7 +93,10 @@ def _timed(handler):
         finally:
             db.QUERY_LOG.reset(token)
             took = time.perf_counter() - started
-            if took >= SLOW_PAGE_SECONDS:
+            # ...not the requests made to wait (the gear's armory refresh, a cast bar's WCL load): those wait on
+            # Blizzard / WCL behind a page that's already showing, by design
+            waiting = request.query.get('armory_wait') or request.query.get('focus_load')
+            if took >= SLOW_PAGE_SECONDS and not waiting:
                 in_db = sum(t for t, _ in log)
                 slowest = max(log, default=(0, ''))
                 logger.info(f'[RAIDS] Slow page {request.path_qs}: {took:.1f}s - {len(log)} queries took {in_db:.1f}s '
@@ -185,6 +188,9 @@ def _changes(handler):
     async def wrapper(request):
         for cache in (_bodies, _home_content, _roster_cache):
             cache.clear()
+        guides.forget()
+        from .. import character
+        character.forget()
         return await handler(request)
     return wrapper
 
@@ -328,7 +334,26 @@ async def warm_pages():
         except Exception:
             logger.exception(f'[RAIDS] Warming {url} failed')
         await asyncio.sleep(0)  # let real visitors in between
-    logger.info(f'[RAIDS] Warmed {built} of {len(jobs)} pages in {time.perf_counter() - started:.1f}s')
+    # Every night's bosses of the current tier summed up for the character pages (character.group_summaries) -
+    # a night at a time, on a worker thread: the bot keeps answering meanwhile
+    from .. import character
+    nights = 0
+    try:
+        tiers = [t for t in db.list_tiers() if t['zone_id'] is not None]
+        reports = db.list_reports(limit=200, zone_id=tiers[0]['zone_id']) if tiers else []
+    except Exception:
+        logger.exception('[RAIDS] Listing the tier to warm failed')
+        reports = []
+    for report in reports:
+        try:
+            groups = sorted({(report['code'], p['encounter_id'], p['difficulty'])
+                             for p in db.get_pulls(report['code'], with_analysis=False)})
+            await asyncio.to_thread(character.group_summaries, groups)
+            nights += 1
+        except Exception:
+            logger.exception(f"[RAIDS] Summing up {report['code']} failed")
+    logger.info(f'[RAIDS] Warmed {built} of {len(jobs)} pages and {nights} nights for the character pages in '
+                f'{time.perf_counter() - started:.1f}s')
 
 
 WARM_AFTER_START_SECONDS = 30

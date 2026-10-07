@@ -113,43 +113,27 @@ def profile(name, realm=None, tier=None, difficulty=None):
     'key', 'score', 'parse', 'parse_wipe', 'amount', 'pulls', 'kills', 'best_pct' (boss % left, 0 = killed), 'deaths',
     'avoidable', 'interrupts', 'fight_id' (the night's last pull of it)}
     """
-    every = db.character_pulls(name, realm)
+    every = db.character_pull_index(name, realm)
     if not every:
         return None
     latest_code = every[-1]['report_code']
     tiers = tiers_of(every)
     pulls, tier, difficulty, difficulties = filter_pulls(every, tier, difficulty)
-    groups = {}  # (code, encounter, difficulty) -> pulls, in night order
+    groups = {}  # (code, encounter, difficulty) -> their pulls, in night order
     for p in pulls:
         groups.setdefault((p['report_code'], p['encounter_id'], p['difficulty']), []).append(p)
-    tags_for = {}
+    summaries = group_summaries(list(groups))
     me_last = {}
     entries = []
     for (code, encounter, difficulty), boss_pulls in groups.items():
-        if encounter not in tags_for:
-            tags_for[encounter] = guides.effective_tags(encounter)[0]
-        tags = tags_for[encounter]
-        insight = [{'number': i, 'kill': p['kill'],
-                    'analysis': dict(p['analysis'] or {}, _duration=p['end_ms'] - p['start_ms'])}
-                   for i, p in enumerate(boss_pulls, 1)]
-        guides.apply_death_only(encounter, tags, [x['analysis'] for x in insight])
-        row = next((r for r in analyzer.player_report(insight, tags) if r['name'] == name), None)
-        if not row:
+        mine = (summaries.get((code, encounter, difficulty)) or {}).get(name)
+        if not mine:
             continue
-        me_last = row
-        parses, parse_wipe = throughput.counted_parses([(_parse(p['analysis'] or {}, name), p['kill']) for p in boss_pulls])
-        amounts = [v for v in (_amount(p['analysis'] or {}, name, row.get('role'), p['end_ms'] - p['start_ms'])
-                               for p in boss_pulls) if v]
+        me_last = mine
         entries.append({'code': code, 'date': boss_pulls[0]['report_start'], 'title': boss_pulls[0]['report_title'],
                         'zone': boss_pulls[0]['zone_name'], 'boss': boss_pulls[0]['encounter_name'],
-                        'difficulty': difficulty, 'key': (encounter, difficulty), 'score': row['score'],
-                        'parse': max(parses) if parses else None, 'parse_wipe': parse_wipe and bool(parses),
-                        'amount': sum(amounts) / len(amounts) if amounts else None,
-                        'pulls': len(boss_pulls), 'kills': sum(1 for p in boss_pulls if p['kill']),
-                        'best_pct': min(0.0 if p['kill'] else float(p['fight_pct'] or 100) for p in boss_pulls),
-                        'fight_id': boss_pulls[-1]['fight_id'],
-                        'deaths': row['deaths'], 'avoidable': row['avoidable_hits'],
-                        'interrupts': row['interrupts'], 'alive': _alive_streak(boss_pulls, name)})
+                        'difficulty': difficulty, 'key': (encounter, difficulty),
+                        **{k: v for k, v in mine.items() if k not in ('class', 'spec', 'role')}})
     if not entries:
         return None
 
@@ -190,19 +174,69 @@ def profile(name, realm=None, tier=None, difficulty=None):
             'difficulties': difficulties, 'difficulty': difficulty}
 
 
+# A night's boss, summed up for everyone in it (group_summaries) - kept until the data changes (or an officer's
+# tags do: forget()), so every character page of that raid reuses it, and the warmer builds the tier's ahead.
+SUMMARIES_MAX = 4000
+_summaries = {}
+
+
+def forget():
+    _summaries.clear()
+
+
+def group_summaries(groups):
+    """
+    {(code, encounter, difficulty): {name: summary}} for these nights' bosses: each scored once for the whole raid
+    (analyzer.player_report over every pull of it - the same numbers the night's pages show) - the kept ones as
+    they are, the rest loaded together (db.group_pulls). summary: {'class', 'spec', 'role', 'score', 'parse',
+    'parse_wipe', 'amount', 'pulls', 'kills', 'best_pct', 'fight_id', 'deaths', 'avoidable', 'interrupts', 'alive'}.
+    """
+    version = guides._data_version()
+    missing = [g for g in groups if (g, version) not in _summaries]
+    if missing:
+        by_group = {}
+        for p in db.group_pulls(missing):
+            by_group.setdefault((p['report_code'], p['encounter_id'], p['difficulty']), []).append(p)
+        if len(_summaries) + len(missing) > SUMMARIES_MAX:
+            _summaries.clear()
+        for g in missing:
+            _summaries[(g, version)] = _summarise(g[1], by_group.get(g) or [])
+    return {g: _summaries[(g, version)] for g in groups}
+
+
+def _summarise(encounter, boss_pulls):
+    """One night's boss for everyone in it: {name: summary} (group_summaries)."""
+    if not boss_pulls:
+        return {}
+    tags = guides.effective_tags(encounter)[0]
+    insight = [{'number': i, 'kill': p['kill'], 'analysis': dict(p['analysis'] or {}, _duration=p['end_ms'] - p['start_ms'])}
+               for i, p in enumerate(boss_pulls, 1)]
+    guides.apply_death_only(encounter, tags, [x['analysis'] for x in insight])
+    out = {}
+    for row in analyzer.player_report(insight, tags):
+        name = row['name']
+        mine = [(p, x['analysis']) for p, x in zip(boss_pulls, insight)
+                if any(q.get('name') == name for q in x['analysis'].get('players') or [])]
+        if not mine:
+            continue
+        parses, parse_wipe = throughput.counted_parses([(_parse(a, name), p['kill']) for p, a in mine])
+        amounts = [v for v in (_amount(a, name, row.get('role'), p['end_ms'] - p['start_ms']) for p, a in mine) if v]
+        out[name] = {'class': row.get('class'), 'spec': row.get('spec'), 'role': row.get('role'), 'score': row['score'],
+                     'parse': max(parses) if parses else None, 'parse_wipe': parse_wipe and bool(parses),
+                     'amount': sum(amounts) / len(amounts) if amounts else None,
+                     'pulls': len(mine), 'kills': sum(1 for p, _ in mine if p['kill']),
+                     'best_pct': min(0.0 if p['kill'] else float(p['fight_pct'] or 100) for p, _ in mine),
+                     'fight_id': mine[-1][0]['fight_id'], 'deaths': row['deaths'], 'avoidable': row['avoidable_hits'],
+                     'interrupts': row['interrupts'],
+                     'alive': [not any(d['name'] == name and d.get('early') for d in a.get('deaths') or [])
+                               for _, a in mine]}
+    return out
+
+
 def _best_parse(entries):
     """(the entries' parses that count, from_wipes): kill parses when any entry has one, else the wipes' (flagged)."""
     vals, wipe = throughput.counted_parses([(e['parse'], not e['parse_wipe']) for e in entries])
     return vals, wipe and bool(vals)
-
-
-def _alive_streak(boss_pulls, name):
-    """(pulls in a row without an early death of theirs, from the first of these pulls) - per pull: True = alive."""
-    out = []
-    for p in boss_pulls:
-        deaths = analyzer.annotate_deaths(dict(p['analysis'] or {}))['deaths']
-        out.append(not any(d['name'] == name and d.get('early') for d in deaths))
-    return out
 
 
 def highlights(entries, bosses):

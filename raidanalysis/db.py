@@ -255,6 +255,13 @@ def ensure_guide_schema(cursor):
     """)
     cursor.execute("UPDATE raid_pulls SET players = COALESCE(analysis->'players', '[]'::jsonb) WHERE players IS NULL")
     cursor.execute("CREATE INDEX IF NOT EXISTS raid_pulls_players_gin ON raid_pulls USING gin (players jsonb_path_ops)")
+    # A stored character's picture links as columns of their own (Postgres fills them in from the stored JSON on
+    # every write): the Players tab needs four short links per character, not every character's whole armory.
+    for table, column in (('raid_armory', 'data'), ('wow_characters', 'enrichment_cache')):
+        for name, path in (('pic_render', "->>'character_render_url'"), ('pic_avatar', "->>'avatar_url'"),
+                           ('pic_thumb', "->>'thumbnail_url'"), ('pic_rio_thumb', "->'raiderio'->>'thumbnail_url'")):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} TEXT "
+                           f"GENERATED ALWAYS AS ({column}{path}) STORED")
     # Officers' calls on a spec's abilities: a major cooldown (timed), rotational (pressed on cooldown)
     # or hidden - overriding benchmarks.ability_kind(). Class / spec as WCL names them ('DeathKnight').
     cursor.execute("""
@@ -842,13 +849,6 @@ def character_owners():
 
 # What a character's page needs of each pull: everything scoring uses, without the per-player timelines
 # and throughput (most of a pull's size) - apart from this character's own throughput row.
-_SLIM_ANALYSIS = """
-    (p.analysis - '{casts,cooldowns,boss_casts,cast_ids,casts_seen,extras,slim_extras}'::text[])
-    || jsonb_build_object('extras', jsonb_build_object(
-           'duration', p.analysis->'extras'->'duration',
-           'players', jsonb_strip_nulls(jsonb_build_object(%s::text, COALESCE(
-               p.analysis->'extras'->'players'->%s::text, p.analysis->'slim_extras'->%s::text)))))
-"""
 
 
 def list_characters(zone_id=None, difficulty=None, team=None, names=None):
@@ -908,22 +908,54 @@ def _merge_unknown_realms(rows):
     return sorted(out, key=lambda r: (-r['nights'], r['name'], r['realm'] or ''))
 
 
-def character_pulls(name, realm=None):
+def character_pull_index(name, realm=None):
     """
-    Every pull of our own logs a character was in, night by night: pull rows with a slimmed analysis
-    (_SLIM_ANALYSIS) and the night's title, start and zone. realm (WCL's spelling): only that realm's
-    character - logs whose realms aren't recorded yet count too.
+    Every pull of our own logs a character was in, night by night - without the analysis (character.profile
+    narrows them to a tier and difficulty first, then loads only those nights' bosses - group_pulls): pull rows
+    with the night's title, start and zone. realm (WCL's spelling): only that realm's character - logs whose
+    realms aren't recorded yet count too.
     """
     realm_where = 'AND (rr.realm = %s OR rr.realm IS NULL)' if realm else ''
     return _run(f"""
         SELECT p.report_code, p.fight_id, p.encounter_id, p.encounter_name, p.difficulty, p.kill, p.start_ms,
-               p.end_ms, p.fight_pct, {_SLIM_ANALYSIS} AS analysis,
-               r.title AS report_title, r.start_time AS report_start, r.zone_name, r.zone_id
+               p.end_ms, p.fight_pct, r.title AS report_title, r.start_time AS report_start, r.zone_name, r.zone_id
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         LEFT JOIN raid_realms rr ON rr.report_code = r.code AND rr.name = %s
         WHERE r.source <> 'manual' AND p.players @> %s::jsonb {realm_where}
         ORDER BY r.start_time, p.start_ms
-    """, (name, name, name, name, Json([{'name': name}])) + ((realm,) if realm else ()), fetch='all')
+    """, (name, Json([{'name': name}])) + ((realm,) if realm else ()), fetch='all')
+
+
+# What scoring a night's boss needs of each pull - deaths, mechanics, consumables, everyone's parse and output - and
+# not the per-player casts, auras and the like: most of a stored analysis, read here for nothing.
+_GROUP_ANALYSIS = """
+    (p.analysis - '{casts,cooldowns,boss_casts,cast_ids,casts_seen,extras,slim_extras}'::text[])
+    || jsonb_build_object('extras', jsonb_build_object(
+           'duration', p.analysis->'extras'->'duration',
+           'players', (SELECT COALESCE(jsonb_object_agg(e.key, jsonb_build_object(
+                                'parse', e.value->'parse', 'damage', e.value->'damage', 'healing', e.value->'healing')),
+                                '{}'::jsonb)
+                       FROM jsonb_each(CASE WHEN jsonb_typeof(COALESCE(p.analysis->'extras'->'players',
+                                                                       p.analysis->'slim_extras')) = 'object'
+                                            THEN COALESCE(p.analysis->'extras'->'players', p.analysis->'slim_extras')
+                                            ELSE '{}'::jsonb END) e)))
+"""
+
+
+def group_pulls(groups):
+    """
+    Every pull of these (report code, encounter, difficulty) groups - a night's boss, the whole raid - in order,
+    with the analysis as scoring needs it (_GROUP_ANALYSIS).
+    """
+    if not groups:
+        return []
+    return _run(f"""
+        SELECT p.report_code, p.fight_id, p.encounter_id, p.difficulty, p.kill, p.start_ms, p.end_ms, p.fight_pct,
+               {_GROUP_ANALYSIS} AS analysis
+        FROM raid_pulls p
+        WHERE (p.report_code, p.encounter_id, p.difficulty) IN %s
+        ORDER BY p.report_code, p.encounter_id, p.difficulty, p.start_ms
+    """, (tuple(tuple(g) for g in groups),), fetch='all')
 
 
 def zone_order(zone_id):
@@ -1011,9 +1043,10 @@ def data_version():
     """
     row = _run("""
         SELECT (SELECT COUNT(*) FROM raid_pulls) AS pulls, (SELECT MAX(changed_at) FROM raid_pulls) AS changed,
-               (SELECT MAX(fetched_at) FROM raid_benchmarks) AS benchmarks, (SELECT MAX(synced_at) FROM raid_reports) AS reports
+               (SELECT MAX(fetched_at) FROM raid_benchmarks) AS benchmarks, (SELECT MAX(synced_at) FROM raid_reports) AS reports,
+               (SELECT MAX(scanned_at) FROM raid_guide_scans) AS guides
     """, fetch='one')
-    return f"{row['pulls']}|{row['changed']}|{row['benchmarks']}|{row['reports']}"
+    return f"{row['pulls']}|{row['changed']}|{row['benchmarks']}|{row['reports']}|{row['guides']}"
 
 
 def armory_images():
@@ -1023,13 +1056,11 @@ def armory_images():
     not the whole stored character.
     """
     return _run("""
-        SELECT name_key, realm, data->>'character_render_url' AS render, data->>'avatar_url' AS avatar,
-               data->>'thumbnail_url' AS thumb, data->'raiderio'->>'thumbnail_url' AS rio_thumb
+        SELECT name_key, realm, pic_render AS render, pic_avatar AS avatar, pic_thumb AS thumb, pic_rio_thumb AS rio_thumb
         FROM raid_armory
         UNION ALL
-        SELECT lower(character_name), realm_slug, enrichment_cache->>'character_render_url',
-               enrichment_cache->>'avatar_url', enrichment_cache->>'thumbnail_url', NULL
-        FROM wow_characters WHERE enrichment_cache IS NOT NULL
+        SELECT lower(character_name), realm_slug, pic_render, pic_avatar, pic_thumb, NULL
+        FROM wow_characters WHERE pic_render IS NOT NULL OR pic_avatar IS NOT NULL OR pic_thumb IS NOT NULL
     """, fetch='all')
 
 

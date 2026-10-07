@@ -222,16 +222,52 @@ async def scan_missing(encounter_ids=None):
         return total
 
 
-def effective_tags(encounter_id):
+# A boss's tags are read for every night and character page that shows it, and working them out reads every pull
+# of the boss: kept per boss until the data changes (the data version: pulls, guide scans) - or an officer tags
+# something (forget(), with the page caches).
+_kept = {}
+
+
+def _data_version():
+    from . import sync
+    return sync.status.get('data_version') or sync.status.get('last_finished')
+
+
+def forget():
+    """An officer changed tags or rescanned a guide: work them out anew."""
+    _kept.clear()
+
+
+def _cached(kind, encounter_id, make):
+    key = (kind, encounter_id, _data_version())
+    if key not in _kept:
+        if len(_kept) > 500:
+            _kept.clear()
+        _kept[key] = make()
+    return _kept[key]
+
+
+def tag_rows(encounter_id):
+    """db.get_tag_rows, kept like the tags."""
+    from . import db
+    return _cached('rows', encounter_id, lambda: db.get_tag_rows(encounter_id))
+
+
+def effective_tags(encounter_id, fresh=False):
     """
     ({ability_id: tag}, {ability_id: 'auto'|'manual'}) for a boss: tags derived
     from Mythic Trap's mechanic categories, with officers' overrides on top - both per ability name, so
     every spell id a mechanic is logged under gets the same tag (an officer's newest call wins).
+    Kept until the data changes; fresh: worked out now (the sync, deciding what to fetch).
     """
     from . import db
-    shares = db.ability_shares(encounter_id)
-    return name_tags(auto_tags(db.get_guides(encounter_id), shares),
-                     {i: info.get('name') for i, info in shares.items()}, db.get_tag_rows(encounter_id))
+
+    def make():
+        shares = db.ability_shares(encounter_id)
+        return name_tags(auto_tags(db.get_guides(encounter_id), shares),
+                         {i: info.get('name') for i, info in shares.items()}, db.get_tag_rows(encounter_id))
+    tags, sources = make() if fresh else _cached('tags', encounter_id, make)
+    return dict(tags), dict(sources)  # callers' own copies
 
 
 def apply_death_only(encounter_id, tags, analyses):
@@ -246,7 +282,7 @@ def apply_death_only(encounter_id, tags, analyses):
         return
     names, decided = set(), set()
     if ids:
-        for row in db.get_tag_rows(encounter_id):  # newest first: the officer's latest call per name
+        for row in tag_rows(encounter_id):  # newest first: the officer's latest call per name
             name = row.get('ability_name')
             if name and name not in decided:
                 decided.add(name)
