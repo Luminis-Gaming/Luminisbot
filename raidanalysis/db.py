@@ -890,6 +890,23 @@ def get_armory(name, realm=None):
     """, (name, realm, realm), fetch='one')
 
 
+def armory_images():
+    """
+    Every stored character's picture links - ours (raid_armory) and linked characters' (wow_characters):
+    [{'name_key' (lower case), 'realm' (slug), 'render', 'avatar', 'thumb', 'rio_thumb'}] - only the few fields,
+    not the whole stored character.
+    """
+    return _run("""
+        SELECT name_key, realm, data->>'character_render_url' AS render, data->>'avatar_url' AS avatar,
+               data->>'thumbnail_url' AS thumb, data->'raiderio'->>'thumbnail_url' AS rio_thumb
+        FROM raid_armory
+        UNION ALL
+        SELECT lower(character_name), realm_slug, enrichment_cache->>'character_render_url',
+               enrichment_cache->>'avatar_url', enrichment_cache->>'thumbnail_url', NULL
+        FROM wow_characters WHERE enrichment_cache IS NOT NULL
+    """, fetch='all')
+
+
 def realm_in(code, name):
     """A character's realm in one log (WCL's spelling), or None when it isn't recorded."""
     row = _run("SELECT realm FROM raid_realms WHERE report_code = %s AND name = %s", (code, name), fetch='one')

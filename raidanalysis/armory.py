@@ -115,6 +115,30 @@ def render_url(data):
     return thumb.split('?')[0].replace('-avatar.jpg', '-main-raw.png') if '-avatar.jpg' in thumb else None
 
 
+def avatar_url(data):
+    """The small head portrait (84 px, Blizzard's avatar.jpg) - pinned characters' chips. None when unknown."""
+    url = data.get('avatar_url') or data.get('thumbnail_url') or _rio(data).get('thumbnail_url') or ''
+    url = url.split('?')[0]  # Raider.IO adds ?alt= (a placeholder for missing ones)
+    return url if url.endswith('-avatar.jpg') else None
+
+
+def portraits():
+    """
+    {(lower-case name, realm slug): {'render', 'avatar'}} for every character we have pictures of (stored or
+    linked) - the front page's character wall. One query, only the picture fields.
+    """
+    from . import db
+    out = {}
+    for row in db.armory_images():
+        data = {'character_render_url': row['render'], 'avatar_url': row['avatar'], 'thumbnail_url': row['thumb'],
+                'raiderio': {'thumbnail_url': row['rio_thumb']} if row['rio_thumb'] else {}}
+        found = {'render': render_url(data), 'avatar': avatar_url(data)}
+        key = (row['name_key'], row['realm'])
+        if found['render'] or found['avatar']:
+            out[key] = {k: v or (out.get(key) or {}).get(k) for k, v in found.items()}
+    return out
+
+
 def summary(data):
     """What the header shows: {'ilvl', 'spec', 'class', 'race', 'realm', 'guild', 'mplus', 'raids', 'links'}."""
     rio = _rio(data)

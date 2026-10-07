@@ -578,7 +578,7 @@ tr[data-href]:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .pin-btn.mini { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 8px; padding: 0;
     border: 1px solid transparent; background: none; cursor: pointer; font-size: 14px; opacity: 0.35; filter: grayscale(1);
     transition: opacity 0.15s, filter 0.15s, background-color 0.15s; }
-.ch-card:hover .pin-btn.mini, .pin-btn.mini:focus-visible { opacity: 0.8; }
+.pin-btn.mini:focus-visible { opacity: 0.8; }
 .pin-btn.mini.on { opacity: 1; filter: none; background: var(--accent-soft); border-color: var(--accent); }
 .ch-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
 .ch-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
@@ -658,24 +658,65 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .ch-search { flex: 1 1 320px; max-width: 520px; padding: 10px 14px; font-size: 15px; border-radius: 10px;
     border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); }
 .ch-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.ch-find .ch-chips { margin: 0; }
-.ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin: 10px 0 14px; }
-.ch-card { position: relative; border-radius: 12px; border: 1px solid var(--border); border-left: 3px solid var(--c);
-    background: linear-gradient(135deg, color-mix(in srgb, var(--c) 9%, transparent), transparent 60%), var(--surface-2);
-    transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s; }
-.ch-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0,0,0,0.35); border-color: color-mix(in srgb, var(--c) 50%, var(--border)); }
-.ch-card-link { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; color: var(--text); }
-.ch-card-link:hover { text-decoration: none; }
-.ch-card-name { font-size: 16px; padding-right: 26px; }
-.ch-card-realm { font-size: 12px; color: var(--faint); min-height: 1em; }
-.ch-card-stats { display: flex; gap: 12px; margin: 6px 0 2px; font-size: 12px; color: var(--muted); }
-.ch-card-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+/* The Players tab: a wall of portraits - the main's render on a soft glow in their class colour, the name, the
+   spec, the other characters as little faces - no boxes, room to breathe */
+.ch-find .muted { white-space: nowrap; }
+.pl-group { margin: 18px 0 6px; }
+.pl-group[hidden], .pl-tile[hidden], .pl-other[hidden], .pl-also[hidden] { display: none; }
+.pl-group-head { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.pl-group-head::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.pl-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px 10px; }
+.pl-tile { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center;
+    padding-bottom: 6px; border-radius: 16px; transition: background-color 0.2s; }
+.pl-tile:hover { background: color-mix(in srgb, var(--c) 7%, transparent); }
+.pl-main { display: flex; flex-direction: column; align-items: center; width: 100%; color: var(--text); }
+.pl-main:hover { text-decoration: none; }
+.pl-art { position: relative; display: block; width: 100%; aspect-ratio: 1 / 1.08; overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent); mask-image: linear-gradient(to bottom, #000 78%, transparent); }
+.pl-art::before { content: ''; position: absolute; left: 14%; right: 14%; bottom: 6%; height: 46%; border-radius: 50%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--c) 34%, transparent), transparent); transition: opacity 0.2s; opacity: 0.7; }
+.pl-tile:hover .pl-art::before { opacity: 1; }
+/* Blizzard's render is 1600 x 1200 with the character in the middle: at 3.1x the tile's width it's a portrait,
+   head to thigh, fading out at the bottom */
+.pl-art img { position: absolute; width: 310%; left: -105%; top: -29%; pointer-events: none;
+    filter: drop-shadow(0 6px 14px rgba(0,0,0,0.5)); transition: transform 0.25s ease; transform-origin: 50% 40%; }
+.pl-tile:hover .pl-art img { transform: scale(1.05); }
+.pl-initial { position: absolute; inset: 22% 22% 16%; display: grid; place-items: center; border-radius: 50%;
+    font-size: 40px; color: var(--c); background: color-mix(in srgb, var(--c) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c) 30%, transparent); }
+.pl-name { margin-top: -2px; font-size: 15px; font-weight: 700; color: var(--c); max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
+.pl-spec { font-size: 12px; color: var(--faint); }
+.pl-alts { display: flex; justify-content: center; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.pl-alt { width: 24px; height: 24px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 70%, transparent); background: var(--surface-3);
+    font-size: 11px; color: var(--c); opacity: 0.75; transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s; }
+.pl-alt img { width: 100%; height: 100%; display: block; }
+.pl-alt:hover, .pl-alt.hit { opacity: 1; transform: scale(1.15); text-decoration: none; }
+.pl-alt.hit { box-shadow: 0 0 0 2px var(--c), 0 0 12px var(--c); }
+.pl-found { margin-top: 5px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pl-found[hidden] { display: none; }
+.pl-tile .pin-btn.mini { top: 4px; right: 4px; opacity: 0; }
+.pl-tile:hover .pin-btn.mini, .pl-tile .pin-btn.mini:focus-visible { opacity: 0.8; }
+.pl-tile .pin-btn.mini.on { opacity: 1; }
+.pl-also { margin: 18px 0 10px; }
+.pl-also summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+.pl-names { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; }
+.pl-other a { color: var(--c); font-weight: 600; }
+.pl-other a + a { margin-left: 6px; font-weight: 500; font-size: 12px; opacity: 0.75; }
+.pl-other a + a::before { content: '· '; color: var(--faint); }
+.pl-other a.hit { opacity: 1; text-decoration: underline; }
 .pins { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .pins-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .pins-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .pin-chip { display: inline-flex; align-items: center; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border));
     background: color-mix(in srgb, var(--c) 12%, var(--surface-2)); overflow: hidden; }
-.pin-chip a { padding: 5px 4px 5px 12px; color: var(--c); font-weight: 700; font-size: 13px; }
+.pin-chip a { display: inline-flex; align-items: center; gap: 7px; padding: 3px 4px 3px 3px; color: var(--c);
+    font-weight: 700; font-size: 13px; }
+.pin-face { width: 26px; height: 26px; border-radius: 50%; overflow: hidden; flex: none; display: grid; place-items: center;
+    background: var(--surface-3); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--c) 70%, transparent); font-size: 12px; }
+.pin-face img { width: 100%; height: 100%; display: block; }
 .pin-chip a small { color: var(--faint); font-weight: 500; margin-left: 4px; }
 .pin-chip a:hover { text-decoration: none; filter: brightness(1.2); }
 .pin-chip button { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 5px 10px 5px 6px; font-size: 14px; }
@@ -1739,16 +1780,22 @@ const PIN_KEY = 'raid-pins';
 const readPins = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY)) || []; } catch (e) { return []; } };
 const writePins = pins => { try { localStorage.setItem(PIN_KEY, JSON.stringify(pins)); } catch (e) { /* private mode */ } };
 const samePin = (a, b) => a.name === b.name && (a.realm || '') === (b.realm || '');
+const isFace = url => typeof url === 'string' && url.startsWith('https://render.worldofwarcraft.com/')
+  && url.endsWith('-avatar.jpg');  // Blizzard's head portraits only (set as .src - no markup involved)
 const showPinState = () => {
   const pins = readPins();
+  let faces = false;
   document.querySelectorAll('.pin-btn[data-pin]').forEach(btn => {
     let me; try { me = JSON.parse(btn.dataset.pin); } catch (e) { return; }
-    const on = pins.some(p => samePin(p, me));
+    const pinned = pins.find(p => samePin(p, me));
+    if (pinned && me.img && pinned.img !== me.img) { pinned.img = me.img; faces = true; }  // pinned before we had a face
+    const on = !!pinned;
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (!btn.classList.contains('mini')) btn.textContent = on ? '📌 Pinned' : '📌 Pin';
     btn.title = on ? 'Unpin from the front page' : 'Pin to the front page - kept in this browser only';
   });
+  if (faces) writePins(pins);
   document.querySelectorAll('[data-pins]').forEach(box => {
     let colors = {}; try { colors = JSON.parse(box.querySelector('.pins-colors').textContent); } catch (e) { /* none */ }
     const list = box.querySelector('.pins-list');
@@ -1758,7 +1805,16 @@ const showPinState = () => {
       chip.style.setProperty('--c', colors[p.cls] || '#9aa1b9');
       const a = document.createElement('a');
       a.href = box.dataset.base + (p.realm ? encodeURIComponent(p.realm) + '/' : '') + encodeURIComponent(p.name);
-      a.textContent = p.name;
+      const face = document.createElement('span');
+      face.className = 'pin-face';
+      if (isFace(p.img)) {
+        const img = document.createElement('img');
+        img.src = p.img; img.alt = ''; img.loading = 'lazy';
+        face.appendChild(img);
+      } else {
+        face.textContent = (p.name || '?').slice(0, 1);
+      }
+      a.append(face, document.createTextNode(p.name));
       if (p.spec) { const s = document.createElement('small'); s.textContent = p.spec; a.appendChild(s); }
       const x = document.createElement('button');
       x.type = 'button'; x.textContent = '×'; x.title = 'Unpin'; x.setAttribute('aria-label', 'Unpin ' + p.name);
@@ -1780,29 +1836,47 @@ onEach('[data-pins]', showPinState);
 onEach('.pin-btn[data-pin]', () => { clearTimeout(window.pinTimer); window.pinTimer = setTimeout(showPinState, 0); });
 // Front page: the character search and role chips.
 onEach('[data-ch-find]', box => {
-  const card = box.parentElement, input = box.querySelector('.ch-search');
-  let role = 'all';
+  // Players tab: one search over every character of every player (alts included) - a player shows when any of
+  // theirs matches, the matching alt lit up; role groups with nobody left hide; "Also raided" opens on a match.
+  const card = box.parentElement, input = box.querySelector('.ch-search'), also = card.querySelector('.pl-also');
+  let words = [];
+  const match = el => words.every(w => (el.dataset.search || '').includes(w));
   const apply = () => {
-    const words = input.value.toLowerCase().split(' ').filter(Boolean);
-    let shown = 0;
-    card.querySelectorAll('.ch-card').forEach(c => {
-      const ok = (role === 'all' || c.dataset.role === role) && words.every(w => c.dataset.search.includes(w));
-      c.hidden = !ok; shown += ok;
+    words = input.value.toLowerCase().split(' ').filter(Boolean);
+    let shown = 0, inAlso = 0;
+    card.querySelectorAll('.pl-tile, .pl-other').forEach(el => {
+      const ok = match(el);
+      el.hidden = !ok; shown += ok;
+      if (ok && also && also.contains(el)) inAlso++;
+      const hits = [...el.querySelectorAll('[data-alt]')].filter(a => {
+        const hit = words.length > 0 && match(a);
+        a.classList.toggle('hit', hit);
+        return hit;
+      });
+      const found = el.querySelector('.pl-found');  // which alt it matched on (and Enter opens), when not the main
+      if (found) {
+        const main = el.querySelector('[data-main]');
+        found.hidden = !hits.length || match(main);
+        found.textContent = hits.length ? '↵ ' + hits.map(a => a.getAttribute('aria-label')).join(', ') : '';
+      }
     });
+    card.querySelectorAll('.pl-group').forEach(g => {
+      const n = g.querySelectorAll('.pl-tile:not([hidden])').length;
+      g.hidden = !n;
+      g.querySelector('.pl-count').textContent = n;
+    });
+    if (also) { also.hidden = words.length > 0 && !inAlso; if (words.length) also.open = inAlso > 0; }
     const none = card.querySelector('.ch-none');
     if (none) none.hidden = shown > 0;
   };
   input.addEventListener('input', apply);
-  input.addEventListener('keydown', e => {  // Enter opens the first match
+  input.addEventListener('keydown', e => {  // Enter opens the first match - the alt it matched on, if it was an alt
     if (e.key !== 'Enter') return;
-    const first = [...card.querySelectorAll('.ch-card')].find(c => !c.hidden);
-    if (first) first.querySelector('a').click();
+    const first = [...card.querySelectorAll('.pl-tile, .pl-other')].find(el => !el.hidden);
+    if (!first) return;
+    const main = first.querySelector('[data-main]');
+    (match(main) ? main : first.querySelector('[data-alt].hit') || main).click();
   });
-  box.querySelectorAll('[data-role-filter]').forEach(chip => chip.addEventListener('click', () => {
-    role = chip.dataset.roleFilter;
-    box.querySelectorAll('[data-role-filter]').forEach(c => c.setAttribute('aria-pressed', c === chip ? 'true' : 'false'));
-    apply();
-  }));
 });
 // Item tooltips (the character panels): the game's tooltip for the item as worn - fetched from /raids/item
 // (Wowhead, sanitized on our side) the first time, then kept. Touch: the first tap shows it, the second opens Wowhead.

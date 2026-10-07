@@ -249,7 +249,7 @@ def hero(prof, data, back_href, with_model=True):
         tiles.append((f'{float(info["ilvl"]):.0f}', 'Item level'))
     tiles_html = ''.join(f'<div class="ch-tile"><b>{v}</b><span>{label}</span></div>' for v, label in tiles)
     pin = json.dumps({'name': prof['name'], 'realm': armory.realm_slug(prof['realm']) if prof['realm'] else '',
-                      'cls': prof['class'], 'spec': prof['spec']})
+                      'cls': prof['class'], 'spec': prof['spec'], 'img': (armory.avatar_url(data) if data else '') or ''})
     slug = armory.realm_slug(prof['realm']) if prof['realm'] else ''
     links = [f'<a class="btn btn-primary btn-sm" href="{esc(back_href)}">Latest night →</a>']
     if slug:

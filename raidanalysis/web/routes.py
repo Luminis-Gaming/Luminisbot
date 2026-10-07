@@ -382,15 +382,16 @@ def _overview_filters(request, tiers, tab=None):
     return zone_id, difficulty, team, bar
 
 
-HOME_TABS = (('bosses', '🐉', 'Bosses'), ('nights', '📅', 'Raid nights'), ('characters', '🧙', 'Characters'))
+HOME_TABS = (('nights', '📅', 'Raid nights'), ('bosses', '🐉', 'Bosses'), ('characters', '🧙', 'Players'))
+HOME_DEFAULT = 'nights'  # the first tab: the bare /admin/raids (the night pages' "← All raid nights")
 
 
 async def handle_overview(request):
     session = _session(request)
     tab = request.query.get('tab')
-    tab = tab if tab in {key for key, _, _ in HOME_TABS} else 'bosses'
+    tab = tab if tab in {key for key, _, _ in HOME_TABS} else HOME_DEFAULT
     zone_id, difficulty, team, filter_bar = _overview_filters(request, db.list_tiers(),
-                                                              tab if tab != 'bosses' else None)
+                                                              tab if tab != HOME_DEFAULT else None)
     team_q = _team_query(team)
 
     st = sync.status
@@ -419,8 +420,11 @@ async def handle_overview(request):
     elif tab == 'nights':
         content = _home_nights(db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty, team=team))
     else:
-        from .. import character
-        content = _home_characters(character.roster(zone_id, difficulty, team))
+        from .. import armory, character
+        players = _players(character.roster(zone_id, difficulty, team), db.character_owners())
+        images = armory.portraits()
+        _fill_portraits(players, images)
+        content = _home_characters(players, images, public=session is PUBLIC_SESSION)
     filters = {k: v for k, v in request.query.items() if k in ('tier', 'difficulty', 'team')}
     tabs = ''.join(
         f'<a class="ptab{" active" if key == tab else ""}" data-swap="home" href="{_home_href(filters, key)}">'
@@ -459,7 +463,7 @@ async def handle_overview(request):
 
 
 def _home_href(filters, tab):
-    query = dict(filters, **({} if tab == 'bosses' else {'tab': tab}))
+    query = dict(filters, **({} if tab == HOME_DEFAULT else {'tab': tab}))
     return '/admin/raids' + ('?' + '&'.join(f'{k}={quote(v)}' for k, v in query.items()) if query else '')
 
 
@@ -511,48 +515,143 @@ def _home_nights(reports):
         </table></div>"""
 
 
-def _home_characters(roster):
-    """The Characters tab: a search, role chips and a card per character (most nights first), each opening their page."""
+REGULAR_SHARE = 0.3        # in at least this share of the most-seen character's nights: a regular (a portrait)
+PORTRAIT_FILLS_PER_VIEW = 3  # regulars without a stored picture: fetched in the background, this many per view
+ROLE_GROUPS = (('tank', '🛡️', 'Tanks'), ('healer', '💚', 'Healers'), ('dps', '⚔️', 'DPS'))
+
+
+def _players(roster, owners):
+    """
+    The roster as people: [{'main', 'alts', 'nights', 'display'}] - one per player (character_owners: raid signups
+    first, then linked Battle.net characters - so two people sharing a Battle.net account stay two). A character
+    nobody signed up with or linked is a pug: left out (unless nobody's known at all - then everyone, one each).
+    main: the character they played the most nights on (then the latest seen); alts the rest, the same way.
+    nights: over all of them. Most nights first.
+    """
+    groups = {}
+    for c in roster:
+        owner = owners.get(c['name'].lower())
+        if owners and not owner:
+            continue
+        key = owner['key'] if owner else f"c:{c['name'].lower()}:{c['realm'] or ''}"
+        g = groups.setdefault(key, {'chars': [], 'display': (owner or {}).get('display')})
+        g['chars'].append(c)
+    out = []
+    for g in groups.values():
+        chars = sorted(g['chars'], key=lambda c: (-c['nights'], -c['last_seen'], c['name']))
+        out.append({'main': chars[0], 'alts': chars[1:], 'nights': sum(c['nights'] for c in chars),
+                    'display': g['display']})
+    return sorted(out, key=lambda p: (-p['nights'], p['main']['name']))
+
+
+def _regulars(players):
+    """(regulars, the rest): in at least REGULAR_SHARE of the top nights - everyone while the tier is young."""
+    import math
+    top = max((p['nights'] for p in players), default=0)
+    need = max(1, math.ceil(REGULAR_SHARE * top))
+    return [p for p in players if p['nights'] >= need], [p for p in players if p['nights'] < need]
+
+
+def _fill_portraits(players, images):
+    """Regulars' characters we've no picture of (never opened, not linked): a few fetched in the background per view."""
+    from .. import armory
+    started = 0
+    for c in (c for p in _regulars(players)[0] for c in [p['main']] + p['alts']):
+        if started >= PORTRAIT_FILLS_PER_VIEW:
+            break
+        if c['realm'] and (c['name'].lower(), armory.realm_slug(c['realm'])) not in images \
+                and _refresh_armory(None, c['name'], c['realm'], True):
+            started += 1
+
+
+def _home_characters(players, images=None, public=False):
+    """
+    The Players tab - for finding yourself, so it's quiet: the regulars as a wall of portraits grouped by role -
+    their main's render, name in class colour and spec (the numbers in the tooltip), their other characters as
+    small faces underneath, each a link to that character - and the ones who've only been in a few of these logs
+    as a collapsed list. One search covers every character (and, signed in, the Discord name): finding an alt
+    finds its player, with that alt lit up. images: armory.portraits(). public: no Discord names.
+    """
     import json
+    from datetime import datetime, timezone
     from .. import armory
     from . import character as cview
     from .players import _class_label
-    from .render import CLASS_COLORS, ROLE_ICONS
-    cards = []
-    for c in roster:
+    from .render import CLASS_COLORS
+    if not players:
+        return '<p class="muted">Nobody in these logs yet.</p>'
+    images = images or {}
+
+    def info(c):
         color = CLASS_COLORS.get(c['class'], '#9aa1b9')
         realm = cview._realm_label(c['realm']) if c['realm'] else ''
-        pin = json.dumps({'name': c['name'], 'realm': armory.realm_slug(c['realm']) if c['realm'] else '',
-                          'cls': c['class'], 'spec': c['spec']})
-        search = f"{c['name']} {realm} {c['spec'] or ''} {_class_label(c['class'])}".lower()
-        cards.append(f"""
-            <div class="ch-card" style="--c:{color}" data-search="{esc(search)}" data-role="{esc(c['role'] or 'dps')}">
-                <a class="ch-card-link" href="{cview.url(c['name'], c['realm'])}">
-                    <b class="ch-card-name" style="color:{color}">{esc(c['name'])}</b>
-                    <span class="muted small">{ROLE_ICONS.get(c['role'], '')} {esc(c['spec'] or '')} {esc(_class_label(c['class']))}</span>
-                    <span class="ch-card-realm">{esc(realm)}</span>
-                    <span class="ch-card-stats"><span><b>{c['nights']}</b> nights</span><span><b>{c['pulls']}</b> pulls</span>
-                        <span><b>{c['kills']}</b> kills</span></span>
-                    <span class="muted small">Last seen {ts(c['last_seen'], 'date')}</span>
-                </a>
-                <button type="button" class="pin-btn mini" data-pin="{esc(pin)}" title="Pin to the front page">📌</button>
-            </div>""")
-    if not cards:
-        return '<p class="muted">Nobody in these logs yet.</p>'
-    roles = ''.join(f'<button type="button" class="ch-chip" data-role-filter="{key}" '
-                    f'aria-pressed="{"true" if key == "all" else "false"}">{label}</button>'
-                    for key, label in (('all', 'Everyone'), ('tank', '🛡️ Tanks'), ('healer', '💚 Healers'),
-                                       ('dps', '⚔️ DPS')))
+        pic = images.get((c['name'].lower(), armory.realm_slug(c['realm']) if c['realm'] else ''), {})
+        seen = datetime.fromtimestamp(c['last_seen'] / 1000, tz=timezone.utc).strftime('%d %b').lstrip('0')
+        what = f"{c['spec'] or ''} {_class_label(c['class'])}".strip()
+        tip = (f"{c['name']} - {what}{' · ' + realm if realm else ''}\n{c['nights']} night{'s' if c['nights'] != 1 else ''}"
+               f" · {c['pulls']} pulls · {c['kills']} kills · last seen {seen}")
+        search = f"{c['name']} {realm} {what}".lower()
+        return {'color': color, 'pic': pic, 'tip': tip, 'search': search, 'href': cview.url(c['name'], c['realm'])}
+
+    def player_search(p, chars):
+        words = ' '.join(x['search'] for x in chars)
+        return words + (f" {p['display'].lower()}" if p['display'] and not public else '')
+
+    def alt_face(c, x):
+        face = (f'<img src="{esc(x["pic"]["avatar"])}" alt="" loading="lazy">' if x['pic'].get('avatar') else
+                f'<b>{esc(c["name"][:1])}</b>')
+        return (f'<a class="pl-alt" data-alt data-search="{esc(x["search"])}" style="--c:{x["color"]}" '
+                f'href="{x["href"]}" title="{esc(x["tip"])}" aria-label="{esc(c["name"])}">{face}</a>')
+
+    regulars, rest = _regulars(players)
+    groups = []
+    for role, icon, label in ROLE_GROUPS:
+        tiles = []
+        for p in (p for p in regulars if (p['main']['role'] or 'dps') == role):
+            c, alts = p['main'], p['alts']
+            m, xs = info(c), [info(a) for a in alts]
+            art = (f'<img src="{esc(m["pic"]["render"])}" alt="" loading="lazy" decoding="async">' if m['pic'].get('render')
+                   else f'<b class="pl-initial">{esc(c["name"][:1])}</b>')
+            who = f"\nPlayed by {p['display']}" if p['display'] and not public else ''
+            pin = json.dumps({'name': c['name'], 'realm': armory.realm_slug(c['realm']) if c['realm'] else '',
+                              'cls': c['class'], 'spec': c['spec'], 'img': m['pic'].get('avatar') or ''})
+            faces = ''.join(alt_face(a, x) for a, x in zip(alts, xs))
+            tiles.append(f"""
+                <div class="pl-tile" style="--c:{m['color']}" data-search="{esc(player_search(p, [m] + xs))}">
+                    <a class="pl-main" data-main data-search="{esc(m['search'])}" href="{m['href']}" title="{esc(m['tip'] + who)}">
+                        <span class="pl-art">{art}</span>
+                        <b class="pl-name">{esc(c['name'])}</b>
+                        <span class="pl-spec">{esc(c['spec'] or _class_label(c['class']))}</span>
+                    </a>
+                    {f'<div class="pl-alts">{faces}</div><span class="pl-found" hidden></span>' if faces else ''}
+                    <button type="button" class="pin-btn mini" data-pin="{esc(pin)}" title="Pin to the front page">📌</button>
+                </div>""")
+        if tiles:
+            groups.append(f'<section class="pl-group"><h3 class="pl-group-head">{icon} {label} '
+                          f'<span class="muted pl-count">{len(tiles)}</span></h3><div class="pl-wall">{"".join(tiles)}</div></section>')
+    others = []
+    for p in rest:
+        m, xs = info(p['main']), [info(a) for a in p['alts']]
+        alts = ''.join(f'<a data-alt data-search="{esc(x["search"])}" style="--c:{x["color"]}" href="{x["href"]}" '
+                       f'title="{esc(x["tip"])}">{esc(a["name"])}</a>' for a, x in zip(p['alts'], xs))
+        others.append(f'<span class="pl-other" data-search="{esc(player_search(p, [m] + xs))}">'
+                      f'<a data-main data-search="{esc(m["search"])}" style="--c:{m["color"]}" href="{m["href"]}" '
+                      f'title="{esc(m["tip"])}">{esc(p["main"]["name"])}</a>{alts}</span>')
+    also = (f'<details class="pl-also"><summary>Also raided a few of these nights <span class="muted">'
+            f'({len(others)})</span></summary><div class="pl-names">{"".join(others)}</div></details>' if others else '')
+    count = sum(1 + len(p['alts']) for p in players)
     return f"""
         <div class="ch-find" data-ch-find>
-            <input type="search" class="ch-search" placeholder="🔎 Search {len(cards)} characters - name, realm, class or spec"
-                   aria-label="Search characters" autocomplete="off">
-            <div class="ch-chips">{roles}</div>
+            <input type="search" class="ch-search" placeholder="🔎 Find a player - any of their characters, realm, class or spec"
+                   aria-label="Search players" autocomplete="off">
+            <span class="muted small">{len(players)} players · {count} characters</span>
         </div>
-        <div class="ch-grid">{''.join(cards)}</div>
-        <p class="muted small ch-none" hidden>No character matches that.</p>
-        <p class="muted small">From the raid tier, difficulty and team above - imported logs aren't counted. 📌 pins a
-           character to the top of this page (in this browser only).</p>"""
+        {''.join(groups)}
+        {also}
+        <p class="muted small ch-none" hidden>Nobody matches that.</p>
+        <p class="muted small">From the raid tier, difficulty and team above - imported logs and characters nobody
+           has signed up with or linked (pugs) aren't counted. Hover a character for their numbers; the small faces
+           are the player's other characters. 📌 pins one to the top of this page (in this browser only).</p>"""
 
 
 # ============================================================================
@@ -1843,7 +1942,7 @@ async def handle_boss(request):
     best_all = min((p['fight_pct'] or 0 for p in pulls if not p['kill']), default=None)
     body = f"""
     <div class="card">
-        <p><a href="/admin/raids{_team_query(team)}">← Raid Analysis</a></p>
+        <p><a href="/admin/raids{_team_query(team, tab='bosses')}">← All bosses</a></p>
         <h1>{boss_portrait(encounter_id, 'lg', killed=any(p['kill'] for p in pulls))}{esc(name)} {difficulty_pill(difficulty)}</h1>
         <div class="pull-chips">{team_links}</div>
         {_flash(request)}

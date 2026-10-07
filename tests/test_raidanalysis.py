@@ -1955,14 +1955,42 @@ class TestCharacterPage(unittest.TestCase):
         self.assertEqual(set(out), {('A', 'X'), ('A', 'Y'), ('B', None)})
         self.assertEqual((out['A', 'X']['pulls'], out['A', 'X']['nights'], out['A', 'X']['spec']), (16, 5, 'new'))
 
+    @staticmethod
+    def char(name, cls, spec, role, nights, realm='Frostwhisper', last_seen=1757000000000):
+        return {'name': name, 'realm': realm, 'class': cls, 'spec': spec, 'role': role, 'pulls': nights * 18,
+                'kills': nights, 'nights': nights, 'last_seen': last_seen}
+
+    def test_players_group_characters_by_their_owner(self):
+        from raidanalysis.web import routes
+        c = self.char
+        roster = [c('Boopsboops', 'Monk', 'Mistweaver', 'healer', 8), c('Boopsproops', 'Evoker', 'Preservation', 'healer', 3),
+                  c('Naautilus', 'DemonHunter', 'Devourer', 'dps', 9), c('Gastronomic', 'Druid', 'Restoration', 'healer', 10),
+                  c('Pugsy', 'Warrior', 'Arms', 'dps', 1)]
+        # Naautilus and Gastronomic share a Battle.net account, but signed up as themselves: two players
+        owners = {'boopsboops': {'key': 'd1', 'display': 'Boops'}, 'boopsproops': {'key': 'd1', 'display': 'Boops'},
+                  'naautilus': {'key': 'd2', 'display': 'Naau'}, 'gastronomic': {'key': 'd3', 'display': 'Gastro'}}
+        players = routes._players(roster, owners)
+        self.assertEqual([(p['main']['name'], [a['name'] for a in p['alts']], p['nights']) for p in players],
+                         [('Boopsboops', ['Boopsproops'], 11), ('Gastronomic', [], 10), ('Naautilus', [], 9)])  # no pug
+        # Nobody known at all (a fresh install): everyone, one each
+        self.assertEqual(len(routes._players(roster, {})), 5)
+        html = routes._home_characters(players, {('boopsproops', 'frostwhisper'): {'avatar': 'https://render.worldofwarcraft.com/eu/x-avatar.jpg'}})
+        self.assertIn('href="/admin/raids/character/frostwhisper/Boopsboops"', html)
+        self.assertIn('data-alt data-search="boopsproops frostwhisper preservation evoker"', html)  # the alt's face
+        self.assertIn('x-avatar.jpg', html)
+        self.assertIn('boops', html.split('class="pl-tile"')[1].split('data-search="')[1].split('"')[0])  # Discord name
+        public = routes._home_characters(players, public=True)
+        self.assertNotIn('Played by', public)
+        self.assertNotIn(' gastro"', public)
+
     def test_front_page_characters_tab(self):
         from raidanalysis.web import routes
-        html = routes._home_characters([{'name': 'Futhark', 'realm': 'Frostwhisper', 'class': 'Hunter', 'spec': 'Survival',
-                                         'role': 'dps', 'pulls': 9, 'kills': 1, 'nights': 2, 'last_seen': 1757000000000}])
+        html = routes._home_characters(routes._players([self.char('Futhark', 'Hunter', 'Survival', 'dps', 2)], {}))
         self.assertIn('href="/admin/raids/character/frostwhisper/Futhark"', html)
         self.assertIn('data-search="futhark frostwhisper survival hunter"', html)
-        self.assertIn('Search 1 characters', html)
-        self.assertEqual(routes._home_href({'tier': '3'}, 'bosses'), '/admin/raids?tier=3')
+        self.assertIn('1 players · 1 characters', html)
+        self.assertEqual(routes._home_href({'tier': '3'}, 'nights'), '/admin/raids?tier=3')  # the default tab
+        self.assertEqual(routes._home_href({'tier': '3'}, 'bosses'), '/admin/raids?tier=3&tab=bosses')
         self.assertEqual(routes._home_href({}, 'characters'), '/admin/raids?tab=characters')
 
 
