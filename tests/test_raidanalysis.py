@@ -1983,6 +1983,49 @@ class TestCharacterPage(unittest.TestCase):
         self.assertNotIn('Played by', public)
         self.assertNotIn(' gastro"', public)
 
+    def test_regulars_are_who_raided_lately(self):
+        from raidanalysis.web import routes
+        nights = list(range(1, 13))  # 12 nights; the latest 6 are 7-12
+
+        def c(name, starts, cls='Priest'):
+            row = self.char(name, cls, 'Holy', 'healer', len(starts))
+            return dict(row, night_starts=list(starts))
+        roster = [c('Veteran', nights[:6]),            # 6 nights, but none lately: "also raided"
+                  c('Everyother', [8, 10, 12]),        # every other week: a regular
+                  c('Newhealer', [11, 12]),            # joined the last two: a regular straight away
+                  c('Once', [12]),                     # one of the latest: not yet
+                  c('Mainy', nights[6:11]), c('Alty', [11, 12], 'Evoker'),
+                  c('Stonasloth', nights[6:], 'Paladin')]  # in every raid, but nobody signed up with or linked him
+        owners = {n: {'key': n, 'display': None} for n in ('veteran', 'everyother', 'newhealer', 'once', 'mainy')}
+        owners['alty'] = owners['mainy']
+        players = routes._players(roster, owners)
+        mainy = next(p for p in players if p['main']['name'] == 'Mainy')
+        self.assertEqual(mainy['nights'], 6)  # night 11 on both characters counts once
+        regulars, rest = routes._regulars(players)
+        self.assertEqual(sorted(p['main']['name'] for p in regulars), ['Everyother', 'Mainy', 'Newhealer'])
+        self.assertEqual(sorted(p['main']['name'] for p in rest), ['Once', 'Veteran'])
+        # The one left out for not being linked: named for officers, never on the public site
+        unlinked = routes._unlinked(roster, owners)
+        self.assertEqual([(ch['name'], n) for ch, n in unlinked], [('Stonasloth', 6)])
+        self.assertIn('Stonasloth</a> (6 of the last 6)', routes._home_characters(players, unlinked=unlinked))
+        self.assertNotIn('Stonasloth', routes._home_characters(players, public=True, unlinked=unlinked))
+
+    def test_character_page_knows_the_players_other_characters(self):
+        import json
+        from raidanalysis.web import character as cview
+        prof = {'name': 'Boopsproops', 'realm': 'Frostwhisper'}
+        chars = [self.char('Boopsboops', 'Monk', 'Mistweaver', 'healer', 8),
+                 self.char('Boopsproops', 'Evoker', 'Preservation', 'healer', 3)]
+        images = {('boopsboops', 'frostwhisper'): {'avatar': 'https://render.worldofwarcraft.com/eu/b-avatar.jpg'}}
+        tabs = cview.switcher(prof, chars, images)
+        self.assertIn('href="/admin/raids/character/frostwhisper/Boopsboops"', tabs)
+        self.assertEqual(tabs.count('ch-switch-tab active'), 1)
+        self.assertIn('aria-current=page', tabs.split('Boopsproops')[0][-400:] + tabs)  # this one is lit
+        alts = cview.pin_alts(prof, chars, images)
+        self.assertEqual([(a['name'], a['img']) for a in alts], [('Boopsboops', 'https://render.worldofwarcraft.com/eu/b-avatar.jpg')])
+        json.dumps(alts)  # goes into the 📌's data
+        self.assertEqual(cview.switcher(prof, [], images), '')  # one character: no switcher
+
     def test_front_page_characters_tab(self):
         from raidanalysis.web import routes
         html = routes._home_characters(routes._players([self.char('Futhark', 'Hunter', 'Survival', 'dps', 2)], {}))

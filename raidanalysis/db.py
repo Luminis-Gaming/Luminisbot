@@ -746,21 +746,26 @@ _SLIM_ANALYSIS = """
 """
 
 
-def list_characters(zone_id=None, difficulty=None, team=None):
+def list_characters(zone_id=None, difficulty=None, team=None, names=None):
     """
     Everyone in our own logs (imports left out - they may be anyone's raid), most nights first:
-    [{'name', 'class', 'spec', 'role', 'pulls', 'kills', 'nights', 'last_seen'}] - spec / role as last played.
+    [{'name', 'class', 'spec', 'role', 'pulls', 'kills', 'nights', 'last_seen', 'night_starts' (when each of those
+    nights began: who's been in the latest ones)}] - spec / role as last played.
+    names: only these characters (lower case) - a player's characters on the character page.
     """
     where, params = _filters(zone_id, difficulty)
     if team:
         team_where, team_params = teams.sql_filter(team)
         where, params = where + team_where, params + team_params
+    if names is not None:
+        where, params = where + " AND lower(x->>'name') = ANY(%s)", params + [list(names)]
     rows = _run(f"""
         SELECT x->>'name' AS name, rr.realm, MAX(x->>'class') AS class,
                (array_agg(x->>'spec' ORDER BY r.start_time DESC))[1] AS spec,
                (array_agg(x->>'role' ORDER BY r.start_time DESC))[1] AS role,
                COUNT(*) AS pulls, COUNT(*) FILTER (WHERE p.kill) AS kills,
-               COUNT(DISTINCT r.code) AS nights, MAX(r.start_time) AS last_seen
+               COUNT(DISTINCT r.code) AS nights, MAX(r.start_time) AS last_seen,
+               array_agg(DISTINCT r.start_time) AS night_starts
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         {_EVENT_JOIN}
         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(p.analysis->'players', '[]'::jsonb)) x
@@ -788,6 +793,9 @@ def _merge_unknown_realms(rows):
             for u in unknown:
                 for key in ('pulls', 'kills', 'nights'):
                     into[key] += u[key]
+                if into.get('night_starts') is not None:
+                    into['night_starts'] = sorted(set(into['night_starts']) | set(u.get('night_starts') or ()))
+                    into['nights'] = len(into['night_starts'])
                 if u['last_seen'] > into['last_seen']:
                     into.update(last_seen=u['last_seen'], spec=u['spec'], role=u['role'])
             group = known

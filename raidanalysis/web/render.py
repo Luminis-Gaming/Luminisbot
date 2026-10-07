@@ -616,6 +616,21 @@ tr[data-href]:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .ch-bosscell { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .ch-scope { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: -6px; }
 .ch-hero.no-model { grid-template-columns: 1fr; }
+/* The player's characters over their character page: this one lit, the others a click away */
+.ch-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -4px 0 14px; }
+.ch-switch .ch-flabel { margin-right: 4px; }
+.ch-switch-tab { display: inline-flex; align-items: center; gap: 9px; padding: 5px 14px 5px 5px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); opacity: 0.75;
+    transition: opacity 0.15s, border-color 0.15s, background-color 0.15s, transform 0.1s; }
+.ch-switch-tab:hover { text-decoration: none; opacity: 1; border-color: color-mix(in srgb, var(--c) 55%, var(--border)); }
+.ch-switch-tab.active { opacity: 1; border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, var(--surface));
+    box-shadow: 0 0 16px color-mix(in srgb, var(--c) 22%, transparent); }
+.ch-switch-tab b { display: block; color: var(--c); font-size: 13.5px; line-height: 1.2; }
+.ch-switch-tab small { display: block; color: var(--faint); font-size: 11.5px; }
+.ch-switch-face { width: 32px; height: 32px; border-radius: 50%; overflow: hidden; flex: none; display: grid; place-items: center;
+    color: var(--c); font-weight: 700; background: var(--surface-3);
+    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--c) 70%, transparent); }
+.ch-switch-face img { width: 100%; height: 100%; display: block; }
 .ch-filters { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 14px; }
 .ch-filters .ch-chips { margin: 0; }
 .ch-filters .ch-chip { padding: 4px 11px; font-size: 12.5px; }
@@ -702,8 +717,13 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .pl-tile .pin-btn.mini.on { opacity: 1; }
 .pl-also { margin: 18px 0 10px; }
 .pl-also summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
-.pl-names { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 13px; }
+.pl-names { display: flex; flex-wrap: wrap; gap: 10px 20px; margin-top: 12px; font-size: 13px; }
+.pl-other { display: inline-flex; align-items: center; }
 .pl-other a { color: var(--c); font-weight: 600; }
+.pl-other a[data-main] { display: inline-flex; align-items: center; gap: 7px; }
+.pl-face { width: 24px; height: 24px; border-radius: 50%; overflow: hidden; flex: none; display: grid; place-items: center;
+    font-size: 11px; background: var(--surface-3); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--c) 65%, transparent); }
+.pl-face img { width: 100%; height: 100%; display: block; }
 .pl-other a + a { margin-left: 6px; font-weight: 500; font-size: 12px; opacity: 0.75; }
 .pl-other a + a::before { content: '· '; color: var(--faint); }
 .pl-other a.hit { opacity: 1; text-decoration: underline; }
@@ -717,6 +737,14 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .pin-face { width: 26px; height: 26px; border-radius: 50%; overflow: hidden; flex: none; display: grid; place-items: center;
     background: var(--surface-3); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--c) 70%, transparent); font-size: 12px; }
 .pin-face img { width: 100%; height: 100%; display: block; }
+.pin-chip .pin-alt-link { display: inline-flex; padding: 3px 1px; }
+.pin-chip a + .pin-alt-link { margin-left: 4px; }
+.pin-alt { width: 20px; height: 20px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; font-size: 10px;
+    color: var(--c); background: var(--surface-3); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--c) 70%, transparent);
+    opacity: 0.8; transition: opacity 0.15s, transform 0.15s; }
+.pin-alt img { width: 100%; height: 100%; display: block; }
+.pin-chip .pin-alt-link:hover { text-decoration: none; filter: none; }
+.pin-chip .pin-alt-link:hover .pin-alt { opacity: 1; transform: scale(1.15); }
 .pin-chip a small { color: var(--faint); font-weight: 500; margin-left: 4px; }
 .pin-chip a:hover { text-decoration: none; filter: brightness(1.2); }
 .pin-chip button { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 5px 10px 5px 6px; font-size: 14px; }
@@ -1754,6 +1782,14 @@ document.addEventListener('click', e => {
   e.preventDefault();
   swapTo(hrefOf(link), link.dataset.swap || 'page', !!link.dataset.swap);
 });
+// Filter forms (the front page's tier / difficulty / team): a changed choice swaps the results in like a link -
+// the loading bar along the top and the old list fading while it loads - instead of a silent full page load.
+onEach('form[data-swap-form]', form => form.addEventListener('change', () => {
+  const url = new URL(form.getAttribute('action') || location.pathname, location.href);
+  new FormData(form).forEach((value, key) => url.searchParams.set(key, value));
+  form.querySelectorAll('select').forEach(s => { s.disabled = true; });  // one change at a time
+  swapTo(url.href, form.dataset.swapForm, true);
+}));
 // Table rows that open a page (a pull, a player, a boss): soft navigation too, a new tab with Ctrl / Cmd /
 // middle click, and a prefetch on hover - like links. Clicks on a link, button or form inside go there.
 onEach('tr[data-href]', tr => {
@@ -1780,6 +1816,9 @@ const PIN_KEY = 'raid-pins';
 const readPins = () => { try { return JSON.parse(localStorage.getItem(PIN_KEY)) || []; } catch (e) { return []; } };
 const writePins = pins => { try { localStorage.setItem(PIN_KEY, JSON.stringify(pins)); } catch (e) { /* private mode */ } };
 const samePin = (a, b) => a.name === b.name && (a.realm || '') === (b.realm || '');
+// A pin is a player's: the character pinned from (highlighted) plus their alts - any of them is that pin.
+const charsOf = p => [p].concat(Array.isArray(p.alts) ? p.alts : []);
+const samePlayer = (a, b) => charsOf(a).some(x => charsOf(b).some(y => samePin(x, y)));
 const isFace = url => typeof url === 'string' && url.startsWith('https://render.worldofwarcraft.com/')
   && url.endsWith('-avatar.jpg');  // Blizzard's head portraits only (set as .src - no markup involved)
 const showPinState = () => {
@@ -1787,39 +1826,61 @@ const showPinState = () => {
   let faces = false;
   document.querySelectorAll('.pin-btn[data-pin]').forEach(btn => {
     let me; try { me = JSON.parse(btn.dataset.pin); } catch (e) { return; }
-    const pinned = pins.find(p => samePin(p, me));
-    if (pinned && me.img && pinned.img !== me.img) { pinned.img = me.img; faces = true; }  // pinned before we had a face
+    const pinned = pins.find(p => samePlayer(p, me));
+    if (pinned && samePin(pinned, me)) {  // the very character pinned: catch up on a face / alts it was pinned without
+      if (me.img && pinned.img !== me.img) { pinned.img = me.img; faces = true; }
+      if (me.alts && me.alts.length && JSON.stringify(pinned.alts || []) !== JSON.stringify(me.alts)) {
+        pinned.alts = me.alts; faces = true;
+      }
+    }
     const on = !!pinned;
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     if (!btn.classList.contains('mini')) btn.textContent = on ? '📌 Pinned' : '📌 Pin';
-    btn.title = on ? 'Unpin from the front page' : 'Pin to the front page - kept in this browser only';
+    btn.title = on ? (samePin(pinned, me) ? 'Unpin from the front page'
+                                            : 'Pinned as ' + pinned.name + ' - unpin the player from the front page')
+                   : 'Pin to the front page - kept in this browser only';
   });
   if (faces) writePins(pins);
   document.querySelectorAll('[data-pins]').forEach(box => {
     let colors = {}; try { colors = JSON.parse(box.querySelector('.pins-colors').textContent); } catch (e) { /* none */ }
     const list = box.querySelector('.pins-list');
+    const href = c => box.dataset.base + (c.realm ? encodeURIComponent(c.realm) + '/' : '') + encodeURIComponent(c.name);
+    const faceOf = (c, cls) => {
+      const face = document.createElement('span');
+      face.className = cls;
+      if (isFace(c.img)) {
+        const img = document.createElement('img');
+        img.src = c.img; img.alt = ''; img.loading = 'lazy';
+        face.appendChild(img);
+      } else {
+        face.textContent = (c.name || '?').slice(0, 1);
+      }
+      return face;
+    };
     list.replaceChildren(...pins.map(p => {
       const chip = document.createElement('span');
       chip.className = 'pin-chip';
       chip.style.setProperty('--c', colors[p.cls] || '#9aa1b9');
       const a = document.createElement('a');
-      a.href = box.dataset.base + (p.realm ? encodeURIComponent(p.realm) + '/' : '') + encodeURIComponent(p.name);
-      const face = document.createElement('span');
-      face.className = 'pin-face';
-      if (isFace(p.img)) {
-        const img = document.createElement('img');
-        img.src = p.img; img.alt = ''; img.loading = 'lazy';
-        face.appendChild(img);
-      } else {
-        face.textContent = (p.name || '?').slice(0, 1);
-      }
-      a.append(face, document.createTextNode(p.name));
+      a.href = href(p);
+      a.append(faceOf(p, 'pin-face'), document.createTextNode(p.name));
       if (p.spec) { const s = document.createElement('small'); s.textContent = p.spec; a.appendChild(s); }
+      chip.appendChild(a);
+      (Array.isArray(p.alts) ? p.alts : []).slice(0, 6).forEach(alt => {  // their other characters, one click away
+        const link = faceOf(alt, 'pin-alt');
+        const al = document.createElement('a');
+        al.href = href(alt); al.className = 'pin-alt-link';
+        al.title = alt.name + (alt.spec ? ' - ' + alt.spec : '');
+        al.setAttribute('aria-label', alt.name);
+        al.style.setProperty('--c', colors[alt.cls] || '#9aa1b9');
+        al.appendChild(link);
+        chip.appendChild(al);
+      });
       const x = document.createElement('button');
       x.type = 'button'; x.textContent = '×'; x.title = 'Unpin'; x.setAttribute('aria-label', 'Unpin ' + p.name);
-      x.addEventListener('click', () => { writePins(readPins().filter(q => !samePin(q, p))); showPinState(); });
-      chip.append(a, x);
+      x.addEventListener('click', () => { writePins(readPins().filter(q => !samePlayer(q, p))); showPinState(); });
+      chip.appendChild(x);
       return chip;
     }));
     box.hidden = !pins.length;
@@ -1828,8 +1889,8 @@ const showPinState = () => {
 onEach('.pin-btn[data-pin]', btn => btn.addEventListener('click', e => {
   e.preventDefault();
   let me; try { me = JSON.parse(btn.dataset.pin); } catch (err) { return; }
-  const pins = readPins();
-  writePins(pins.some(p => samePin(p, me)) ? pins.filter(p => !samePin(p, me)) : pins.concat([me]).slice(-24));
+  const pins = readPins();  // one pin per player: pinned (on any of their characters) - unpin them all
+  writePins(pins.some(p => samePlayer(p, me)) ? pins.filter(p => !samePlayer(p, me)) : pins.concat([me]).slice(-24));
   showPinState();
 }));
 onEach('[data-pins]', showPinState);

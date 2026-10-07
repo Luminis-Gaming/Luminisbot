@@ -18,6 +18,22 @@ def roster(zone_id=None, difficulty=None, team=None):
     return db.list_characters(zone_id, difficulty, team)
 
 
+def player_characters(name):
+    """
+    Every character of the player behind this one (db.character_owners: raid signups first, then linked Battle.net
+    characters), this one included, most nights first - [] when nobody owns it or it's their only one.
+    """
+    owners = db.character_owners()
+    me = owners.get(name.lower())
+    if not me:
+        return []
+    names = {n for n, o in owners.items() if o['key'] == me['key']}
+    if len(names) < 2:
+        return []
+    chars = db.list_characters(names=names)
+    return sorted(chars, key=lambda c: (-c['nights'], -c['last_seen'], c['name'])) if len(chars) > 1 else []
+
+
 def resolve(name, realm_slug=None):
     """
     (realm or None, [other realms]) for a URL's name (and realm slug): the realm we know it on that matches the

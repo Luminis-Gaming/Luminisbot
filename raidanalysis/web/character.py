@@ -226,7 +226,7 @@ def _scope(prof):
     return f'{tier} · {diff}'
 
 
-def hero(prof, data, back_href, with_model=True):
+def hero(prof, data, back_href, with_model=True, alts=()):
     """
     Name, class / spec / realm, the pin button, key numbers (of the chosen tier and difficulty) and links -
     and their render, unless the gear panel right under it shows it. Swapped in place with the gear when the
@@ -249,7 +249,8 @@ def hero(prof, data, back_href, with_model=True):
         tiles.append((f'{float(info["ilvl"]):.0f}', 'Item level'))
     tiles_html = ''.join(f'<div class="ch-tile"><b>{v}</b><span>{label}</span></div>' for v, label in tiles)
     pin = json.dumps({'name': prof['name'], 'realm': armory.realm_slug(prof['realm']) if prof['realm'] else '',
-                      'cls': prof['class'], 'spec': prof['spec'], 'img': (armory.avatar_url(data) if data else '') or ''})
+                      'cls': prof['class'], 'spec': prof['spec'], 'img': (armory.avatar_url(data) if data else '') or '',
+                      'alts': list(alts)})
     slug = armory.realm_slug(prof['realm']) if prof['realm'] else ''
     links = [f'<a class="btn btn-primary btn-sm" href="{esc(back_href)}">Latest night →</a>']
     if slug:
@@ -467,10 +468,43 @@ def filters(prof):
             f'<span class="ch-flabel">Difficulty</span><div class="ch-chips">{"".join(diff_chips)}</div></div>')
 
 
-def page(prof, data, armory_html):
+def _is_me(prof, c):
+    return c['name'] == prof['name'] and armory.realm_slug(c['realm'] or '') == armory.realm_slug(prof['realm'] or '')
+
+
+def pin_alts(prof, chars, images):
+    """The player's other characters for this page's 📌: a pin is the player's, this character highlighted."""
+    return [{'name': c['name'], 'realm': armory.realm_slug(c['realm']) if c['realm'] else '', 'cls': c['class'],
+             'spec': c['spec'], 'img': (images.get((c['name'].lower(), armory.realm_slug(c['realm'] or ''))) or {}).get('avatar') or ''}
+            for c in chars if not _is_me(prof, c)]
+
+
+def switcher(prof, chars, images):
+    """The player's characters as tabs over the page - this one lit, the others a click away (most played first)."""
+    if not chars:
+        return ''
+    tabs = []
+    for c in chars:
+        color = CLASS_COLORS.get(c['class'], '#9aa1b9')
+        avatar = (images.get((c['name'].lower(), armory.realm_slug(c['realm'] or ''))) or {}).get('avatar')
+        face = f'<img src="{esc(avatar)}" alt="" loading="lazy">' if avatar else esc(c['name'][:1])
+        me = _is_me(prof, c)
+        tabs.append(f'<a class="ch-switch-tab{" active" if me else ""}" style="--c:{color}" data-swap="page" '
+                    f'href="{url(c["name"], c["realm"])}"{" aria-current=page" if me else ""} '
+                    f'title="{esc(c["name"])} - {c["nights"]} night{"s" if c["nights"] != 1 else ""}">'
+                    f'<span class="ch-switch-face">{face}</span><span><b>{esc(c["name"])}</b>'
+                    f'<small>{esc(c["spec"] or _class_label(c["class"]))}</small></span></a>')
+    return f'<nav class="ch-switch" aria-label="Their characters"><span class="ch-flabel">Characters</span>{"".join(tabs)}</nav>'
+
+
+def page(prof, data, armory_html, chars=(), images=None):
+    """chars: the player's characters (character.player_characters) - a switcher on top, and on the 📌."""
+    images = images or {}
     latest = prof['nights'][-1]
     main = max(latest['entries'], key=lambda e: (e['difficulty'], e['pulls']))
-    return (hero(prof, data, player_href(latest['code'], prof['name'], main['key']), with_model=not data)
+    return (switcher(prof, chars, images)
+            + hero(prof, data, player_href(latest['code'], prof['name'], main['key']), with_model=not data,
+                   alts=pin_alts(prof, chars, images))
             + armory_html + filters(prof)
             + highlights(prof) + improvement(prof) + bosses(prof) + logs(prof))
 

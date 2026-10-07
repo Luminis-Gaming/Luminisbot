@@ -372,10 +372,12 @@ def _overview_filters(request, tiers, tab=None):
     team_options = f'<option value="{teams.ALL}"{" selected" if team is None else ""}>All teams</option>' + ''.join(
         f'<option value="{key}"{" selected" if key == team else ""}>{esc(teams.label(key))}</option>'
         for key, _ in teams.options())
-    bar = (f'<form method="get" class="filter-bar">'
-           f'<label>Raid tier <select name="tier" onchange="this.form.submit()">{tier_options}</select></label>'
-           f'<label>Difficulty <select name="difficulty" onchange="this.form.submit()">{diff_options}</select></label>'
-           f'<label>Team <select name="team" onchange="this.form.submit()">{team_options}</select></label>'
+    # PAGE_JS swaps the results in as soon as a choice changes (data-swap-form: the loading bar, the old list
+    # fading) - the Filter button is only for browsers without JavaScript
+    bar = (f'<form method="get" class="filter-bar" data-swap-form="home">'
+           f'<label>Raid tier <select name="tier">{tier_options}</select></label>'
+           f'<label>Difficulty <select name="difficulty">{diff_options}</select></label>'
+           f'<label>Team <select name="team">{team_options}</select></label>'
            f'<input type="hidden" name="pick" value="1">'
            + (f'<input type="hidden" name="tab" value="{esc(tab)}">' if tab else '') +
            f'<noscript><button class="btn btn-secondary btn-sm">Filter</button></noscript></form>')
@@ -421,10 +423,12 @@ async def handle_overview(request):
         content = _home_nights(db.list_reports(limit=40, zone_id=zone_id, difficulty=difficulty, team=team))
     else:
         from .. import armory, character
-        players = _players(character.roster(zone_id, difficulty, team), db.character_owners())
+        roster, owners = _roster(zone_id, difficulty, team), db.character_owners()
+        players = _players(roster, owners)
         images = armory.portraits()
         _fill_portraits(players, images)
-        content = _home_characters(players, images, public=session is PUBLIC_SESSION)
+        content = _home_characters(players, images, public=session is PUBLIC_SESSION,
+                                   unlinked=_unlinked(roster, owners))
     filters = {k: v for k, v in request.query.items() if k in ('tier', 'difficulty', 'team')}
     tabs = ''.join(
         f'<a class="ptab{" active" if key == tab else ""}" data-swap="home" href="{_home_href(filters, key)}">'
@@ -515,7 +519,9 @@ def _home_nights(reports):
         </table></div>"""
 
 
-REGULAR_SHARE = 0.3        # in at least this share of the most-seen character's nights: a regular (a portrait)
+RECENT_NIGHTS, RECENT_MIN = 6, 2  # a regular (a portrait): in at least 2 of the latest 6 nights (of the filters) -
+                                  # every-other-week raiders too; who raided a lot but not lately is "also raided"
+REGULAR_SHARE = 0.3        # ...without night dates: in at least this share of the most-seen player's nights
 PORTRAIT_FILLS_PER_VIEW = 3  # regulars without a stored picture: fetched in the background, this many per view
 ROLE_GROUPS = (('tank', '🛡️', 'Tanks'), ('healer', '💚', 'Healers'), ('dps', '⚔️', 'DPS'))
 
@@ -539,24 +545,65 @@ def _players(roster, owners):
     out = []
     for g in groups.values():
         chars = sorted(g['chars'], key=lambda c: (-c['nights'], -c['last_seen'], c['name']))
-        out.append({'main': chars[0], 'alts': chars[1:], 'nights': sum(c['nights'] for c in chars),
-                    'display': g['display']})
+        starts = {t for c in chars for t in c.get('night_starts') or ()}
+        out.append({'main': chars[0], 'alts': chars[1:], 'display': g['display'], 'night_starts': starts,
+                    # one night on two of their characters is one night
+                    'nights': len(starts) if starts else sum(c['nights'] for c in chars)})
     return sorted(out, key=lambda p: (-p['nights'], p['main']['name']))
 
 
+_roster_cache = {}  # (tier, difficulty, team, last sync) -> roster: it only changes when a sync brings in logs
+
+
+def _roster(zone_id, difficulty, team):
+    """character.roster() - expanding every player of every pull is the slow part of the Players tab: kept per sync."""
+    from .. import character
+    key = (zone_id, difficulty, team, sync.status.get('last_finished'))
+    if key not in _roster_cache:
+        if len(_roster_cache) > 50:
+            _roster_cache.clear()
+        _roster_cache[key] = character.roster(zone_id, difficulty, team)
+    return _roster_cache[key]
+
+
+def _unlinked(roster, owners):
+    """
+    [(character, nights of the latest RECENT_NIGHTS)] - characters in the latest nights (a regular's share) that
+    nobody has signed up with or linked, so the Players tab leaves them out like a pug: officers get a hint.
+    """
+    if not owners:
+        return []
+    latest = set(sorted({t for c in roster for t in c.get('night_starts') or ()}, reverse=True)[:RECENT_NIGHTS])
+    need = min(RECENT_MIN, len(latest))
+    found = [(c, len(set(c.get('night_starts') or ()) & latest)) for c in roster if c['name'].lower() not in owners]
+    return sorted((x for x in found if latest and x[1] >= need), key=lambda x: (-x[1], x[0]['name']))
+
+
 def _regulars(players):
-    """(regulars, the rest): in at least REGULAR_SHARE of the top nights - everyone while the tier is young."""
+    """
+    (regulars, the rest): in at least RECENT_MIN of the latest RECENT_NIGHTS nights (fewer nights than that so
+    far: in any of them). Without night dates: REGULAR_SHARE of the top player's nights.
+    """
     import math
-    top = max((p['nights'] for p in players), default=0)
-    need = max(1, math.ceil(REGULAR_SHARE * top))
-    return [p for p in players if p['nights'] >= need], [p for p in players if p['nights'] < need]
+    latest = set(sorted({t for p in players for t in p.get('night_starts') or ()}, reverse=True)[:RECENT_NIGHTS])
+    if latest:
+        need = min(RECENT_MIN, len(latest))
+        regular = lambda p: len(set(p.get('night_starts') or ()) & latest) >= need  # noqa: E731
+    else:
+        need = max(1, math.ceil(REGULAR_SHARE * max((p['nights'] for p in players), default=0)))
+        regular = lambda p: p['nights'] >= need  # noqa: E731
+    return [p for p in players if regular(p)], [p for p in players if not regular(p)]
 
 
 def _fill_portraits(players, images):
-    """Regulars' characters we've no picture of (never opened, not linked): a few fetched in the background per view."""
+    """
+    Characters we've no picture of (never opened, not linked): a few fetched in the background per view - the
+    regulars' first, then everyone else's.
+    """
     from .. import armory
     started = 0
-    for c in (c for p in _regulars(players)[0] for c in [p['main']] + p['alts']):
+    regulars, rest = _regulars(players)
+    for c in (c for p in regulars + rest for c in [p['main']] + p['alts']):
         if started >= PORTRAIT_FILLS_PER_VIEW:
             break
         if c['realm'] and (c['name'].lower(), armory.realm_slug(c['realm'])) not in images \
@@ -564,13 +611,14 @@ def _fill_portraits(players, images):
             started += 1
 
 
-def _home_characters(players, images=None, public=False):
+def _home_characters(players, images=None, public=False, unlinked=()):
     """
     The Players tab - for finding yourself, so it's quiet: the regulars as a wall of portraits grouped by role -
     their main's render, name in class colour and spec (the numbers in the tooltip), their other characters as
     small faces underneath, each a link to that character - and the ones who've only been in a few of these logs
     as a collapsed list. One search covers every character (and, signed in, the Discord name): finding an alt
-    finds its player, with that alt lit up. images: armory.portraits(). public: no Discord names.
+    finds its player, with that alt lit up. images: armory.portraits(). public: no Discord names. unlinked:
+    _unlinked() - named for officers (never on the public site), so someone can nudge them.
     """
     import json
     from datetime import datetime, timezone
@@ -614,7 +662,11 @@ def _home_characters(players, images=None, public=False):
                    else f'<b class="pl-initial">{esc(c["name"][:1])}</b>')
             who = f"\nPlayed by {p['display']}" if p['display'] and not public else ''
             pin = json.dumps({'name': c['name'], 'realm': armory.realm_slug(c['realm']) if c['realm'] else '',
-                              'cls': c['class'], 'spec': c['spec'], 'img': m['pic'].get('avatar') or ''})
+                              'cls': c['class'], 'spec': c['spec'], 'img': m['pic'].get('avatar') or '',
+                              # the pinned chip shows their alts too, each a link
+                              'alts': [{'name': a['name'], 'realm': armory.realm_slug(a['realm']) if a['realm'] else '',
+                                        'cls': a['class'], 'spec': a['spec'], 'img': x['pic'].get('avatar') or ''}
+                                       for a, x in zip(alts, xs)]})
             faces = ''.join(alt_face(a, x) for a, x in zip(alts, xs))
             tiles.append(f"""
                 <div class="pl-tile" style="--c:{m['color']}" data-search="{esc(player_search(p, [m] + xs))}">
@@ -634,12 +686,19 @@ def _home_characters(players, images=None, public=False):
         m, xs = info(p['main']), [info(a) for a in p['alts']]
         alts = ''.join(f'<a data-alt data-search="{esc(x["search"])}" style="--c:{x["color"]}" href="{x["href"]}" '
                        f'title="{esc(x["tip"])}">{esc(a["name"])}</a>' for a, x in zip(p['alts'], xs))
+        face = (f'<img src="{esc(m["pic"]["avatar"])}" alt="" loading="lazy">' if m['pic'].get('avatar') else
+                esc(p['main']['name'][:1]))
         others.append(f'<span class="pl-other" data-search="{esc(player_search(p, [m] + xs))}">'
                       f'<a data-main data-search="{esc(m["search"])}" style="--c:{m["color"]}" href="{m["href"]}" '
-                      f'title="{esc(m["tip"])}">{esc(p["main"]["name"])}</a>{alts}</span>')
+                      f'title="{esc(m["tip"])}"><span class="pl-face">{face}</span>{esc(p["main"]["name"])}</a>{alts}</span>')
     also = (f'<details class="pl-also"><summary>Also raided a few of these nights <span class="muted">'
             f'({len(others)})</span></summary><div class="pl-names">{"".join(others)}</div></details>' if others else '')
     count = sum(1 + len(p['alts']) for p in players)
+    missing = '' if public or not unlinked else (
+        '<p class="muted small pl-unlinked">👻 Not shown - in the latest nights, but nobody has signed up with or '
+        '/connectwow-linked them yet: ' + ', '.join(
+            f'<a style="color:{CLASS_COLORS.get(c["class"], "#9aa1b9")}" href="{cview.url(c["name"], c["realm"])}">'
+            f'{esc(c["name"])}</a> ({n} of the last {RECENT_NIGHTS})' for c, n in unlinked) + '</p>')
     return f"""
         <div class="ch-find" data-ch-find>
             <input type="search" class="ch-search" placeholder="🔎 Find a player - any of their characters, realm, class or spec"
@@ -648,6 +707,7 @@ def _home_characters(players, images=None, public=False):
         </div>
         {''.join(groups)}
         {also}
+        {missing}
         <p class="muted small ch-none" hidden>Nobody matches that.</p>
         <p class="muted small">From the raid tier, difficulty and team above - imported logs and characters nobody
            has signed up with or linked (pugs) aren't counted. Hover a character for their numbers; the small faces
@@ -692,7 +752,8 @@ async def handle_character(request):
         refreshing = _refresh_armory(prof['latest_code'], name, realm, stale)
         gear = armory_view.tab(data, {'name': name, 'class': prof['class']}, stale, embedded=True,
                                refreshing=refreshing)
-    return _page(name, session, cview.page(prof, data, gear))
+    chars = character.player_characters(name)  # the player's other characters: a switcher, and on their pin
+    return _page(name, session, cview.page(prof, data, gear, chars, armory.portraits() if chars else {}))
 
 
 ARMORY_RETRY_SECONDS = 15 * 60
