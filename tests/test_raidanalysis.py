@@ -2638,3 +2638,67 @@ class TestSharedPageCache(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(routes._body_key(visit, True), warmed)
             other = make_mocked_request('GET', '/raids', headers={'Cookie': 'raid_team=sun; raid_home_tab=characters'})
             self.assertNotEqual(routes._body_key(other, True), warmed)
+
+
+class TestWCLTokenRefresh(unittest.TestCase):
+    """wcl.query(): a cached token WCL stopped accepting (401) is replaced, not used until a restart."""
+
+    class Resp:
+        def __init__(self, status, body=None):
+            self.status, self.body, self.headers = status, body or {}, {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def json(self):
+            return self.body
+
+        async def text(self):
+            return '{"error":"Unauthenticated."}'
+
+    class Session:
+        def __init__(self, responses, token_status=200):
+            self.responses, self.token_status, self.auth_headers, self.token_requests = list(responses), token_status, [], 0
+
+        def post(self, url, json=None, headers=None, data=None, auth=None):
+            if 'oauth/token' in url:
+                self.token_requests += 1
+                return TestWCLTokenRefresh.Resp(self.token_status, {'access_token': 'fresh', 'expires_in': 3600})
+            self.auth_headers.append(headers['Authorization'])
+            return self.responses.pop(0)
+
+    def setUp(self):
+        import time
+        from unittest import mock
+        import wcl_api
+        from raidanalysis import wcl
+        self.wcl = wcl
+        for patch in (mock.patch.object(wcl, '_token', 'revoked'), mock.patch.object(wcl, '_token_expires', time.time() + 9e6),
+                      mock.patch.object(wcl_api, 'WCL_CLIENT_ID', 'id'), mock.patch.object(wcl_api, 'WCL_CLIENT_SECRET', 'secret')):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_rejected_token_is_replaced_and_the_query_retried(self):
+        import asyncio
+        session = self.Session([self.Resp(401), self.Resp(200, {'data': {'ok': 1}})])
+        self.assertEqual(asyncio.run(self.wcl.query(session, '{ ok }')), {'ok': 1})
+        self.assertEqual(session.auth_headers, ['Bearer revoked', 'Bearer fresh'])
+        self.assertEqual(self.wcl._token, 'fresh')
+
+    def test_only_one_retry(self):
+        import asyncio
+        session = self.Session([self.Resp(401), self.Resp(401)])
+        with self.assertRaises(self.wcl.WCLError) as caught:
+            asyncio.run(self.wcl.query(session, '{ ok }'))
+        self.assertIn('401', str(caught.exception))
+        self.assertEqual(session.token_requests, 1)
+
+    def test_rejected_credentials_say_so(self):
+        import asyncio
+        session = self.Session([self.Resp(401)], token_status=401)
+        with self.assertRaises(self.wcl.WCLError) as caught:
+            asyncio.run(self.wcl.query(session, '{ ok }'))
+        self.assertIn('WCL_CLIENT_ID', str(caught.exception))

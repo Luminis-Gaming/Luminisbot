@@ -104,6 +104,9 @@ async def _get_token(session):
     async with session.post("https://www.warcraftlogs.com/oauth/token",
                             data={'grant_type': 'client_credentials'},
                             auth=aiohttp.BasicAuth(WCL_CLIENT_ID, WCL_CLIENT_SECRET)) as resp:
+        if resp.status in (400, 401, 403):
+            raise WCLError(f"WCL rejected the client credentials ({resp.status}) - check WCL_CLIENT_ID / "
+                           f"WCL_CLIENT_SECRET (regenerated or deleted client on warcraftlogs.com?)")
         if resp.status != 200:
             raise WCLError(f"WCL token request failed ({resp.status})")
         data = await resp.json()
@@ -112,20 +115,33 @@ async def _get_token(session):
     return _token
 
 
-async def query(session, gql, variables=None):
-    """Run a GraphQL query and return its `data`, raising WCLError on failure."""
+async def query(session, gql, variables=None, _retried=False):
+    """
+    Run a GraphQL query and return its `data`, raising WCLError on failure. A 401 means the cached token
+    stopped working (WCL's tokens live for months - a regenerated or revoked client kills them): it's dropped
+    and the query tried once more with a fresh one.
+    """
+    global _token, _token_expires
     token = await _get_token(session)
     async with session.post(API_URL, json={'query': gql, 'variables': variables or {}},
                             headers={'Authorization': f'Bearer {token}'}) as resp:
-        if resp.status == 429:
+        stale_token = resp.status == 401 and not _retried
+        if stale_token:
+            pass  # retried below, once this response is closed
+        elif resp.status == 429:
             retry = resp.headers.get('Retry-After')
             raise WCLRateLimited("WCL rate limit reached - try again later",
                                  int(retry) if retry and retry.isdigit() else None)
-        if resp.status >= 500:
+        elif resp.status >= 500:
             raise WCLServerError(f"WCL API returned {resp.status} (WCL or Cloudflare is having a moment)")
-        if resp.status != 200:
+        elif resp.status != 200:
             raise WCLError(f"WCL API returned {resp.status}: {(await resp.text())[:300]}")
-        body = await resp.json()
+        else:
+            body = await resp.json()
+    if stale_token:
+        _token, _token_expires = None, 0
+        logger.warning("[RAIDS] WCL rejected the cached token (401) - getting a fresh one")
+        return await query(session, gql, variables, _retried=True)
     if body.get('errors'):
         raise WCLError(f"WCL GraphQL error: {body['errors'][0].get('message')}")
     return body.get('data') or {}
