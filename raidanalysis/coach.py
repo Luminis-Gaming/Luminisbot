@@ -22,7 +22,7 @@ Runs in a worker thread (the Discord button: asyncio.to_thread), so the loads us
 import asyncio
 import logging
 
-from . import analyzer, benchmarks, bossmech, db, focus, guides, throughput
+from . import analyzer, benchmarks, bossmech, db, defensives, focus, guides, throughput
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +275,60 @@ def boss_mechanic_insights(encounter_id, numbered, name):
     return out
 
 
+def defensive_insights(numbered, name, role):
+    """
+    Personal defensives against the damage that came (defensives.moments) - healers and DPS; tanks press theirs
+    all the time. A star for defensives up through damage aimed at you or a raid-wide burst; a gentle tip only for
+    a clear pattern: several pressed in quiet moments while big hits landed with none up (or one right before you
+    died). Pulls synced before the incoming damage was kept have nothing to say.
+    """
+    if role == 'tank':
+        return []
+    good, quiet, spikes, judged = [], [], [], 0
+    names = {}
+    for number, pull in numbered:
+        analysis = pull.get('analysis') or {}
+        for a in (analysis.get('abilities') or []) + (analysis.get('boss_abilities') or []):
+            if a.get('id') and a.get('name'):
+                names[a['id']] = a['name']
+        found = defensives.moments(analysis, name, defensives.presses(analysis, name), pull['end_ms'] - pull['start_ms'])
+        if not found:
+            continue
+        judged += len(found['presses'])
+        died = [d['t'] for d in analysis.get('deaths') or [] if d.get('name') == name and d.get('t') is not None]
+        for p in found['presses']:
+            if p['kind'] in ('aimed', 'raid', 'heavy'):
+                good.append((number, p))
+            elif p['name'] not in defensives.NOT_ONLY_DEFENSIVE:
+                quiet.append((number, p))
+        for s in found['spikes']:
+            fatal = any(0 <= t - s['t'] <= (defensives.SPIKE_WINDOW_S + 3) * 1000 for t in died)
+            spikes.append((number, dict(s, fatal=fatal)))
+    out = []
+    if good:
+        rank = {'aimed': 0, 'raid': 1, 'heavy': 2}
+        number, best = min(good, key=lambda g: (rank[g[1]['kind']], -g[1]['taken']))
+        what = names.get(best['ability']) or 'the damage'
+        how = {'aimed': f'{what} aimed at you', 'raid': f"the raid-wide {what}", 'heavy': what}[best['kind']]
+        text = f"{best['name']} up for {how} (pull #{number}, {_clock(best['t'])})"
+        if len(good) > 1:
+            text += f" - {len(good)} of your {judged} defensives lined up with heavy damage"
+        out.append(_insight('good', 20 + 6 * min(len(good), 4) + (10 if best['kind'] == 'aimed' else 0),
+                            'defensive', text))
+    fatal = [s for s in spikes if s[1]['fatal']]
+    if (len(quiet) >= 2 and len({n for n, _ in spikes}) >= 2) or (fatal and quiet):
+        shown = (fatal or sorted(spikes, key=lambda s: -s[1]['share']))[:2]
+        where = ', '.join(f"#{n} {_clock(s['t'])}" for n, s in shown)
+        hit = names.get(shown[0][1]['ability']) or 'big hits'
+        text = (f"{len(quiet)} of your defensives went out in quiet moments, while {hit} hit you hard with none up "
+                f"({where}). Save one for it.")
+        if fatal:
+            text = (f"You died right after {hit} hit you hard with no defensive up ({where}) - and {len(quiet)} "
+                    f"defensive{'s' if len(quiet) != 1 else ''} went out in quiet moments. Save one for it.")
+        out.append(_insight('bad', 40 if fatal else 25, 'defensive', text))
+    return out
+
+
 def output_insights(numbered, name, role):
     """
     Your best kill parse in your role's metric (a healer's healing parse), when it's worth a mention - a wipe's
@@ -391,6 +445,7 @@ def night(code, character_names, load=True):
         if boss['weight'] >= DETAIL_MIN_WEIGHT:  # rotation tips only where it matters
             spell_names = {sid: info.get('name') for sid, info in ((data or {}).get('spells') or {}).items()}
             found += rotation_insights(numbered, character, role, data, tracked, spell_names)
+        found += defensive_insights(numbered, character, role)
         more, boss['parse'] = output_insights(numbered, character, role)
         found += more
         if boss['killed'] and boss['pulls'] <= EASY_KILL_PULLS and not boss['deaths']:

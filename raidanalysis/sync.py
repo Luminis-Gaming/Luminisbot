@@ -125,10 +125,33 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
     # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
     # (a talent you don't take), as opposed to one we didn't fetch.
     analysis['casts_seen'] = sorted(used_ids)
+    analysis['incoming'] = await _incoming(session, code, fight, actors, analysis)
     extras = await _fight_extras(session, code, fight, actors, analysis, detail)
     if extras:
         analysis['extras'] = extras
     return analysis
+
+
+async def _incoming(session, code, fight, actors, analysis):
+    """
+    Every enemy hit on a player, boiled down to what came at whom each second and when their own buffs were up
+    (defensives.summarize: the coach's defensive stars) - one events request, ~5 WCL points. None on failure
+    or for a very short pull.
+    """
+    from . import defensives
+    if fight['endTime'] - fight['startTime'] < defensives.INCOMING_MIN_PULL_MS:
+        return None
+    try:
+        events = await wcl.get_events(session, code, fight['id'], 'DamageTaken', defensives.EVENTS_FILTER,
+                                      max_events=defensives.EVENTS_MAX)
+    except wcl.WCLRateLimited:
+        raise
+    except wcl.WCLError as e:
+        logger.info(f"[RAIDS] Incoming damage for {code}#{fight['id']} not fetched: {e}")
+        return None
+    roles = {p['name']: p.get('role') for p in analysis.get('players') or []}
+    return defensives.summarize(events, fight['startTime'], {a['id']: a['name'] for a in actors}, roles,
+                                analysis.get('casts') or {})
 
 
 TAGGED_EVENTS_MAX = 60000  # the tagged mechanics' damage events in a pull (fetched on their own, first)

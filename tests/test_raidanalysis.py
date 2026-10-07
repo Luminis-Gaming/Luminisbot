@@ -2778,3 +2778,80 @@ class TestCoachByRole(unittest.TestCase):
         self.assertEqual(saved['slim_extras']['Boopsboops']['parse']['rank'], 92)
         self.assertEqual(saved['slim_extras']['Futhark']['parse']['rank'], 60)  # DPS untouched
         self.assertTrue(saved['healer_parses'])
+
+
+class TestDefensives(unittest.TestCase):
+    """defensives.py + coach.defensive_insights: defensives up through heavy damage get a star; tanks are left out."""
+    DEF = 108271  # Astral Shift
+
+    @staticmethod
+    def pull(extra_hits, start=0, length=120):
+        """Steady 10k a second on everyone (A..D, tank T), plus extra_hits [(name, second, amount, buffs, ability)]."""
+        ids = {'A': 1, 'B': 2, 'C': 3, 'D': 4, 'T': 5}
+        events = [{'type': 'damage', 'timestamp': start + s * 1000 + 500, 'targetID': i, 'unmitigatedAmount': 10000,
+                   'abilityGameID': 7} for s in range(length) for i in ids.values()]
+        for name, sec, amount, buffs, ability in extra_hits:
+            events.append({'type': 'damage', 'timestamp': start + sec * 1000 + 100, 'targetID': ids[name],
+                           'unmitigatedAmount': amount, 'abilityGameID': ability,
+                           'buffs': '.'.join(str(b) for b in buffs) + '.' if buffs else None})
+        return events, {i: n for n, i in ids.items()}
+
+    def summarize(self, extra, casts):
+        from raidanalysis import defensives
+        events, names = self.pull(extra)
+        roles = {'A': 'dps', 'B': 'dps', 'C': 'healer', 'D': 'dps', 'T': 'tank'}
+        return defensives.summarize(events, 0, names, roles, casts)
+
+    def test_raid_burst_aimed_and_quiet(self):
+        import json
+        from raidanalysis import defensives
+        extra = []
+        for sec in range(30, 38):  # a raid-wide burst: everyone takes 60k a second more
+            for n in 'ABCD':
+                extra.append((n, sec, 60000, [self.DEF] if n == 'A' else [], 99))
+        for sec in range(80, 86):  # something aimed at C alone
+            extra.append(('C', sec, 120000, [self.DEF], 55))
+        casts = {'A': [[29000, self.DEF]], 'B': [[60000, self.DEF]], 'C': [[79500, self.DEF]]}
+        incoming = json.loads(json.dumps(self.summarize(extra, casts)))  # as stored
+        self.assertNotIn('T', incoming['players'])  # tanks left out
+        analysis = {'incoming': incoming}
+        kind = lambda n, t: defensives.moments(analysis, n, [(t, self.DEF, 'Astral Shift')], 120000)['presses'][0]  # noqa: E731
+        self.assertEqual((kind('A', 29000)['kind'], kind('A', 29000)['ability']), ('raid', 99))
+        self.assertEqual(kind('B', 60000)['kind'], 'quiet')
+        self.assertEqual((kind('C', 79500)['kind'], kind('C', 79500)['ability']), ('aimed', 55))
+
+    def test_spike_with_no_defensive(self):
+        from raidanalysis import defensives
+        extra = [('D', sec, 150000, [], 66) for sec in range(100, 104)]
+        analysis = {'incoming': self.summarize(extra, {})}
+        spikes = defensives.moments(analysis, 'D', [], 120000)['spikes']
+        self.assertEqual(len(spikes), 1)
+        self.assertEqual(spikes[0]['ability'], 66)
+        self.assertTrue(98000 <= spikes[0]['t'] <= 100000)
+
+    def test_coach_stars_and_the_pattern_tip(self):
+        from raidanalysis import coach
+        good_extra = [(n, sec, 60000, [self.DEF] if n == 'A' else [], 99) for sec in range(30, 38) for n in 'ABCD']
+        good = {'incoming': self.summarize(good_extra, {'A': [[29000, self.DEF]]}),
+                'cooldowns': [{'t': 29000, 'name': 'A', 'ability_id': self.DEF, 'ability': 'Astral Shift',
+                               'category': 'personal'}],
+                'abilities': [{'id': 99, 'name': 'Blight Vein'}, {'id': 66, 'name': 'Shadow Brand'}]}
+        pulls = []
+        for number in (1, 2):  # quiet presses while Shadow Brand hits hard with nothing up, twice
+            extra = [('A', sec, 150000, [], 66) for sec in range(100, 104)]
+            pulls.append((number, {'start_ms': 0, 'end_ms': 120000, 'analysis': {
+                'incoming': self.summarize(extra, {}),
+                'cooldowns': [{'t': 10000, 'name': 'A', 'ability_id': self.DEF, 'ability': 'Astral Shift',
+                               'category': 'personal'}],
+                'abilities': [{'id': 66, 'name': 'Shadow Brand'}], 'deaths': []}}))
+        pulls.append((3, {'start_ms': 0, 'end_ms': 120000, 'analysis': good}))
+        found = {i['tone']: i['text'] for i in coach.defensive_insights(pulls, 'A', 'dps')}
+        self.assertIn('Astral Shift up for the raid-wide Blight Vein (pull #3, 0:29)', found['good'])
+        self.assertIn('Shadow Brand hit you hard with none up', found['bad'])
+        self.assertEqual(coach.defensive_insights(pulls, 'A', 'tank'), [])
+
+    def test_older_pulls_say_nothing(self):
+        from raidanalysis import coach
+        pulls = [(1, {'start_ms': 0, 'end_ms': 60000, 'analysis': {'cooldowns': [
+            {'t': 1000, 'name': 'A', 'ability_id': self.DEF, 'ability': 'Astral Shift', 'category': 'personal'}]}})]
+        self.assertEqual(coach.defensive_insights(pulls, 'A', 'dps'), [])

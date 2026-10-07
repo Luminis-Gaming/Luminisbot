@@ -512,7 +512,7 @@ KEEP_EMPTY_DAYS = 30    # logs without raid pulls (M+, trash) are remembered thi
 # What an archived pull drops: the per-player timelines and throughput behind a night's pull, focus and
 # comparison pages - most of its size. The rest (roster, deaths, mechanics, interrupts, consumables)
 # stays for the boss pages, night-by-night and player trends.
-ARCHIVE_DROP = ('casts', 'cooldowns', 'boss_casts', 'extras', 'cast_ids', 'casts_seen')
+ARCHIVE_DROP = ('casts', 'cooldowns', 'boss_casts', 'extras', 'cast_ids', 'casts_seen', 'incoming')
 # ...but each player's totals and parse stay, as analysis['slim_extras'] ({name: {'damage', 'healing', 'active_ms',
 # 'parse'}}), so the character pages keep their parse history
 _SLIM_EXTRAS = """COALESCE((
@@ -969,7 +969,7 @@ def character_pull_index(name, realm=None):
 # What scoring a night's boss needs of each pull - deaths, mechanics, consumables, everyone's parse and output - and
 # not the per-player casts, auras and the like: most of a stored analysis, read here for nothing.
 _GROUP_ANALYSIS = """
-    (p.analysis - '{casts,cooldowns,boss_casts,cast_ids,casts_seen,extras,slim_extras}'::text[])
+    (p.analysis - '{casts,cooldowns,boss_casts,cast_ids,casts_seen,extras,slim_extras,incoming}'::text[])
     || jsonb_build_object('extras', jsonb_build_object(
            'duration', p.analysis->'extras'->'duration',
            'players', (SELECT COALESCE(jsonb_object_agg(e.key, jsonb_build_object(
