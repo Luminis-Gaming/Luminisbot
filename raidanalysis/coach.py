@@ -258,8 +258,8 @@ def boss_mechanic_insights(encounter_id, numbered, name):
 
 
 def output_insights(numbered, name, role):
-    """Your best parse, when it's worth a mention."""
-    parses = [r['parse'] for r in throughput.per_pull(numbered, name, role) if r['parse'] is not None]
+    """Your best kill parse, when it's worth a mention - a wipe's doesn't count (throughput.counted_parses)."""
+    parses = [r['parse'] for r in throughput.per_pull(numbered, name, role) if r['parse'] is not None and r['kill']]
     if not parses or max(parses) < 75:
         return [], (max(parses) if parses else None)
     best = max(parses)

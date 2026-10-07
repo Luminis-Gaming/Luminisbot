@@ -72,6 +72,18 @@ def parses_from_rankings(rankings):
     return out
 
 
+def counted_parses(parses):
+    """
+    [(parse, kill)] -> (the parses that count, from_wipes). Kill parses whenever there are any: Warcraft Logs only
+    ranks kills, and a wipe's parse (scraped from the website) puts a 20 s all-cooldowns burst next to whole kills -
+    a 100 there says nothing. Without a kill: the wipes' parses, flagged (shown with a "doesn't count" mark).
+    """
+    kills = [v for v, kill in parses if v is not None and kill]
+    if kills:
+        return kills, False
+    return [v for v, _ in parses if v is not None], True
+
+
 def parses_from_scrape(scraped):
     """The website's parse columns (wipes) -> {name: {'rank', 'bracket', 'amount': None}}."""
     return {name: {'rank': v.get('rankPercent'), 'bracket': v.get('bracketPercent'), 'amount': None}

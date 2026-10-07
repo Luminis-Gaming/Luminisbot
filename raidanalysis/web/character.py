@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from .. import armory
-from .performance import parse_html
+from .performance import WIPE_PARSE_NOTE, parse_html
 from .players import _band, _class_label
 from .render import (CLASS_COLORS, DIFFICULTY_NAMES, ROLE_ICONS, boss_portrait, difficulty_pill, esc, section_head,
                      sparkline)
@@ -58,13 +58,18 @@ def _avg(values):
 
 
 def _night_point(night, name):
-    """One raid night as a chart point: pull-weighted score, average of the bosses' best parses, mistakes per pull."""
+    """
+    One raid night as a chart point: pull-weighted score, average of the bosses' best parses (kill parses when the
+    night had any - parse_wipe when it's only wipes'), mistakes per pull.
+    """
+    from ..character import _best_parse
     entries = night['entries']
+    parses, parse_wipe = _best_parse(entries)
     pulls = sum(e['pulls'] for e in entries) or 1
     main = max(entries, key=lambda e: (e['difficulty'], e['pulls']))  # the night's main boss: its page opens
     bosses = ', '.join(f"{e['boss']}{' ✔' if e['kills'] else ''}" for e in entries)
     return {'date': night['date'], 'score': sum(e['score'] * e['pulls'] for e in entries) / pulls,
-            'parse': _avg([e['parse'] for e in entries]), 'deaths': sum(e['deaths'] for e in entries) / pulls,
+            'parse': _avg(parses), 'parse_wipe': parse_wipe, 'deaths': sum(e['deaths'] for e in entries) / pulls,
             'avoidable': sum(e['avoidable'] for e in entries) / pulls, 'pulls': pulls,
             'href': player_href(night['code'], name, main['key']), 'title': night['title'], 'what': bosses}
 
@@ -72,7 +77,7 @@ def _night_point(night, name):
 def _entry_point(entry, name):
     pulls = entry['pulls'] or 1
     result = 'killed' if entry['kills'] else f"best pull {entry['best_pct']:.1f}%"
-    return {'date': entry['date'], 'score': entry['score'], 'parse': entry['parse'],
+    return {'date': entry['date'], 'score': entry['score'], 'parse': entry['parse'], 'parse_wipe': entry['parse_wipe'],
             'deaths': entry['deaths'] / pulls, 'avoidable': entry['avoidable'] / pulls, 'pulls': entry['pulls'],
             'href': player_href(entry['code'], name, entry['key']), 'title': entry['title'],
             'what': f"{entry['pulls']} pull{'s' if entry['pulls'] != 1 else ''}, {result}"}
@@ -145,13 +150,16 @@ def trend_chart(points, first_kills=()):
     for i, p in enumerate(points):
         tip = [f"{_date(p['date'], '%d %b %Y')} - {p['title']}", p['what'], f"Score {p['score']:.0f}"]
         if p['parse'] is not None:
-            tip.append(f"Parse {p['parse']:.0f}")
+            tip.append(f"Parse {p['parse']:.0f}" + (" - from a wipe, doesn't count" if p.get('parse_wipe') else ''))
         dots = f'<rect class="ch-hit" x="{x(i) - 9:.1f}" y="{top}" width="18" height="{inner_h}"/>'
         dots += (f'<circle class="mark" cx="{x(i):.1f}" cy="{y(p["score"]):.1f}" r="5" '
                  f'fill="{BAND_COLORS[_band(round(p["score"]))[0]]}" stroke="{SCORE_COLOR}" stroke-width="2"/>')
         if p['parse'] is not None:
+            color = _parse_color(p['parse'])  # a wipe's parse: a hollow diamond - it doesn't count
+            fill = (f'fill="none" stroke="{color}" stroke-width="1.5" opacity="0.7"' if p.get('parse_wipe') else
+                    f'fill="{color}"')
             dots += (f'<rect class="mark" x="{x(i) - 4.5:.1f}" y="{y(p["parse"]) - 4.5:.1f}" width="9" height="9" '
-                     f'transform="rotate(45 {x(i):.1f} {y(p["parse"]):.1f})" fill="{_parse_color(p["parse"])}"/>')
+                     f'transform="rotate(45 {x(i):.1f} {y(p["parse"]):.1f})" {fill}/>')
         parts.append(f'<a href="{esc(p["href"])}"><title>{esc(chr(10).join(tip))}</title>{dots}</a>')
     parts.append(_x_labels(points, x, height - 6))
     parts.append('</svg>')
@@ -196,6 +204,8 @@ def mistakes_chart(points):
 
 def _lately(points, key, label, higher_better=True):
     """'Score lately 78 ▲ +6' - the last RECENT_NIGHTS against the ones before."""
+    if key == 'parse' and any(p['parse'] is not None and not p.get('parse_wipe') for p in points):
+        points = [p for p in points if not p.get('parse_wipe')]  # kill parses, once there are any
     values = [p[key] for p in points if p[key] is not None]
     if not values:
         return ''
@@ -244,7 +254,8 @@ def hero(prof, data, back_href, with_model=True, alts=()):
     tiles = [(f'{t["nights"]}', 'Raid nights'), (f'{t["pulls"]}', 'Pulls'),
              (f'{t["bosses_killed"]}', 'Bosses killed'),
              (f'<span class="score-badge {_band(t["score"])[0]}">{t["score"]}</span>', 'Avg score'),
-             (parse_html(t['avg_parse']), 'Avg parse'), (parse_html(t['best_parse']), 'Best parse')]
+             (parse_html(t['avg_parse'], t['parse_wipe']), 'Avg parse'),
+             (parse_html(t['best_parse'], t['parse_wipe']), 'Best parse')]
     if info.get('ilvl') and with_model:
         tiles.append((f'{float(info["ilvl"]):.0f}', 'Item level'))
     tiles_html = ''.join(f'<div class="ch-tile"><b>{v}</b><span>{label}</span></div>' for v, label in tiles)
@@ -270,6 +281,8 @@ def hero(prof, data, back_href, with_model=True, alts=()):
             </div>
             <div class="ch-scope">📊 {esc(_scope(prof))}</div>
             <div class="ch-tiles">{tiles_html}</div>
+            {'<p class="muted small ch-wipe-note">* No kill parse here yet - these are from wipes, which Warcraft Logs '
+             "doesn't rank, so they don't count.</p>" if t['parse_wipe'] and t['best_parse'] is not None else ''}
             <div class="ch-links">{''.join(links)}</div>
         </div>
     </div>"""
@@ -310,7 +323,8 @@ def improvement(prof):
                 {mistakes_chart(points)}
             </div>""")
     legend = (f'<div class="ch-legend"><span><i style="background:{SCORE_COLOR}"></i>Execution score (ours, 0-100)</span>'
-              f'<span><i class="dashed" style="border-color:{PARSE_COLOR}"></i>WCL parse (best per boss)</span>'
+              f'<span><i class="dashed" style="border-color:{PARSE_COLOR}"></i>WCL parse (best kill parse per boss; '
+              f'a hollow ◇ is a wipe\'s - no kill yet, so it doesn\'t count)</span>'
               f'<span><b class="ch-star">★</b>First kill</span>'
               f'<span><i style="background:{DEATH_COLOR}"></i>Early deaths</span>'
               f'<span><i style="background:{AVOID_COLOR}"></i>Avoidable hits</span></div>')
@@ -332,7 +346,8 @@ def bosses(prof):
     for b in prof['bosses']:
         enc, diff = b['key']
         scores = [e['score'] for e in b['nights']]
-        parses = [e['parse'] for e in b['nights']]
+        kill_parses = any(e['parse'] is not None and not e['parse_wipe'] for e in b['nights'])
+        parses = [e['parse'] if not (kill_parses and e['parse_wipe']) else None for e in b['nights']]  # kills', if any
         if b['kills']:
             status = (f'<span class="pill pill-kill">✔ {b["kills"]} kill{"s" if b["kills"] != 1 else ""}</span>'
                       f'<span class="muted small"> first {_date(b["first_kill"], "%d %b %Y")}</span>')
@@ -352,7 +367,7 @@ def bosses(prof):
                     <strong>{esc(b['name'])}</strong></a>{difficulty_pill(diff)}</div></td>
                 <td>{status}</td>
                 <td class="num">{b['pulls']}<span class="muted small"> / {len(b['nights'])}n</span></td>
-                <td class="num">{parse_html(b['best_parse'])}</td>
+                <td class="num">{parse_html(b['best_parse'], b['best_parse_wipe'])}</td>
                 <td><span class="score-badge {_band(last['score'])[0]}">{last['score']}</span> {change}</td>
                 <td class="ch-sparks">{sparkline(scores) or '<span class="muted small">one night</span>'}
                     {_parse_spark(parses)}</td>
@@ -368,6 +383,7 @@ def bosses(prof):
                 <th>Score</th><th>Trend</th><th></th></tr>
             {''.join(rows)}
         </table></div>
+        {WIPE_PARSE_NOTE if any(b['best_parse_wipe'] and b['best_parse'] is not None for b in prof['bosses']) else ''}
     </div>"""
 
 
@@ -403,7 +419,7 @@ def logs(prof):
                 <td class="num">{point['pulls']}</td>
                 <td class="num">{kills or '<span class="muted">0</span>'}</td>
                 <td><span class="score-badge {_band(round(point['score']))[0]}">{round(point['score'])}</span></td>
-                <td class="num">{parse_html(point['parse'])}</td>
+                <td class="num">{parse_html(point['parse'], point['parse_wipe'])}</td>
                 <td class="num">{_per_pull(point['deaths'])}</td>
                 <td class="num">{_per_pull(point['avoidable'])}</td>
             </tr>""")

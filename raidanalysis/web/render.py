@@ -157,6 +157,8 @@ p.not-taken .cmp-ab { display: inline-flex; vertical-align: middle; }
 .parse { font-weight: 700; }
 .parse.p100 { color: #e5cc80; } .parse.p99 { color: #e268a8; } .parse.p95 { color: #ff8000; }
 .parse.p75 { color: #a335ee; } .parse.p50 { color: #0070ff; } .parse.p25 { color: #1eff00; } .parse.p0 { color: #9d9d9d; }
+/* a wipe's parse (doesn't count on Warcraft Logs): dimmed, dotted, an asterisk - the reason on hover */
+.parse.from-wipe { opacity: 0.6; text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 .focus-bar { display: flex; height: 8px; border-radius: 3px; overflow: hidden; background: var(--surface-3); min-width: 120px; }
 .focus-bar i { display: block; height: 100%; }
 @media (max-width: 600px) {

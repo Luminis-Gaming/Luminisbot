@@ -22,11 +22,22 @@ NO_EXTRAS = ('<p class="muted">Not fetched for these pulls yet - the sync picks 
              'for recent nights by itself (older ones: <strong>🔄 Re-analyze</strong> on the night page).</p>')
 
 
-def parse_html(value):
-    """A parse percentile in WCL's colors (grey < 25 < green < 50 < blue < 75 < purple < 95 < orange < 99 < pink < 100 gold)."""
+WIPE_PARSE_TIP = ("From a wipe - Warcraft Logs only ranks kills, so this parse doesn't count (a short pull's "
+                  "burst sits next to whole kills). Kill parses replace it once there are any.")
+WIPE_PARSE_NOTE = ('<p class="muted small">* A parse from a wipe - no kill parse yet. Warcraft Logs only ranks kills, '
+                   "so it doesn't count.</p>")
+
+
+def parse_html(value, wipe=False):
+    """
+    A parse percentile in WCL's colors (grey < 25 < green < 50 < blue < 75 < purple < 95 < orange < 99 < pink < 100
+    gold). wipe: from a wipe (throughput.counted_parses) - dimmed with an asterisk and the reason on hover.
+    """
     if value is None:
         return '<span class="muted">—</span>'
     cls = next(f'p{t}' for t in (100, 99, 95, 75, 50, 25, 0) if value >= t)
+    if wipe:
+        return f'<span class="parse {cls} from-wipe" title="{WIPE_PARSE_TIP}">{int(value)}*</span>'
     return f'<span class="parse {cls}">{int(value)}</span>'
 
 
@@ -49,12 +60,14 @@ def _pct(share):
 def _damage_one_pull(r, role, metric, active, raid_active, focus_section, numbered, name, pull_focus):
     """The Damage & focus card for one pull: its parse, ilvl parse, DPS / HPS, raid rank and active time."""
     peers = 'healers' if role == 'healer' else 'tanks' if role == 'tank' else 'DPS'
-    tiles = [(parse_html(r['parse']), 'Parse'), (parse_html(r['bracket']), 'ilvl parse'),
+    wipe = not r['kill']  # a wipe's parse doesn't count on Warcraft Logs: shown, marked
+    tiles = [(parse_html(r['parse'], wipe), 'Parse'), (parse_html(r['bracket'], wipe), 'ilvl parse'),
              (fmt_amount(r['amount']), metric),
              (f"{r['raid_rank']} / {r['raid_size']}" if r['raid_rank'] else '—', f"Raid rank among the {peers}"),
              (_pct(active), f'Active time · raid {_pct(raid_active)}' if raid_active else 'Active time')]
     wipe = ('<p class="muted small">No parse for this wipe: Warcraft Logs only shows those on its website, which '
-            'needs a browser session set up (WCL_SCRAPE_COOKIES).</p>' if not r['kill'] and r['parse'] is None else '')
+            'needs a browser session set up (WCL_SCRAPE_COOKIES).</p>' if wipe and r['parse'] is None else
+            WIPE_PARSE_NOTE.replace(' - no kill parse yet', '') if wipe else '')
     return f"""
     <div class="card">
         {section_head('📈', throughput_label(role),
@@ -76,13 +89,14 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
     rows = throughput.per_pull(numbered, name, role)
     if not rows:
         return f'<div class="card">{section_head("📈", throughput_label(role))}{NO_EXTRAS}</div>'
-    parses = [r['parse'] for r in rows if r['parse'] is not None]
+    # Best / typical: kill parses whenever there are any - a short wipe's burst isn't a parse that counts
+    parses, from_wipes = throughput.counted_parses([(r['parse'], r['kill']) for r in rows])
     kills = [r for r in rows if r['kill']]
     active, raid_active = throughput.active_time(numbered, name, role)
     if len(rows) == 1:  # one pull picked: its own numbers, once - no best / typical / average of one, no one-row table
         return _damage_one_pull(rows[0], role, metric, active, raid_active, focus_section, numbered, name, pull_focus)
-    tiles = [(parse_html(max(parses)) if parses else '—', 'Best parse'),
-             (parse_html(sorted(parses)[len(parses) // 2]) if parses else '—', 'Typical parse'),
+    tiles = [(parse_html(max(parses), from_wipes) if parses else '—', 'Best parse'),
+             (parse_html(sorted(parses)[len(parses) // 2], from_wipes) if parses else '—', 'Typical parse'),
              (fmt_amount(sum(r['amount'] for r in rows) / len(rows)), f'Average {metric}'),
              (fmt_amount(max(r['amount'] for r in kills)) if kills else '—', f'{metric} on the kill'),
              (_pct(active), f'Active time · raid {_pct(raid_active)}' if raid_active else 'Active time')]
@@ -91,8 +105,8 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
             <td class="num">#{r['number']}</td>
             <td>{'<span class="pill pill-kill">✔ Kill</span>' if r['kill'] else ''}</td>
             <td class="num">{fmt_duration(r['duration'])}</td>
-            <td class="num" data-v="{r['parse'] if r['parse'] is not None else -1}">{parse_html(r['parse'])}</td>
-            <td class="num" data-v="{r['bracket'] if r['bracket'] is not None else -1}">{parse_html(r['bracket'])}</td>
+            <td class="num" data-v="{r['parse'] if r['parse'] is not None else -1}">{parse_html(r['parse'], not r['kill'])}</td>
+            <td class="num" data-v="{r['bracket'] if r['bracket'] is not None else -1}">{parse_html(r['bracket'], not r['kill'])}</td>
             <td class="num" data-v="{r['amount']:.0f}">{fmt_amount(r['amount'])}</td>
             <td class="num">{_pct(r['active'])}</td>
             <td class="num">{f"{r['raid_rank']} / {r['raid_size']}" if r['raid_rank'] else '—'}</td>
@@ -112,7 +126,10 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
             {table}</table></div>
         {f'<h4>Parse per pull</h4>{chart}' if chart else ''}
         {'<p class="muted small">No parse for some wipes: Warcraft Logs only shows those on its website, which needs '
-         'a browser session set up (WCL_SCRAPE_COOKIES).</p>' if no_wipe_parses else ''}"""
+         'a browser session set up (WCL_SCRAPE_COOKIES).</p>' if no_wipe_parses else ''}
+        {'<p class="muted small">* Wipe parses are shown, but only kill parses count - Warcraft Logs only ranks '
+         'kills' + (" (none yet here, so the tiles use the wipes')" if from_wipes and parses else '') + '.</p>'
+         if any(not r['kill'] and r['parse'] is not None for r in rows) else ''}"""
     return f"""
     <div class="card">
         {section_head('📈', throughput_label(role),

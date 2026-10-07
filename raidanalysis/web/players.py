@@ -241,12 +241,17 @@ def _parse_cell(numbered, name, role):
     """The Parse column: a player's average WCL parse over these pulls in WCL's colors - best and count on hover."""
     from .. import throughput
     from .performance import parse_html
-    parses = [r['parse'] for r in throughput.per_pull(numbered, name, role) if r['parse'] is not None]
+    parses, from_wipes = throughput.counted_parses([(r['parse'], r['kill'])
+                                                    for r in throughput.per_pull(numbered, name, role)])
     if not parses:
         return '<td class="num muted" data-v="-1" title="No Warcraft Logs parse in these pulls">—</td>'
     avg = sum(parses) / len(parses)
-    tip = f'Average {avg:.0f} over {len(parses)} parse{"s" if len(parses) != 1 else ""} · best {max(parses):.0f}'
-    return f'<td class="num parse-cell" data-v="{avg:.1f}" title="{tip}">{parse_html(avg)}</td>'
+    what = 'wipe parse' if from_wipes else 'kill parse'  # kill parses only, once there are any
+    tip = f'Average {avg:.0f} over {len(parses)} {what}{"s" if len(parses) != 1 else ""} · best {max(parses):.0f}'
+    if from_wipes:
+        tip += " - no kill yet: wipe parses don't count on Warcraft Logs"
+    cell = parse_html(avg, from_wipes).replace(' title="', ' data-t="', 1)  # the cell's own tooltip says it all
+    return f'<td class="num parse-cell" data-v="{avg:.1f}" title="{tip}">{cell}</td>'
 
 
 def compact_table(report, href, numbered=()):

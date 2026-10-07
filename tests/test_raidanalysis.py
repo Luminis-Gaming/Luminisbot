@@ -1685,8 +1685,8 @@ class TestPlayersCompactOutput(unittest.TestCase):
     def test_output_columns(self):
         from raidanalysis.web import players
         roster = [{'name': 'Futhark', 'class': 'Hunter', 'role': 'dps'}, {'name': 'Boops', 'class': 'Monk', 'role': 'dps'}]
-        def pull(n, futhark_parse):
-            return (n, {'fight_id': n, 'start_ms': 0, 'end_ms': 100000, 'analysis': {'players': roster, 'extras': {
+        def pull(n, futhark_parse, kill=False):
+            return (n, {'fight_id': n, 'kill': kill, 'start_ms': 0, 'end_ms': 100000, 'analysis': {'players': roster, 'extras': {
                 'duration': 100000, 'players': {
                     'Futhark': {'damage': 30e6, 'active_ms': 95000, 'parse': {'rank': futhark_parse}},
                     'Boops': {'damage': 20e6, 'active_ms': 60000, 'parse': None}}}}})
@@ -1697,8 +1697,36 @@ class TestPlayersCompactOutput(unittest.TestCase):
         self.assertIn('<b>Score</b> = our 0-100 grade for the mechanics', html)     # told apart from a parse
         self.assertLess(html.index('>Score</th>'), html.index('>Parse</th>'))
         self.assertLess(html.index('>Parse</th>'), html.index('>Player</th>'))       # between score and player
-        self.assertIn('title="Average 75 over 2 parses · best 90"><span class="parse p75">75</span>', html)
+        # Only wipes so far: their parses, marked as not counting
+        self.assertIn('title="Average 75 over 2 wipe parses · best 90 - no kill yet', html)
+        self.assertIn('<span class="parse p75 from-wipe"', html)
         self.assertIn('title="No Warcraft Logs parse in these pulls">—', html)      # Boops: none
+        # A kill's parse is there: only it counts - the 99 on a quick wipe doesn't
+        html = players.compact_table(report, lambda n: '#', [pull(1, 99), pull(2, 40, kill=True)])
+        self.assertIn('title="Average 40 over 1 kill parse · best 40"><span class="parse p25">40</span>', html)
+
+
+class TestKillParsesCount(unittest.TestCase):
+    """A 100 on a 20 s wipe isn't a best parse: kill parses count whenever there are any; without, a wipe's - marked."""
+
+    def test_counted_parses(self):
+        from raidanalysis import throughput
+        from raidanalysis.web.performance import parse_html
+        self.assertEqual(throughput.counted_parses([(100, False), (17, True), (22, True), (None, True)]), ([17, 22], False))
+        self.assertEqual(throughput.counted_parses([(100, False), (60, False)]), ([100, 60], True))
+        self.assertEqual(throughput.counted_parses([(None, False)]), ([], True))
+        self.assertIn('from-wipe', parse_html(100, wipe=True))
+        self.assertIn('100*', parse_html(100, wipe=True))
+        self.assertNotIn('from-wipe', parse_html(100))
+
+    def test_character_best_parse(self):
+        from raidanalysis import character
+        e = lambda parse, wipe: {'parse': parse, 'parse_wipe': wipe}  # noqa: E731
+        # Killed on some night: that night's kill parse is the best, whatever the wipe nights said
+        self.assertEqual(character._best_parse([e(100, True), e(17, False), e(30, False)]), ([17, 30], False))
+        # Never killed: the wipes', flagged
+        self.assertEqual(character._best_parse([e(100, True), e(80, True), e(None, True)]), ([100, 80], True))
+        self.assertEqual(character._best_parse([e(None, False)]), ([], False))  # nothing at all: nothing to flag
 
 
 class TestCoach(unittest.TestCase):

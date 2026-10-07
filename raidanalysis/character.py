@@ -7,7 +7,7 @@ rest of the raid that night - the same number the night's pages show), their bes
 night, pulls, kills, early deaths, avoidable hits. From those: progression per boss, a timeline of nights
 and a few highlights.
 """
-from . import analyzer, db, guides
+from . import analyzer, db, guides, throughput
 
 MIN_IMPROVED_NIGHTS = 3   # "most improved" needs this many nights on a boss
 MIN_CLEAN_PULLS = 5       # a "clean night" needs this many pulls
@@ -106,9 +106,11 @@ def profile(name, realm=None, tier=None, difficulty=None):
     'latest_code', 'tiers', 'tier', 'difficulties', 'difficulty'} or None when they're in none of our logs.
     realm (WCL's spelling, e.g. 'TarrenMill'): only that realm's character of the name. tier (a zone id) and
     difficulty narrow it (filter_pulls: their latest tier and hardest real difficulty by default; ALL for every one).
-    boss: {'key', 'name', 'difficulty', 'pulls', 'kills', 'best_parse', 'best_pct', 'nights': [entry], 'first_kill'}
+    boss: {'key', 'name', 'difficulty', 'pulls', 'kills', 'best_parse', 'best_parse_wipe', 'best_pct', 'nights': [entry],
+    'first_kill'}. Parses: kill parses only, whenever there are any (throughput.counted_parses) - else a wipe's, with
+    its *_wipe flag set (shown as not counting); totals 'best_parse' / 'avg_parse' / 'parse_wipe' the same way.
     night: {'code', 'title', 'date', 'zone', 'entries': [entry]}; entry: {'code', 'date', 'boss', 'difficulty',
-    'key', 'score', 'parse', 'amount', 'pulls', 'kills', 'best_pct' (boss % left, 0 = killed), 'deaths',
+    'key', 'score', 'parse', 'parse_wipe', 'amount', 'pulls', 'kills', 'best_pct' (boss % left, 0 = killed), 'deaths',
     'avoidable', 'interrupts', 'fight_id' (the night's last pull of it)}
     """
     every = db.character_pulls(name, realm)
@@ -135,13 +137,13 @@ def profile(name, realm=None, tier=None, difficulty=None):
         if not row:
             continue
         me_last = row
-        parses = [v for v in (_parse(p['analysis'] or {}, name) for p in boss_pulls) if v is not None]
+        parses, parse_wipe = throughput.counted_parses([(_parse(p['analysis'] or {}, name), p['kill']) for p in boss_pulls])
         amounts = [v for v in (_amount(p['analysis'] or {}, name, row.get('role'), p['end_ms'] - p['start_ms'])
                                for p in boss_pulls) if v]
         entries.append({'code': code, 'date': boss_pulls[0]['report_start'], 'title': boss_pulls[0]['report_title'],
                         'zone': boss_pulls[0]['zone_name'], 'boss': boss_pulls[0]['encounter_name'],
                         'difficulty': difficulty, 'key': (encounter, difficulty), 'score': row['score'],
-                        'parse': max(parses) if parses else None,
+                        'parse': max(parses) if parses else None, 'parse_wipe': parse_wipe and bool(parses),
                         'amount': sum(amounts) / len(amounts) if amounts else None,
                         'pulls': len(boss_pulls), 'kills': sum(1 for p in boss_pulls if p['kill']),
                         'best_pct': min(0.0 if p['kill'] else float(p['fight_pct'] or 100) for p in boss_pulls),
@@ -154,16 +156,17 @@ def profile(name, realm=None, tier=None, difficulty=None):
     bosses = {}
     for e in entries:
         b = bosses.setdefault(e['key'], {'key': e['key'], 'name': e['boss'], 'difficulty': e['difficulty'], 'pulls': 0,
-                                         'kills': 0, 'best_parse': None, 'nights': [], 'first_kill': None,
-                                         'best_pct': 100.0})
+                                         'kills': 0, 'best_parse': None, 'best_parse_wipe': False, 'nights': [],
+                                         'first_kill': None, 'best_pct': 100.0})
         b['pulls'] += e['pulls']
         b['best_pct'] = min(b['best_pct'], e['best_pct'])
         b['kills'] += e['kills']
         b['nights'].append(e)
-        if e['parse'] is not None and (b['best_parse'] is None or e['parse'] > b['best_parse']):
-            b['best_parse'] = e['parse']
         if e['kills'] and b['first_kill'] is None:
             b['first_kill'] = e['date']
+    for b in bosses.values():  # a kill parse on any night beats every wipe's
+        best, b['best_parse_wipe'] = _best_parse(b['nights'])
+        b['best_parse'] = max(best) if best else None
     # hardest difficulty first, then the most recently pulled
     boss_list = sorted(bosses.values(), key=lambda b: (-b['difficulty'], -b['nights'][-1]['date']))
 
@@ -174,17 +177,23 @@ def profile(name, realm=None, tier=None, difficulty=None):
         n['entries'].append(e)
     night_list = sorted(nights.values(), key=lambda n: n['date'])
 
-    parses = [e['parse'] for e in entries if e['parse'] is not None]
+    parses, parse_wipe = _best_parse(entries)
     totals = {'nights': len(night_list), 'pulls': sum(e['pulls'] for e in entries),
               'kills': sum(e['kills'] for e in entries), 'bosses_killed': sum(1 for b in boss_list if b['kills']),
               'best_parse': max(parses) if parses else None,
-              'avg_parse': sum(parses) / len(parses) if parses else None,
+              'avg_parse': sum(parses) / len(parses) if parses else None, 'parse_wipe': parse_wipe,
               'score': round(sum(e['score'] * e['pulls'] for e in entries) / sum(e['pulls'] for e in entries)),
               'interrupts': sum(e['interrupts'] for e in entries)}
     return {'name': name, 'realm': realm, 'class': me_last.get('class') or '', 'spec': me_last.get('spec') or '',
             'role': me_last.get('role') or 'dps', 'bosses': boss_list, 'nights': night_list, 'totals': totals,
             'highlights': highlights(entries, boss_list), 'latest_code': latest_code, 'tiers': tiers, 'tier': tier,
             'difficulties': difficulties, 'difficulty': difficulty}
+
+
+def _best_parse(entries):
+    """(the entries' parses that count, from_wipes): kill parses when any entry has one, else the wipes' (flagged)."""
+    vals, wipe = throughput.counted_parses([(e['parse'], not e['parse_wipe']) for e in entries])
+    return vals, wipe and bool(vals)
 
 
 def _alive_streak(boss_pulls, name):
@@ -199,7 +208,9 @@ def _alive_streak(boss_pulls, name):
 def highlights(entries, bosses):
     """The fun facts: [{'icon', 'title', 'text', 'tone'}] - best parse, most improved, streaks, first kills."""
     out = []
-    best = max((e for e in entries if e['parse'] is not None), key=lambda e: e['parse'], default=None)
+    # kill parses only: a 100 on a 20 s wipe isn't one to brag about
+    best = max((e for e in entries if e['parse'] is not None and not e['parse_wipe']), key=lambda e: e['parse'],
+               default=None)
     if best:
         out.append({'icon': '🏆', 'title': f"{best['parse']:.0f} parse", 'tone': 'parse',
                     'text': f"Best parse - {best['boss']}, {_date(best['date'])}"})
