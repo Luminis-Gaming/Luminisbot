@@ -142,7 +142,7 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
             out.append(_insight('bad', 85, 'raid_buff',
                                 f"The raid went without {buff['buff']} in pull{'s' if len(buff['missing']) > 1 else ''} "
                                 f"{which} - cast it before every pull"))
-        for u in throughput.uptime(numbered, name, top, tracked):
+        for u in throughput.uptime(numbered, name, top, tracked, data.get('talents')):
             if u['verdict'] == 'off':
                 what = 'on the boss' if u['kind'] == 'debuff' else 'on you'
                 out.append(_insight('bad', 70 * (u['top'] - u['ours']), 'uptime',

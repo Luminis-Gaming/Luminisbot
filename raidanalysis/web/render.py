@@ -143,6 +143,8 @@ th[data-sort]:hover { color: var(--text); }
 .rot-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .rot-tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
     display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.rot-tile.not-taken { opacity: 0.55; border-style: dashed; }  /* a talent you didn't take: seen, not judged */
+p.not-taken .cmp-ab { display: inline-flex; vertical-align: middle; }
 .rot-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; font-weight: 600; font-size: 14px; }
 .rot-head .cmp-ab, .rot-head .ability-cell { min-width: 0; overflow-wrap: anywhere; }
 .rot-head .pill { flex-shrink: 0; }
@@ -795,6 +797,22 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .ar-gem.empty { background: transparent; box-shadow: inset 0 0 0 1px var(--faint); }
 .ar-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 18px; padding-top: 14px;
     border-top: 1px solid var(--border); }
+/* The gear refreshing in the background (PAGE_JS swaps it in): a live note, then what changed lit up */
+.ar-live { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; font-size: 12px;
+    font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.ar-live.done { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent);
+    border-color: color-mix(in srgb, var(--good) 35%, transparent); }
+.ar-live.failed { color: var(--muted); background: var(--surface-3); border-color: var(--border); }
+.ar-spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+    animation: ar-spin 0.8s linear infinite; }
+@keyframes ar-spin { to { transform: rotate(360deg); } }
+.ar-updated { animation: ar-updated 1.6s ease-out; }
+@keyframes ar-updated { from { box-shadow: 0 0 0 2px var(--good), 0 0 30px color-mix(in srgb, var(--good) 40%, transparent); } }
+.ar-item.ar-changed { border-color: var(--good); box-shadow: 0 0 0 1px var(--good), 0 0 14px color-mix(in srgb, var(--good) 35%, transparent); }
+.ar-new { font-size: 9px; font-weight: 800; letter-spacing: 0.06em; color: #0b1a10; background: var(--good);
+    border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+@media (prefers-reduced-motion: reduce) { .ar-spin, .ar-updated { animation: none; } }
 @media (max-width: 900px) {
     .ar-doll { grid-template-columns: 1fr; }
     .ar-model { order: -1; min-height: 0; }
@@ -1285,6 +1303,60 @@ onEach('[data-focus-load]', box => {
       setTimeout(() => location.reload(), 400);
     })
     .catch(() => fail());
+});
+// Armory refresh: a stored character older than a few hours shows at once while it's fetched again in the
+// background. Wait for that (?armory_wait=1), then swap the fresh parts in place (data-armory-part: the gear
+// card, the character page's header) - no reload - and light up the gear that changed.
+onEach('[data-armory-refresh]', card => {
+  const note = card.querySelector('.ar-live');
+  const say = (text, cls) => { if (note) { note.hidden = false; note.className = 'ar-live ' + cls; note.textContent = text; } };
+  const slots = root => new Map([...root.querySelectorAll('.ar-item[data-slot]')].map(
+    el => [el.dataset.slot, (el.dataset.item || '') + '|' + (el.dataset.itemQ || '') + '|' + el.textContent.trim()]));
+  const url = new URL(location.href);
+  url.hash = '';
+  url.searchParams.set('armory_wait', '1');
+  fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(res => {
+      if (!res.ok) return say(res.why || "Couldn't refresh from the armory right now - showing what we had.", 'failed');
+      const page = new URL(location.href);
+      page.hash = '';
+      return fetch(page, {credentials: 'same-origin', cache: 'no-store'})
+        .then(r => r.ok ? r.text() : Promise.reject())
+        .then(html => {
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const before = slots(card);
+          document.querySelectorAll('[data-armory-part][id]').forEach(old => {
+            const fresh = doc.getElementById(old.id);
+            if (!fresh) return;
+            fresh.removeAttribute('data-armory-refresh');  // done: don't wait again
+            old.replaceWith(fresh);
+            window.raidInit(fresh);
+          });
+          const swapped = document.getElementById(card.id);
+          if (!swapped || swapped === card) return;
+          let changed = 0;
+          slots(swapped).forEach((sig, slot) => {
+            if (!before.has(slot) || before.get(slot) === sig) return;
+            changed++;
+            const item = swapped.querySelector('.ar-item[data-slot="' + slot + '"]');
+            item.classList.add('ar-changed');
+            item.title = 'Changed since the last time we fetched this character';
+            const name = item.querySelector('.ar-name');
+            if (name) name.insertAdjacentHTML('beforeend', '<b class="ar-new">NEW</b>');
+          });
+          swapped.classList.add('ar-updated');
+          const live = swapped.querySelector('.ar-live');
+          if (live) {
+            live.hidden = false;
+            live.className = 'ar-live done';
+            live.textContent = changed ? '✨ Updated just now - ' + changed + ' item' + (changed > 1 ? 's' : '') + ' changed'
+                                       : '✓ Checked just now - up to date';
+          }
+          if (typeof prefetched !== 'undefined') prefetched.clear();  // soft navigation's copies are old now
+        });
+    })
+    .catch(() => say("Couldn't refresh from the armory right now - showing what we had.", 'failed'));
 });
 // Damage by target: a row of "Where your damage went" opens everyone's damage on it; healers on request.
 onEach('.dtable tr.dt-click', tr => {

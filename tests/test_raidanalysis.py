@@ -413,13 +413,24 @@ class TestTopPlayerComparison(unittest.TestCase):
         meta = rows['Metamorphosis']
         self.assertEqual([w['segment'] for w in meta['windows']], [(0, 1), (1, 2)])
         self.assertEqual((meta['hits'], meta['considered'], meta['verdict']), (2, 2, 'good'))
-        self.assertEqual(rows['Essence Break']['verdict'], 'missing')
+        # Never pressed, talents unknown: most likely not talented - not judged
+        self.assertEqual(rows['Essence Break']['verdict'], 'not_taken')
         # Any combat potion counts, and a trinket we don't have isn't a miss.
         self.assertEqual(rows['Combat potion']['ours_casts'], 1)
         self.assertEqual(rows['Cursed Trinket']['verdict'], 'not_equipped')
         self.assertEqual(rows['Cursed Trinket']['weak'], [])
         notes = benchmarks.notes(list(rows.values()), 'Havoc Demon Hunters')
-        self.assertTrue(any('Essence Break' in n['text'] and n['tone'] == 'bad' for n in notes))
+        self.assertFalse(any('Essence Break' in n['text'] for n in notes))
+        # ...but with their talents known: it was taken (or baseline) and never pressed - a real miss
+        from raidanalysis.gamedata import Talents
+        had_it = Talents(frozenset({'Some Other Talent'}), frozenset({'Essence Break', 'Some Other Talent'}))
+        rows_t = {r['name']: r for r in benchmarks.compare([ours], top, self.SPELLS, talents=had_it)}
+        self.assertEqual(rows_t['Essence Break']['verdict'], 'missing')
+        self.assertTrue(any('Essence Break' in n['text'] and n['tone'] == 'bad'
+                            for n in benchmarks.notes(list(rows_t.values()), 'Havoc Demon Hunters')))
+        skipped = Talents(frozenset({'Essence Break'}), frozenset({'Essence Break'}))
+        rows_t = {r['name']: r for r in benchmarks.compare([ours], top, self.SPELLS, talents=skipped)}
+        self.assertEqual(rows_t['Essence Break']['verdict'], 'not_taken')
         trinket = [n for n in notes if 'Cursed Trinket' in n['text']]
         self.assertEqual([n['tone'] for n in trinket], ['info'])  # not a missed cast
         self.assertIn('worth getting', trinket[0]['text'])  # loot luck: a tip, not a reproach
@@ -605,6 +616,13 @@ class TestSameNameMechanics(unittest.TestCase):
         other = dict(analysis, abilities=[dict(eyes[0], id=1292758, ids=[1292758])])
         merged = analyzer.merge_pulls([analysis, other])
         self.assertEqual(len([a for a in merged['abilities'] if a['name'] == 'Evil Eyes']), 1)
+        # ...and one row (hits added up) on a player's page - the player report keys mechanics by name too
+        tags = {1292758: analyzer.TAG_AVOIDABLE, 1292764: analyzer.TAG_AVOIDABLE}
+        report = {r['name']: r for r in analyzer.player_report(
+            [{'number': i, 'kill': False, 'analysis': dict(a, _duration=300000)}
+             for i, a in enumerate((self.fight(), other), 1)], tags)}
+        eyes_rows = [a for a in report['Aedrios']['avoidable'].values() if a['name'] == 'Evil Eyes']
+        self.assertEqual([a['hits'] for a in eyes_rows], [2])
 
     def test_fetched_with_nobody_hit_is_complete(self):
         """Evil Eyes' cast id was fetched and nobody took it: a real zero, not "unknown" - the merge stays complete."""
@@ -975,7 +993,7 @@ class TestFrequentCooldownTiming(unittest.TestCase):
 
 
 class TestNeverCastVsNotFetched(unittest.TestCase):
-    """Shiv that nobody cast is a real 'never used'; Shiv that was cast but not fetched needs a re-analyze."""
+    """Shiv that nobody cast is a real zero (not talented); Shiv that was cast but not fetched needs a re-analyze."""
 
     def test_real_zero_vs_unknown(self):
         from raidanalysis import benchmarks
@@ -986,7 +1004,7 @@ class TestNeverCastVsNotFetched(unittest.TestCase):
         not_talented = dict(base, casts_seen={1, 77})        # no Shiv anywhere in the log
         not_fetched = dict(base, casts_seen={1, 77, 5938})   # Shiv was cast, we just didn't keep it
         shiv = lambda pull: next(r for r in benchmarks.compare([pull], top, spells) if r['name'] == 'Shiv')
-        self.assertEqual((shiv(not_talented)['known'], shiv(not_talented)['verdict']), (True, 'missing'))
+        self.assertEqual((shiv(not_talented)['known'], shiv(not_talented)['verdict']), (True, 'not_taken'))
         self.assertEqual((shiv(not_fetched)['known'], shiv(not_fetched)['verdict']), (False, None))
 
 
@@ -1010,6 +1028,68 @@ class TestCastsPerMinuteOveruse(unittest.TestCase):
         from raidanalysis import throughput
         self.assertEqual(throughput._cpm_verdict(0.6, 0.3, overuse=True), 'good')   # 2x, but only +0.3 a minute
         self.assertEqual(throughput._cpm_verdict(4.6, 1.7), 'good')                 # overall: more is never bad
+
+
+class TestTalents(unittest.TestCase):
+    """A Mistweaver on Rushing Wind Kick, without Healing Elixir: neither is held against them - and per pull."""
+
+    def catalog(self):
+        from raidanalysis import gamedata
+        entries = ('ID,TraitDefinitionID,MaxRanks,NodeEntryType,TraitSubTreeID\n'
+                   '1,11,1,1,0\n2,12,1,1,0\n3,13,1,1,0\n5,15,1,1,0\n9,19,1,1,0\n')
+        definitions = ('OverrideName_lang,OverrideSubtext_lang,OverrideDescription_lang,ID,SpellID,OverrideIcon,'
+                       'OverridesSpellID,VisibleSpellID\n'
+                       ',,,11,107428,0,0,0\n,,,12,467307,0,107428,0\n,,,13,122281,0,0,0\n,,,15,1260511,0,0,0\n'
+                       ',,,19,191427,0,0,0\n')
+        node_entries = 'ID,TraitNodeID,TraitNodeEntryID,_Index\n1,101,1,0\n2,102,2,0\n3,103,3,0\n4,105,5,0\n5,109,9,0\n'
+        nodes = 'ID,TraitTreeID,PosX,PosY,Type,Flags,TraitSubTreeID\n101,1000,0,0,0,0,0\n102,1000,0,0,0,0,0\n' \
+                '103,1000,0,0,0,0,0\n105,1000,0,0,0,0,0\n109,2000,0,0,0,0,0\n'
+        names = ('ID,Name_lang\n107428,Rising Sun Kick\n467307,Rushing Wind Kick\n122281,Healing Elixir\n'
+                 '1260511,Spiritfont\n191427,Metamorphosis\n116670,Vivify\n')
+        rows = gamedata.talent_rows(entries, definitions, node_entries, nodes, names)
+        self.assertIn((2, 1000, 'Rushing Wind Kick', 'Rising Sun Kick'), rows)
+        return gamedata.catalog_from([dict(zip(('entry_id', 'tree_id', 'name', 'overrides'), r)) for r in rows])
+
+    def test_talents_from_combatantinfo(self):
+        events = [{'type': 'combatantinfo', 'sourceID': 1,
+                   'talentTree': [{'id': 1, 'rank': 1, 'nodeID': 101}, {'id': 3, 'rank': 0, 'nodeID': 103}]},
+                  {'type': 'combatantinfo', 'sourceID': 2}]  # no talents logged
+        self.assertEqual(analyzer.talent_entries({1: 'Boops', 2: 'Other'}, {'Boops', 'Other'}, events), {'Boops': [1]})
+
+    def test_missing_abilities_per_pull(self):
+        from raidanalysis import gamedata
+        catalog = self.catalog()
+        # Rushing Wind Kick takes Rising Sun Kick's place; Metamorphosis is another class's tree - not theirs
+        rwk = gamedata.missing_abilities([1, 2], catalog)
+        self.assertEqual(rwk.missing, {'Rising Sun Kick', 'Healing Elixir', 'Spiritfont'})
+        self.assertNotIn('Vivify', rwk.known)  # baseline: never "not talented"
+        # Talents change between pulls: only what they had in none of them is missing
+        pull = lambda n, entries: (n, {'analysis': {'talents': {'Boops': entries}}})  # noqa: E731
+        talents = gamedata.not_taken([pull(1, [1, 2]), pull(2, [1, 3]), pull(3, None)], 'Boops', catalog)
+        self.assertEqual(talents.missing, {'Spiritfont'})
+        self.assertIsNone(gamedata.not_taken([pull(1, None)], 'Boops', catalog))  # nothing to go on
+        self.assertIsNone(gamedata.not_taken([pull(1, [777])], 'Boops', catalog))  # ids the catalog doesn't know
+
+    def test_uptime_and_hots_of_talents_not_taken(self):
+        from raidanalysis import throughput
+        from raidanalysis.gamedata import Talents
+        me = {'auras': [], 'casts': {'Vivify': 50}, 'on_others': []}
+        numbered = [(1, {'fight_id': 1, 'start_ms': 0, 'end_ms': 300000,
+                         'analysis': {'extras': {'duration': 300000, 'players': {'Boops': me}}}})]
+        top = [{'duration': 300000, 'auras': [{'id': 1, 'name': 'Healing Elixir', 'kind': 'buff', 'uptime': 200000}],
+                'cast_names': {'Healing Elixir': 5}, 'on_others': [{'id': 2, 'name': 'Spiritfont', 'uptime': 600000}]}
+               for _ in range(5)]
+        # Talents unknown: never up and never cast - most likely not talented, no verdict
+        up = throughput.uptime(numbered, 'Boops', top)
+        self.assertEqual([(u['name'], u['not_taken'], u['verdict']) for u in up], [('Healing Elixir', True, None)])
+        hots = throughput.on_others_rows(numbered, 'Boops', top)
+        self.assertEqual([(h['name'], h['not_taken'], h['verdict']) for h in hots], [('Spiritfont', True, None)])
+        # Their talents say they had both: zero is a real miss
+        had = Talents(frozenset(), frozenset({'Healing Elixir', 'Spiritfont'}))
+        self.assertEqual(throughput.uptime(numbered, 'Boops', top, talents=had)[0]['verdict'], 'off')
+        self.assertEqual(throughput.on_others_rows(numbered, 'Boops', top, talents=had)[0]['verdict'], 'off')
+        skipped = Talents(frozenset({'Healing Elixir'}), frozenset({'Healing Elixir'}))
+        self.assertTrue(throughput.uptime(numbered, 'Boops', top, talents=skipped)[0]['not_taken'])
 
 
 class TestDisciplineRamp(unittest.TestCase):
@@ -1780,6 +1860,13 @@ class TestArmory(unittest.TestCase):
         html = view.tab(data, {'name': 'Futhark', 'class': 'Hunter', 'missing_enchants': ['Back']})
         self.assertIn('No enchant', html)
         self.assertIn('https://www.wowhead.com/item=3', html)
+        self.assertIn('data-slot="BACK"', html)  # what PAGE_JS compares to light up changed gear
+        self.assertNotIn('data-armory-refresh', html)
+        # A fresh copy on its way: the page waits for it and swaps the card in (PAGE_JS) - no "reload" advice
+        live = view.tab(data, {'name': 'Futhark', 'class': 'Hunter'}, stale=True, refreshing=True)
+        self.assertIn('data-armory-refresh', live)
+        self.assertIn('id="armory-card"', live)
+        self.assertNotIn('reload', live.lower())
 
 
 class TestCharacterPage(unittest.TestCase):

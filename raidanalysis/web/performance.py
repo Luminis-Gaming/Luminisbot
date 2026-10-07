@@ -293,6 +293,17 @@ def _raid_buff_tile(buff):
     </div></div>"""
 
 
+def _not_taken_line(rows, lookup, talents):
+    """The rows for talents you didn't take: named in one muted line (so it's clear they were seen), not judged."""
+    skipped = [r for r in rows if r.get('not_taken')]
+    if not skipped:
+        return ''
+    names = ', '.join(_spell(r['name'], r['id'], r.get('icon'), lookup.get(r['id'])) for r in skipped)
+    why = ("your talents in these pulls didn't have them" if talents is not None else
+           "you never used them in these pulls, so they're most likely talents you didn't take")
+    return f'<p class="muted small not-taken">Not judged - {why}: {names}</p>'
+
+
 def _uptime_tiles(rows, lookup):
     tiles = []
     for r in rows:
@@ -410,22 +421,27 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
         sections.append(subsection('Keep on cooldown', f"""
             <p class="muted small">Abilities you press whenever they're ready (or on procs) - there's no right
                moment, so they're judged on how often you press them, next to the top {label}.</p>{rotational}"""))
-    kept_out = throughput.on_others_rows(numbered, name, top)
-    uptime = throughput.uptime(numbered, name, top, tracked)
+    talents = (data or {}).get('talents')
+    kept_out = throughput.on_others_rows(numbered, name, top, talents)
+    uptime = throughput.uptime(numbered, name, top, tracked, talents)
     procs = throughput.proc_rows(numbered, name, top, tracked)
     # Names and icons from Wowhead - procs only come with the buff's id (benchmarks.ensure_spells_for looked
     # them up before the page; anything new is fetched in the background for the next load).
     lookup = spells.lookup({r['id'] for r in kept_out + uptime + procs if r.get('id')})
     by_name = {info['name']: info for info in ((data or {}).get('spells') or {}).values() if info.get('name')}
     if kept_out:
+        shown = [r for r in kept_out if not r['not_taken']]
         sections.append(subsection('HoTs & buffs on others', f"""
             <p class="muted small">How many of each you kept out on the raid on average, over the whole fight
                (WowAnalyzer's "average Renewing Mists"), next to the top {label}. Letting charges sit at their
-               cap shows up here and in casts per minute.</p>{_on_others_tiles(kept_out, lookup)}"""))
+               cap shows up here and in casts per minute.</p>{_on_others_tiles(shown, lookup) if shown else ''}
+            {_not_taken_line(kept_out, lookup, talents)}"""))
     if uptime:
+        shown = [r for r in uptime if not r['not_taken']]
         sections.append(subsection('Uptime', f"""
             <p class="muted small">Your own buffs and debuffs on the boss that the top {label} keep up most of
-               the fight. The strip shows when it was up in your longest pull.</p>{_uptime_tiles(uptime, lookup)}"""))
+               the fight. The strip shows when it was up in your longest pull.</p>{_uptime_tiles(shown, lookup) if shown else ''}
+            {_not_taken_line(uptime, lookup, talents)}"""))
     elif have_extras and top and not any(p.get('auras') for p in top):
         sections.append(f"""<p class="warn-text small">⏳ <strong>Uptime, wasted procs, resources and casts per minute</strong>
             are compared with the top {label}, whose buffs, procs and casts haven't been fetched since this was added.

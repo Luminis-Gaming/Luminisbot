@@ -24,7 +24,7 @@ def _mplus_color(score):
 def _item(item, slot, missing, right=False):
     label = armory.SLOT_NAMES[slot]
     if not item:
-        return (f'<div class="ar-item empty{" right" if right else ""}"><span class="ar-icon"></span>'
+        return (f'<div class="ar-item empty{" right" if right else ""}" data-slot="{slot}"><span class="ar-icon"></span>'
                 f'<span class="ar-text"><span class="ar-name muted">Empty</span><span class="ar-meta">{label}</span></span></div>')
     color = QUALITY_COLORS.get(item['quality'], '#a335ee')
     meta = [label]
@@ -48,6 +48,7 @@ def _item(item, slot, missing, right=False):
         href = f'https://www.wowhead.com/item={int(item["item_id"])}' + (f'?{wowhead_q}' if wowhead_q else '')
         tip = f' data-item="{int(item["item_id"])}" data-item-q="{esc(q)}"'
     return (f'<a class="ar-item{" right" if right else ""}" style="--q:{color}" href="{esc(href)}" target="_blank" rel="noopener"{tip} '
+            f'data-slot="{slot}" '
             f'aria-label="{esc(item["name"])} · item level {item["ilvl"] or "?"}">'
             f'<span class="ar-icon">{icon}<b class="ar-ilvl">{item["ilvl"] or ""}</b></span>'
             f'<span class="ar-text"><span class="ar-name">{esc(item["name"])}</span>'
@@ -58,7 +59,7 @@ def _num(value):
     return f'{value:,.0f}'.replace(',', '\u2009')  # thin-space thousands, like the game's tooltips
 
 
-def sheet(data, stale=False):
+def sheet(data, stale=False, refreshing=False):
     """The character sheet under the gear: attributes, enhancements, the set's bonuses - each part only when known."""
     st = armory.stats(data)
     tier = armory.tier_set(data)
@@ -81,26 +82,30 @@ def sheet(data, stale=False):
                      f'{tier["worn"]}/{tier["size"]}</span></h4>{bonuses}</div>')
     if not parts:
         return ''
-    return f'<div class="ar-sheet">{"".join(parts)}</div>{_sheet_note(data, st, stale)}'
+    return f'<div class="ar-sheet">{"".join(parts)}</div>{_sheet_note(data, st, stale, refreshing)}'
 
 
-def _sheet_note(data, st, stale):
+def _sheet_note(data, st, stale, refreshing=False):
     """Why there's no stat sheet, in words."""
     if st:
         return ''
     if not armory.blizzard_configured():
         why = "Stats come from Blizzard's armory API, which isn't set up on this server."
+    elif refreshing:
+        why = 'Fetching the stat sheet from Blizzard - it shows up here by itself.'
     elif data.get('sheet_v') != armory.SHEET_VERSION or stale:
-        why = 'Fetching the stat sheet from Blizzard - reload in a minute.'
+        why = "Couldn't fetch the stat sheet from Blizzard lately - it's tried again in a bit."
     else:
         why = "Blizzard's armory has no stats for this character right now (it can lag until they log in again)."
     return f'<p class="muted small ar-note">{why}</p>'
 
 
-def tab(data, player, stale=False, embedded=False):
+def tab(data, player, stale=False, embedded=False, refreshing=False):
     """
     The Character card. player: analyzer.player_report row (class colour, missing enchants). embedded: on the
-    character page, under its own header - no name and class line of its own.
+    character page, under its own header - no name and class line of its own. refreshing: a fresh copy is
+    being fetched in the background - PAGE_JS waits for it and swaps the card (data-armory-part) in place,
+    marking what changed.
     """
     info = armory.summary(data)
     gear = armory.items(data)
@@ -131,7 +136,7 @@ def tab(data, player, stale=False, embedded=False):
     model = (f'<img class="ar-render" src="{esc(render)}" alt="{esc(player["name"])}" loading="lazy">' if render else
              f'<div class="ar-noimg">{esc(player["name"][:1])}</div>')
     return f"""
-    <div class="card ar-card" style="--c:{color}">
+    <div class="card ar-card" id="armory-card" data-armory-part style="--c:{color}"{' data-armory-refresh' if refreshing else ''}>
         <div class="ar-head">
             {'' if embedded else f'<div><h2 class="ar-title" style="color:{color}">{esc(player["name"])}</h2><p class="muted">{who}{guild}</p></div>'}
             <div class="ar-stats">{''.join(tiles)}</div>
@@ -141,8 +146,9 @@ def tab(data, player, stale=False, embedded=False):
             <div class="ar-model">{model}<div class="ar-weapons">{weapons}</div></div>
             <div class="ar-col">{right}</div>
         </div>
-        {sheet(data, stale)}
+        {sheet(data, stale, refreshing)}
         <div class="ar-foot">{''.join(links)}
-            <span class="muted small">{'Refreshing in the background - reload in a bit for the latest gear. ' if stale else ''}
-            From Blizzard's armory and Raider.IO; kept {armory.FRESH_HOURS} hours.</span></div>
+            {'<span class="ar-live" role="status"><i class="ar-spin"></i>Checking the armory for anything new…</span>'
+             if refreshing else '<span class="ar-live" role="status" hidden></span>'}
+            <span class="muted small">From Blizzard's armory and Raider.IO; kept {armory.FRESH_HOURS} hours.</span></div>
     </div>"""

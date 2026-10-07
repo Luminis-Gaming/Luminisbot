@@ -229,7 +229,8 @@ def _scope(prof):
 def hero(prof, data, back_href, with_model=True):
     """
     Name, class / spec / realm, the pin button, key numbers (of the chosen tier and difficulty) and links -
-    and their render, unless the gear panel right under it shows it.
+    and their render, unless the gear panel right under it shows it. Swapped in place with the gear when the
+    armory refresh lands (data-armory-part: guild, render).
     """
     color = CLASS_COLORS.get(prof['class'], '#9aa1b9')
     info = armory.summary(data) if data else {}
@@ -257,7 +258,7 @@ def hero(prof, data, back_href, with_model=True):
         links.append(f'<a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" href="https://raider.io/characters/'
                      f'{armory.REGION}/{esc(slug)}/{esc(prof["name"])}">Raider.IO ↗</a>')
     return f"""
-    <div class="card ch-hero{'' if with_model else ' no-model'}" style="--c:{color}">
+    <div class="card ch-hero{'' if with_model else ' no-model'}" id="ch-hero" data-armory-part style="--c:{color}">
         {f'<div class="ch-model">{model}</div>' if with_model else ''}
         <div class="ch-main">
             <div class="ch-top">

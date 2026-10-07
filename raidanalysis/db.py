@@ -191,6 +191,17 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (spell_id, kind)
         );
     """)
+    # Every talent tree's entries (gamedata.py), from wago.tools: which ability each talent entry gives, in
+    # which tree, and which ability it replaces (Rushing Wind Kick -> Rising Sun Kick)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_talents (
+            entry_id BIGINT PRIMARY KEY,
+            tree_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            overrides TEXT,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
     # Officers' calls on a spec's abilities: a major cooldown (timed), rotational (pressed on cooldown)
     # or hidden - overriding benchmarks.ability_kind(). Class / spec as WCL names them ('DeathKnight').
     cursor.execute("""
@@ -1089,6 +1100,29 @@ def replace_tracked_spells(kind, spell_ids):
 def get_tracked_spells(kind):
     return frozenset(r['spell_id'] for r in _run("SELECT spell_id FROM raid_tracked_spells WHERE kind = %s",
                                                  (kind,), fetch='all'))
+
+
+def talents_stale(days):
+    row = _run("SELECT MAX(fetched_at) > NOW() - make_interval(days => %s) AS fresh FROM raid_talents",
+               (days,), fetch='one')
+    return not (row and row['fresh'])
+
+
+def replace_talents(rows):
+    """rows: [(entry id, tree id, ability name, name of the ability it replaces or None)]."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM raid_talents")
+            cur.executemany("INSERT INTO raid_talents (entry_id, tree_id, name, overrides) VALUES (%s, %s, %s, %s)",
+                            rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_talents():
+    return _run("SELECT entry_id, tree_id, name, overrides FROM raid_talents", fetch='all')
 
 
 def get_spec_overrides():

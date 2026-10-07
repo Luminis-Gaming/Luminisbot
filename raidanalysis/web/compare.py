@@ -13,7 +13,9 @@ from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, s
 
 VERDICTS = {'good': ('pill-kill', 'In line'), 'mostly': ('pill-mostly', 'Mostly in line'),
             'ok': ('pill', 'Hit & miss'), 'off': ('pill-wipe', 'Off'), 'missing': ('pill-wipe', 'Never used'),
-            'not_equipped': ('pill-muted', '💎 Worth getting')}
+            'not_equipped': ('pill-muted', '💎 Worth getting'), 'not_taken': ('pill-muted', 'Not talented?')}
+NOT_TAKEN_TIP = ("You never pressed it on any of these pulls - most likely a talent you didn't take, so it "
+                 "isn't judged")
 
 
 def _spec_icon_class(spell_id):
@@ -26,7 +28,13 @@ def _verdict_pill(verdict, known=True):
     if not verdict:
         return '<span class="muted small">—</span>'
     cls, text = VERDICTS[verdict]
-    return f'<span class="pill {cls}">{text}</span>'
+    tip = f' title="{NOT_TAKEN_TIP}"' if verdict == 'not_taken' else ''
+    return f'<span class="pill {cls}"{tip}>{text}</span>'
+
+
+def judged(r):
+    """Judged against the top players: what you control alone, and not a talent you didn't take."""
+    return r['category'] in benchmarks.JUDGED and r.get('verdict') != 'not_taken'
 
 
 def _ability(row, spells):
@@ -45,7 +53,8 @@ def _weak_line(r):
 
 
 ROTATION_VERDICTS = {'good': ('pill-kill', 'Often enough'), 'ok': ('pill', 'A bit low'),
-                     'off': ('pill-wipe', 'Too few'), 'missing': ('pill-wipe', 'Never used')}
+                     'off': ('pill-wipe', 'Too few'), 'missing': ('pill-wipe', 'Never used'),
+                     'not_taken': ('pill-muted', 'Not talented?')}
 KIND_LABELS = {benchmarks.MAJOR: 'Major cooldown', benchmarks.ROTATIONAL: 'Keep on cooldown', benchmarks.HIDE: 'Hide'}
 
 
@@ -106,7 +115,7 @@ def summary(data, back=None):
                    '<span class="muted">—</span>')
         top_when = ', '.join(fmt_duration(w['ref_at']) for w in r['windows'][:5]) or '<span class="muted">no shared moment</span>'
         rows.append(f"""
-            <tr class="{'' if r['category'] in benchmarks.JUDGED else 'muted-row'}">
+            <tr class="{'' if judged(r) else 'muted-row'}">
                 <td>{_ability(r, data['spells'])}{_weak_line(r)}{_trinket_line(r)}</td>
                 <td class="small muted">{esc(benchmarks.CATEGORY_LABELS.get(r['category'], ''))}
                     {kind_form(r, data['player'], back) if back and r['category'] in (benchmarks.THROUGHPUT, benchmarks.TRINKET) else ''}</td>
@@ -135,14 +144,17 @@ def rotation_tiles(data, back=None):
     (their timing doesn't matter, only that it's rolling). back adds the officers' Kind control.
     """
     tiles = []
-    for r in rotational_rows(data):
+    # A talent you didn't take goes last, dimmed: shown (so it's clear it was noticed), not judged
+    for r in sorted(rotational_rows(data), key=lambda r: r['verdict'] == 'not_taken'):
+        not_taken = r['verdict'] == 'not_taken'
         share = r['ours_per_min'] / r['top_per_min'] if r['top_per_min'] else 0
-        band = {'good': 'good', 'ok': 'ok'}.get(r['verdict'], 'bad')
+        band = 'neutral' if not_taken else {'good': 'good', 'ok': 'ok'}.get(r['verdict'], 'bad')
         cls, text = ROTATION_VERDICTS.get(r['verdict'], ('pill-muted', '—'))
-        pill = f'<span class="pill {cls}">{text}</span>' if r['known'] else _verdict_pill(None, False)
+        tip = f' title="{NOT_TAKEN_TIP}"' if not_taken else ''
+        pill = f'<span class="pill {cls}"{tip}>{text}</span>' if r['known'] else _verdict_pill(None, False)
         cooldown = f' · {r["cooldown_ms"] / 1000:.0f} s cooldown' if r.get('cooldown_ms') else ''
         tiles.append(f"""
-            <div class="rot-tile">
+            <div class="rot-tile{' not-taken' if not_taken else ''}">
                 <div class="rot-head">{_ability(r, data['spells'])}{pill}</div>
                 <div class="rot-value"><b>{r['ours_per_min']:.1f}</b><span>casts / min</span></div>
                 <div class="subscore-track" title="{100 * share:.0f}% of the top players' rate">
@@ -208,14 +220,14 @@ def timeline(data, pull, boss=None, spell_lookup=None):
             tracks.append(f'<div class="tl-row boss" data-g="boss">{ticks}</div>')
     for g, r in enumerate(rows):
         ids = set(r['ids'])
-        judged = r['category'] in benchmarks.JUDGED
-        hidden = '' if judged else ' hidden'
+        on = judged(r)  # anything else starts hidden - its chip shows it
+        hidden = '' if on else ' hidden'
         info = spells.get(r['icon_id']) or {}
         if info.get('icon'):
             icons[r['icon_id']] = icon_url(info['icon'])
         chip_icon = icons.get(r['icon_id'])
         chips.append(f'<button type="button" class="tl-chip" data-g="{g}" data-name="{esc(r["name"])}" '
-                     f'aria-pressed="{"true" if judged else "false"}">'
+                     f'aria-pressed="{"true" if on else "false"}">'
                      + (f'<img class="chip-icon" src="{esc(chip_icon)}" alt="">' if chip_icon else '')
                      + f'{esc(r["name"])}</button>')
         weak_at = {m['ref_at'] for m in r.get('weak') or []}
@@ -225,11 +237,11 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                         f'(in line = within ±{w["tolerance"] / 1000:.0f} s)'
                         f'{" - one you usually miss" if w["ref_at"] in weak_at else ""}"></i>'
                         for w in r['windows'])
-        shown = _pull_lined_up(r, pull) if judged and r['verdict'] != 'not_equipped' else None
+        shown = _pull_lined_up(r, pull) if on and r['verdict'] != 'not_equipped' else None
         this_pull = (f'<span class="pull-score" title="Moments in line in the pull shown (the verdict covers '
                      f'the whole night)">this pull {shown[0]}/{shown[1]}</span>' if shown and shown[1] else '')
         labels.append(f'<div class="tl-lab grp" data-g="{g}"{hidden}>{_ability(r, spells)}'
-                      f'<span class="grp-right">{this_pull}{_verdict_pill(r["verdict"], r["known"]) if judged else ""}</span></div>')
+                      f'<span class="grp-right">{this_pull}{_verdict_pill(r["verdict"], r["known"]) if on else ""}</span></div>')
         tracks.append(f'<div class="tl-row grp" data-g="{g}"{hidden}>{bands}</div>')
         for lane in lanes:
             marks = []

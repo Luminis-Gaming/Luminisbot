@@ -428,16 +428,19 @@ def _texts(ids, spell_info):
     return effect, cooldown
 
 
-def compare(pulls, top, spell_info, overrides=None):
+def compare(pulls, top, spell_info, overrides=None, talents=None):
     """
     How one player's pulls line up with the top players, per major ability.
 
     pulls: [{'number', 'duration', 'phases': [{'id', 'start'}], 'casts': [[t, id]], 'cast_ids': set or None}]
     top: benchmark players. spell_info: {id: {'name', 'meta', ...}} (Wowhead).
     overrides: {ability name: MAJOR / ROTATIONAL / HIDE} - officers' calls for this spec.
+    talents: gamedata.not_taken() - which abilities their talents didn't give them; None when unknown.
     -> [{'name', 'ids', 'icon_id', 'category', 'top_users', 'top_per_min', 'ours_per_min', 'ours_casts',
          'windows', 'hits', 'considered', 'verdict', 'known', 'kind', 'auto_kind'}], most important first.
        Rotational abilities have category ROTATIONAL, no windows, and a verdict on how often alone.
+       Never pressed: 'not_taken' (a talent you didn't take - not judged), 'not_equipped' (a trinket),
+       'missing' (a combat potion, or an ability you had).
     """
     pulls = [p for p in pulls if p['duration'] >= MIN_PULL_MS]
     if not top or not pulls:
@@ -520,8 +523,15 @@ def compare(pulls, top, spell_info, overrides=None):
         if not known:
             verdict = None
         elif not ours_casts:
-            # A trinket you never used all night is one you don't have on - not a missed cast.
-            verdict = 'not_equipped' if cat == TRINKET else 'missing'
+            # Never pressed all night: a trinket you don't have on, or a talent you didn't take (Rushing Wind
+            # Kick in place of Rising Sun Kick) - neither is a missed cast. Your talents say which;
+            # pulls from before talents were kept can't tell, so a class ability gets the benefit of the doubt.
+            if cat == TRINKET:
+                verdict = 'not_equipped'
+            elif cat != POTION and (talents is None or name in talents.missing):
+                verdict = 'not_taken'
+            else:
+                verdict = 'missing'
         elif cat == ROTATIONAL:
             ratio = ours_per_min / top_per_min if top_per_min else 1
             verdict = 'good' if ratio >= ROTATIONAL_GOOD else 'ok' if ratio >= ROTATIONAL_OK else 'off'
@@ -607,21 +617,24 @@ def notes(rows, spec_label, limit=3):
     """
     bad, good, info = [], [], []
     for r in rows:
-        if r['category'] not in JUDGED or not r['verdict']:
-            continue
+        if r['category'] not in JUDGED or not r['verdict'] or r['verdict'] == 'not_taken':
+            continue  # never pressed a class ability: a talent you didn't take, nothing to say about it
         share = f"{100 * r['hits'] / r['considered']:.0f}%" if r.get('considered') else None
         if r['verdict'] == 'not_equipped':
             info.append(trinket_tip(r, spec_label))
         elif r['category'] == ROTATIONAL:
             if r['verdict'] == 'missing':
-                bad.append(f"{r['name']}: never pressed - {r['top_users']} of the top {spec_label} keep it rolling "
-                           f"(talented?)")
+                bad.append(f"{r['name']}: never pressed - you had it, and {r['top_users']} of the top {spec_label} "
+                           f"keep it rolling")
             elif r['verdict'] in ('off', 'ok'):
                 bad.append(f"{r['name']}: {r['ours_per_min']:.1f} a minute - the top {spec_label} "
                            f"{r['top_per_min']:.1f}. Press it whenever it's ready")
             continue
-        elif r['verdict'] == 'missing':
-            bad.append(f"{r['name']}: never pressed - {r['top_users']} of the top {spec_label} use it (talented?)")
+        elif r['verdict'] == 'missing' and r['name'] == POTION_GROUP:
+            bad.append(f"{r['name']}: never used - {r['top_users']} of the top {spec_label} use one")
+        elif r['verdict'] == 'missing':  # talented (or baseline), and never pressed
+            bad.append(f"{r['name']}: never pressed - you had it, and {r['top_users']} of the top {spec_label} "
+                       f"use it")
         elif r['verdict'] in ('mostly', 'ok', 'off') and r.get('weak'):
             worst = r['weak'][0]
             if r['verdict'] == 'mostly':
@@ -780,8 +793,8 @@ def major_casts(analysis, name):
 def for_player(numbered, name):
     """
     Everything the comparison views need for one character on one boss+difficulty:
-    {'player', 'benchmark', 'top', 'pulls', 'rows', 'spells', 'label'} - or None when there's
-    nothing to compare (no spec known). numbered: [(pull number, pull with analysis)].
+    {'player', 'benchmark', 'top', 'pulls', 'rows', 'spells', 'label', 'talents' (gamedata.not_taken)} - or
+    None when there's nothing to compare (no spec known). numbered: [(pull number, pull with analysis)].
     """
     from . import db
     player = _main_spec_player(numbered, name)
@@ -794,5 +807,7 @@ def for_player(numbered, name):
     ids = {sid for p in top for _, sid in p['casts']} | {sid for p in pulls for _, sid in p['casts']}
     spells = db.get_spells(ids) if ids else {}
     overrides = db.get_spec_overrides().get((player['class'], player['spec']), {})
-    return {'player': player, 'benchmark': benchmark, 'top': top, 'pulls': pulls,
-            'rows': compare(pulls, top, spells, overrides), 'spells': spells, 'label': spec_label(player)}
+    from .gamedata import not_taken
+    talents = not_taken(numbered, name)
+    return {'player': player, 'benchmark': benchmark, 'top': top, 'pulls': pulls, 'talents': talents,
+            'rows': compare(pulls, top, spells, overrides, talents), 'spells': spells, 'label': spec_label(player)}

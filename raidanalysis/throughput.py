@@ -471,17 +471,20 @@ def focus(numbered, name, role):
     return sorted(rows, key=lambda r: -max(r['mine_share'], r['raid_share'] or 0))
 
 
-def uptime(numbered, name, top, tracked=frozenset()):
+def uptime(numbered, name, top, tracked=frozenset(), talents=None):
     """
     The auras that matter for the spec (see the module doc), yours next to the top players':
-    [{'id', 'name', 'kind', 'ours', 'top', 'top_users', 'verdict', 'bands', 'band_duration'}].
+    [{'id', 'name', 'kind', 'ours', 'top', 'top_users', 'verdict', 'bands', 'band_duration', 'not_taken'}].
     ours / top: share of the fight it was up (top = median of the top players that have it).
-    bands: the longest pull's stretches (seconds), for the strip.
+    bands: the longest pull's stretches (seconds), for the strip. not_taken: never up, and a talent you didn't
+    take (Healing Elixir, Spiritfont) - no verdict, listed last. talents: gamedata.not_taken(); None (talents
+    unknown): never up and never cast counts as not taken.
     """
     mine = detail_pulls(numbered, name)
     if not mine or not top:
         return []
     need = min(3, len(top))
+    our_casts = _cast_names(mine)
     spells = set(KEY_AURAS)
     for p in top:
         spells.update((p.get('cast_names') or {}).keys())
@@ -514,14 +517,32 @@ def uptime(numbered, name, top, tracked=frozenset()):
         ours = up / total if total else 0
         if min(shares) >= ALWAYS_UP and ours >= ALWAYS_UP:
             continue  # a passive: always up for everyone, nothing to see
+        not_taken = _not_taken(aura, up, our_casts, talents)
         gap = top_share - ours
-        verdict = 'good' if gap <= UPTIME_GOOD_GAP else 'ok' if gap <= UPTIME_OK_GAP else 'off'
+        verdict = None if not_taken else 'good' if gap <= UPTIME_GOOD_GAP else 'ok' if gap <= UPTIME_OK_GAP else 'off'
         strip = next((a for a in longest[2]['auras'] if a['name'] == aura and a['kind'] == kind), None)
         rows.append({'id': s['id'], 'name': aura, 'icon': (strip or {}).get('icon') or s['icon'], 'kind': kind,
                      'ours': ours, 'top': top_share, 'top_users': len(shares), 'verdict': verdict,
                      'bands': (strip or {}).get('bands') or [], 'band_duration': longest[3].get('duration'),
-                     'band_pull': longest[0]})
-    return sorted(rows, key=lambda r: (r['verdict'] == 'good', -r['top']))
+                     'band_pull': longest[0], 'not_taken': not_taken})
+    return sorted(rows, key=lambda r: (r['not_taken'], r['verdict'] == 'good', -r['top']))
+
+
+def _cast_names(mine):
+    """Every ability a player cast in these detail_pulls() rows (their Casts tables)."""
+    return {ability for _, _, me, _ in mine for ability in me.get('casts') or {}}
+
+
+def _not_taken(aura, up, our_casts, talents):
+    """
+    Never up: a talent you didn't take - your talents say so, or when they don't know it (no talents kept, or a
+    buff named apart from its talent), you never cast it either.
+    """
+    if up:
+        return False
+    if talents is not None and aura in talents.known:
+        return aura in talents.missing
+    return aura not in our_casts
 
 
 def raid_buff(numbered, name, cls):
@@ -553,10 +574,11 @@ def raid_buff(numbered, name, cls):
 ON_OTHERS_GOOD, ON_OTHERS_OK = 0.9, 0.75   # how many you keep out on average, as a share of the top players'
 
 
-def on_others_rows(numbered, name, top):
+def on_others_rows(numbered, name, top, talents=None):
     """
     HoTs and buffs kept on others, as the average number active over the fight, next to the top players
-    (median of those who use it): [{'id', 'name', 'ours', 'top', 'top_users', 'verdict'}].
+    (median of those who use it): [{'id', 'name', 'ours', 'top', 'top_users', 'verdict', 'not_taken'}] -
+    not_taken: never out, and a talent you didn't take (see uptime()) - no verdict, listed last.
     """
     mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None]
     top = [p for p in top or [] if p.get('on_others') is not None and p.get('duration')]
@@ -578,18 +600,20 @@ def on_others_rows(numbered, name, top):
                 continue
             tops.setdefault(a['name'], []).append(a['uptime'] / p['duration'])
             ids.setdefault(a['name'], a['id'])
+    our_casts = _cast_names(mine)
     rows = []
     for aura in set(ours) | {a for a, v in tops.items() if len(v) >= need}:
         mean = ours.get(aura, 0) / total if total else 0
         shares = tops.get(aura, [])
         top_mean = _median(shares) if len(shares) >= need and shares else None
+        not_taken = _not_taken(aura, ours.get(aura, 0), our_casts, talents)
         verdict = None
-        if top_mean:
+        if top_mean and not not_taken:
             ratio = mean / top_mean
             verdict = 'good' if ratio >= ON_OTHERS_GOOD else 'ok' if ratio >= ON_OTHERS_OK else 'off'
         rows.append({'id': ids.get(aura), 'name': aura, 'ours': mean, 'top': top_mean, 'top_users': len(shares),
-                     'verdict': verdict})
-    return sorted(rows, key=lambda r: -max(r['ours'], r['top'] or 0))
+                     'verdict': verdict, 'not_taken': not_taken})
+    return sorted(rows, key=lambda r: (r['not_taken'], -max(r['ours'], r['top'] or 0)))
 
 
 MIN_GAINED = 50                 # less of a resource than this over the night says nothing about waste

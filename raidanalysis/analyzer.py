@@ -405,6 +405,24 @@ def _prepull(names_by_id, roster, combatant_events):
     return out
 
 
+def talent_entries(names_by_id, roster, combatant_events):
+    """
+    {player: [talent entry ids they had this pull]} from their combatantinfo event's talentTree ({'id' (the
+    trait node entry), 'rank', 'nodeID'}) - gamedata.not_taken() turns them into abilities. Talents can change
+    between pulls, so they're kept per pull.
+    """
+    out = {}
+    for event in combatant_events:
+        name = names_by_id.get(event.get('sourceID'))
+        if name not in roster or event.get('type') != 'combatantinfo':
+            continue
+        entries = sorted({int(t.get('id') or t.get('entryID') or 0) for t in event.get('talentTree') or []
+                          if isinstance(t, dict) and (t.get('rank') is None or t.get('rank') > 0)} - {0})
+        if entries:
+            out[name] = entries
+    return out
+
+
 def expected_enchant_slots(prepulls, share=0.6):
     """Slots most of the raid enchants (so expansion changes need no code changes)."""
     have, enchanted = {}, {}
@@ -851,6 +869,9 @@ def player_report(pulls, tags):
     Sorted best score first.
     """
     rows, mechanics_seen = {}, {}
+    # One mechanic, one key across pulls: each pull's merge_same_name keeps the id that hit hardest *that pull*
+    # (Throw Junk under one id in pull 2, the other in pull 3) - keyed by name, the first id seen stands for it.
+    key_of = {}
     for pull in pulls:
         analysis = pull['analysis']
         duration = analysis.get('_duration') or 0
@@ -869,10 +890,12 @@ def player_report(pulls, tags):
             tag = tags.get(ability['id'])
             if tag not in AVOIDABLE_TAGS:
                 continue
-            mechanics_seen.setdefault(ability['id'], {'name': ability['name'], 'icon': ability.get('icon'), 'tag': tag})
+            key = key_of.setdefault(ability.get('name') or ability['id'], ability['id'])
+            mechanics_seen.setdefault(key, {'name': ability['name'], 'icon': ability.get('icon'), 'tag': tag})
             for name, n in mistake_counts(ability).items():
                 if n and not (tag == TAG_AVOIDABLE_NON_TANK and roster.get(name, {}).get('role') == 'tank'):
-                    avoidable.setdefault(name, {})[ability['id']] = (ability['name'], ability.get('icon'), n)
+                    _, _, before = avoidable.setdefault(name, {}).get(key, (None, None, 0))
+                    avoidable[name][key] = (ability['name'], ability.get('icon'), before + n)
 
         for name, player in roster.items():
             r = rows.setdefault(name, _new_player_row(player))

@@ -127,6 +127,15 @@ CREATE TABLE IF NOT EXISTS raid_tracked_spells (
     PRIMARY KEY (spell_id, kind)
 );
 
+-- Talent tree entries (gamedata.py): the ability each gives, its tree, the ability it replaces
+CREATE TABLE IF NOT EXISTS raid_talents (
+    entry_id BIGINT PRIMARY KEY,                 -- TraitNodeEntry id, as in combatantinfo's talentTree
+    tree_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    overrides TEXT,                              -- Rushing Wind Kick: 'Rising Sun Kick'
+    fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- When a report first came in: the 10 latest raid nights are kept, imports for 7 days (db.prune_reports).
 ALTER TABLE raid_reports ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
 

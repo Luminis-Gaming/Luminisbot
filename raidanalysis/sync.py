@@ -82,6 +82,9 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
                     events += await wcl.get_events(session, code, fight['id'], data_type, expression,
                                                    hostility=hostility)
             analysis['boss_mechanics'][mech.key] = mech.collect(events, fight['startTime'], names_by_id, roster)
+    # Everyone's talents this pull: an ability you never pressed is only "not talented" when it really wasn't
+    analysis['talents'] = analyzer.talent_entries({a['id']: a['name'] for a in actors},
+                                                  {p['name'] for p in analysis.get('players') or []}, combatant_events)
     analysis['cast_ids'] = cast_ids  # which spells 'casts' is complete for (benchmarks.compare)
     # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
     # (a talent you don't take), as opposed to one we didn't fetch.

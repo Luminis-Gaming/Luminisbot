@@ -89,12 +89,17 @@ def _admin_cached(handler):
             response.enable_compression()
             return response
         response = await handler(request)
-        if response.status == 200 and response.content_type == 'text/html' and 'data-focus-load' not in response.text:
+        if response.status == 200 and response.content_type == 'text/html' and not _still_loading(response.text):
             if len(_admin_cache) >= ADMIN_CACHE_MAX:
                 _admin_cache.clear()
             _admin_cache[key] = (time.time() + ADMIN_CACHE_SECONDS, response.text)
         return response
     return wrapper
+
+
+def _still_loading(html):
+    """A page still fetching something (a cast bar, the gear refreshing): never kept - the next view renders it anew."""
+    return 'data-focus-load' in html or 'data-armory-refresh' in html
 
 
 def _changes(handler):
@@ -189,7 +194,7 @@ def _public(handler):
         except web.HTTPFound as redirect:
             raise web.HTTPFound(redirect.location.replace('/admin/raids', '/raids', 1)) from None
         if cacheable and response.status == 200 and response.content_type == 'text/html' \
-                and 'data-focus-load' not in response.text:  # still loading: the reload must render it anew
+                and not _still_loading(response.text):
             if len(_public_cache) >= PUBLIC_CACHE_MAX:
                 _public_cache.clear()
             _public_cache[key] = (time.time() + PUBLIC_CACHE_SECONDS, response.text)
@@ -573,6 +578,8 @@ async def handle_character(request):
     def choice(key):  # ?tier= / ?difficulty=: a number, "all", or nothing (their default)
         value = request.query.get(key)
         return character.ALL if value == character.ALL else int(value) if value and value.isdigit() else None
+    if request.query.get('armory_wait'):  # the gear card waiting for its background refresh
+        return await _armory_wait(name, realm)
     prof = character.profile(name, realm, choice('tier'), choice('difficulty'))
     if not prof:
         raise web.HTTPFound('/admin/raids?tab=characters&error=' + quote(f'{name} is in none of the logs we keep.'))
@@ -583,12 +590,14 @@ async def handle_character(request):
     if data is None:
         gear = f'<div class="card">{focusview.loader(text=f"Summoning {name} from the armory")}</div>'
     else:
-        _refresh_armory(prof['latest_code'], name, realm, stale)
-        gear = armory_view.tab(data, {'name': name, 'class': prof['class']}, stale, embedded=True)
+        refreshing = _refresh_armory(prof['latest_code'], name, realm, stale)
+        gear = armory_view.tab(data, {'name': name, 'class': prof['class']}, stale, embedded=True,
+                               refreshing=refreshing)
     return _page(name, session, cview.page(prof, data, gear))
 
 
 ARMORY_RETRY_SECONDS = 15 * 60
+ARMORY_WAIT_SECONDS = 45
 _armory_tried = {}  # (name, realm) -> when it was last fetched in the background
 
 
@@ -596,13 +605,15 @@ def _refresh_armory(code, name, realm, stale):
     """
     A stale stored character: fetched again in the background - one at a time each, and not again for
     ARMORY_RETRY_SECONDS (a character Blizzard / Raider.IO can't find isn't asked for on every page view).
+    True while a refresh is under way: the page then waits for it (?armory_wait=1) and swaps the gear in.
     """
     import time
     from .. import armory
     key = (name, realm)
-    if not stale or key in _armory_refreshing or time.time() - _armory_tried.get(key, 0) < ARMORY_RETRY_SECONDS:
-        return
-    _armory_refreshing.add(key)
+    if key in _armory_refreshing:
+        return True
+    if not stale or time.time() - _armory_tried.get(key, 0) < ARMORY_RETRY_SECONDS:
+        return False
     _armory_tried[key] = time.time()
 
     async def refresh():
@@ -610,11 +621,42 @@ def _refresh_armory(code, name, realm, stale):
             data, why = await armory.load(code, name, realm)
             if not data:
                 logger.info(f'[RAIDS] Character {name} not refreshed: {why}')
+            else:  # the pages showing the old gear start over
+                _forget_pages(name)
+            return data, why
         except Exception:
             logger.exception(f'[RAIDS] Character {name} refresh failed')
+            return None, None
         finally:
-            _armory_refreshing.discard(key)
-    asyncio.create_task(refresh())
+            _armory_refreshing.pop(key, None)
+    _armory_refreshing[key] = asyncio.create_task(refresh())
+    return True
+
+
+async def _armory_wait(name, realm):
+    """?armory_wait=1: {'ok', 'why'} once the background refresh is done - ok when the stored copy is fresh now."""
+    from .. import armory
+    task = _armory_refreshing.get((name, realm))
+    why = None
+    if task:
+        try:
+            _, why = await asyncio.wait_for(asyncio.shield(task), ARMORY_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            return web.json_response({'ok': False, 'why': 'The armory is slow to answer - the latest gear shows '
+                                                         'up on your next visit.'}, headers=SECURITY_HEADERS)
+    data, stale = armory.cached(name, realm)
+    ok = data is not None and not stale
+    return web.json_response({'ok': ok, 'why': None if ok else why or "Couldn't refresh from the armory right "
+                                                                       "now - showing what we had."},
+                             headers=SECURITY_HEADERS)
+
+
+def _forget_pages(name):
+    """Drop the kept (cached) pages that show a character's gear: their character page and player pages."""
+    marks = {f'/{kind}/{n}' for kind in ('character', 'player') for n in (name, quote(name))}
+    for cache in (_admin_cache, _public_cache):
+        for key in [k for k in cache if any(m in k[0] for m in marks)]:
+            cache.pop(key, None)
 
 
 # ============================================================================
@@ -1342,7 +1384,7 @@ async def handle_player(request):
     return _page(f"{name} · {groups[selected][0]['encounter_name']}", session, body)
 
 
-_armory_refreshing = set()  # characters being re-fetched in the background (one at a time each)
+_armory_refreshing = {}  # (name, realm) -> the task re-fetching them in the background (one at a time each)
 
 
 async def _armory_card(request, code, name, player):
@@ -1356,12 +1398,13 @@ async def _armory_card(request, code, name, player):
     if request.query.get('focus_load'):
         data, why = await armory.load(code, name, realm)
         return web.json_response({'ok': bool(data), 'why': why}, headers=SECURITY_HEADERS)
+    if request.query.get('armory_wait'):
+        return await _armory_wait(name, realm)
     data, stale = armory.cached(name, realm)
     if data is None:
         text = f"Summoning {name}'s armory"
         return f'<div class="card">{section_head("🛡️", "Character")}{focusview.loader(text=text)}</div>'
-    _refresh_armory(code, name, realm, stale)
-    return armory_view.tab(data, player, stale)
+    return armory_view.tab(data, player, stale, refreshing=_refresh_armory(code, name, realm, stale))
 
 
 async def _damage_by_target(request, code, numbered, scope):
