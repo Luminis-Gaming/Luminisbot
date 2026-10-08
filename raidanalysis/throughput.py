@@ -27,6 +27,16 @@ KEY_AURAS = {'Bone Shield'}
 # so with two priests the one who didn't cast it shows 0% Fortitude while the raid had it all fight (and a top
 # player who's their raid's only priest shows 100%). Says nothing about anyone's rotation: never an uptime or
 # buffs-on-others row. (Not Hunter's Mark: every hunter has their own.)
+# Casts that put another-named buff on people too: Merithra's Blessing (Reversion upgraded) bounces its own buff
+# around *and* leaves Reversion HoTs - both are theirs, each graded on its own, though "Reversion" is never cast
+APPLIES = {"Merithra's Blessing": {'Reversion'}}
+
+
+def own_auras(cast):
+    """The names of buffs a player's casts put out: the spells themselves, and what they apply under other names."""
+    return set(cast) | {a for c in cast for a in APPLIES.get(c, ())}
+
+
 RAID_WIDE_AURAS = {
     'Power Word: Fortitude', 'Battle Shout', 'Arcane Intellect', 'Mark of the Wild', 'Blessing of the Bronze',
     'Skyfury', 'Mystic Touch', 'Chaos Brand',
@@ -143,9 +153,10 @@ def on_others(table, duration, cast):
     active on average (WowAnalyzer's "average Renewing Mists").
     """
     best = {}
+    own = own_auras(cast)  # their own spells - and what they apply under another name (APPLIES)
     for a in (table or {}).get('auras') or []:
         name = a.get('name') or ''
-        if not a.get('guid') or name not in cast or not duration:
+        if not a.get('guid') or name not in own or not duration:
             continue
         uptime = a.get('totalUptime') or 0
         if uptime / duration >= MIN_ON_OTHERS and uptime > best.get(name, {}).get('uptime', 0):
@@ -326,7 +337,9 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
             t['total'] += damage
     # raid_buffs: stored with the raid buffs kept (_worth_keeping) - older pulls can't tell "missing" from "not kept"
     # healer_parses: healers' parses are their healing parse (older pulls: their damage one, fixed by a backfill)
-    return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'healer_parses': True, 'duration': duration,
+    # applied_hots: buffs on others under another name than the cast (APPLIES) are in (older pulls: backfilled)
+    return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'healer_parses': True, 'applied_hots': True,
+            'duration': duration,
             'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 
@@ -555,8 +568,9 @@ def uptime(numbered, name, top, tracked=frozenset(), talents=None):
 
 
 def _cast_names(mine):
-    """Every ability a player cast in these detail_pulls() rows (their Casts tables)."""
-    return {ability for _, _, me, _ in mine for ability in me.get('casts') or {}}
+    """Every ability a player cast in these detail_pulls() rows (their Casts tables) - and what those apply under
+    another name (APPLIES): a Merithra's Blessing Evoker has Reversion, never cast by that name."""
+    return own_auras({ability for _, _, me, _ in mine for ability in me.get('casts') or {}})
 
 
 NEAR_ZERO = 0.02  # up (or out) less than this share of the fight: as good as never - a stray proc, a borrowed buff

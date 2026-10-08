@@ -508,6 +508,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                     await _backfill_realms(session)
                     await _backfill_zones(session)
                     await _backfill_healer_parses(session)
+                    await _backfill_applied_hots(session)
                 except wcl.WCLRateLimited as e:
                     errors.append(_rate_limited(e))
                 except Exception as e:
@@ -573,6 +574,40 @@ async def _backfill_realms(session):
             return
         actors = await wcl.get_report_actors(session, code)
         db.save_realms(code, {a['name']: a.get('server') for a in actors if a.get('type') == 'Player'})
+
+
+APPLIED_HOTS_PER_RUN = 6
+
+
+async def _backfill_applied_hots(session):
+    """
+    Pulls synced before buffs put out under another name than the cast were kept (throughput.APPLIES: a Merithra's
+    Blessing Evoker's Reversions): just those players' buffs-on-others table again, a few pulls per run.
+    """
+    from . import throughput
+    for pull in db.pulls_missing_applied_hots(sorted(throughput.APPLIES), APPLIED_HOTS_PER_RUN):
+        if not await _budget_ok(session):
+            return
+        code, fight_id, extras = pull['report_code'], pull['fight_id'], pull['extras'] or {}
+        players = extras.get('players') or {}
+        who = [n for n, row in players.items() if set(row.get('casts') or {}) & set(throughput.APPLIES)]
+        if who:
+            try:
+                ids = await wcl.get_actor_ids(session, code)
+                aids = [ids[n] for n in who if n in ids]
+                tables = await wcl.get_player_tables(session, code, fight_id, aids, others=aids)
+            except wcl.WCLRateLimited:
+                raise
+            except wcl.WCLError as e:
+                logger.info(f"[RAIDS] Buffs on others for {code}#{fight_id} not fetched again: {e}")
+                continue
+            duration = extras.get('duration') or (pull['end_ms'] - pull['start_ms'])
+            for n in who:
+                table = (tables.get(ids.get(n)) or {}).get('on_others')
+                if table is not None:
+                    players[n]['on_others'] = throughput.on_others(table, duration, players[n].get('casts') or {})
+        extras['applied_hots'] = True
+        db.set_pull_extras(code, fight_id, extras)
 
 
 HEALER_PARSES_PER_RUN = 8

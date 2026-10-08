@@ -2880,3 +2880,65 @@ class TestCoachNamesProcs(unittest.TestCase):
 
     def test_no_name_no_tip(self):
         self.assertEqual(self.run_procs({}), [])
+
+
+class TestUpgradedHots(unittest.TestCase):
+    """Merithra's Blessing and the Reversion HoTs it leaves are both the Evoker's - each graded on its own."""
+    DUR = 520000
+
+    def test_sync_keeps_the_reversions_an_upgraded_cast_applies(self):
+        from raidanalysis import throughput
+        table = {'auras': [{'guid': 366155, 'name': 'Reversion', 'totalUptime': 0.05 * self.DUR},
+                           {'guid': 367364, 'name': 'Reversion', 'totalUptime': 0.75 * self.DUR},
+                           {'guid': 1256579, 'name': "Merithra's Blessing", 'totalUptime': 0.72 * self.DUR},
+                           {'guid': 9, 'name': 'Some Trinket Proc', 'totalUptime': 0.5 * self.DUR}]}
+        kept = {a['name']: round(a['uptime'] / self.DUR, 2) for a in
+                throughput.on_others(table, self.DUR, {"Merithra's Blessing": 30, 'Echo': 40})}
+        self.assertEqual(kept, {'Reversion': 0.75, "Merithra's Blessing": 0.72})  # not the trinket
+
+    def test_graded_separately(self):
+        from raidanalysis import throughput
+        top = [{'duration': self.DUR, 'on_others': [{'id': 366155, 'name': 'Reversion', 'uptime': 0.8 * self.DUR},
+                                                    {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.7 * self.DUR}]}
+               for _ in range(3)]
+        mine = [{'id': 367364, 'name': 'Reversion', 'uptime': 0.75 * self.DUR},
+                {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.72 * self.DUR}]
+        pull = (1, {'analysis': {'extras': {'detail': True, 'duration': self.DUR, 'players': {
+            'Boopsproops': {'on_others': mine, 'casts': {"Merithra's Blessing": 30}}}}}})
+        rows = {r['name']: r for r in throughput.on_others_rows([pull], 'Boopsproops', top)}
+        self.assertEqual(set(rows), {'Reversion', "Merithra's Blessing"})
+        self.assertAlmostEqual(rows['Reversion']['ours'], 0.75)
+        self.assertAlmostEqual(rows["Merithra's Blessing"]['ours'], 0.72)
+        self.assertFalse(rows['Reversion']['not_taken'])  # never cast by that name, but theirs
+        self.assertNotEqual(rows['Reversion']['verdict'], 'off')
+
+    def test_backfill_fetches_the_table_again(self):
+        import asyncio
+        from unittest import mock
+        from raidanalysis import db, sync, wcl
+        extras = {'duration': self.DUR, 'players': {
+            'Boopsproops': {'casts': {"Merithra's Blessing": 30},
+                            'on_others': [{'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.72 * self.DUR}]},
+            'Futhark': {'casts': {'Aimed Shot': 50}, 'on_others': None}}}
+        saved = []
+        table = {'auras': [{'guid': 367364, 'name': 'Reversion', 'totalUptime': 0.75 * self.DUR},
+                           {'guid': 1256579, 'name': "Merithra's Blessing", 'totalUptime': 0.72 * self.DUR}]}
+
+        async def ok(session):
+            return True
+
+        async def actor_ids(session, code):
+            return {'Boopsproops': 7, 'Futhark': 8}
+
+        async def player_tables(session, code, fight_id, aids, bosses=(), casts=False, others=(), targets=False):
+            self.assertEqual(aids, [7])  # only the Evoker
+            return {7: {'on_others': table}}
+        with mock.patch.object(db, 'pulls_missing_applied_hots', lambda casts, limit: [
+                {'report_code': 'C', 'fight_id': 14, 'start_ms': 0, 'end_ms': self.DUR, 'extras': extras}]), \
+                mock.patch.object(db, 'set_pull_extras', lambda code, fid, ex: saved.append(ex)), \
+                mock.patch.object(sync, '_budget_ok', ok), mock.patch.object(wcl, 'get_actor_ids', actor_ids), \
+                mock.patch.object(wcl, 'get_player_tables', player_tables):
+            asyncio.run(sync._backfill_applied_hots(None))
+        names = {a['name'] for a in saved[0]['players']['Boopsproops']['on_others']}
+        self.assertEqual(names, {'Reversion', "Merithra's Blessing"})
+        self.assertTrue(saved[0]['applied_hots'])

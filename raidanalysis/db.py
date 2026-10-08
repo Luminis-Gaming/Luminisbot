@@ -499,6 +499,31 @@ def save_healer_parses(code, fight_id, parses):
          (Json(analysis), code, fight_id))
 
 
+_BEFORE_APPLIED_HOTS = """
+    p.analysis ? 'extras' AND NOT p.analysis ? 'archived'
+    AND NOT COALESCE((p.analysis->'extras'->>'applied_hots')::boolean, false)
+"""
+
+
+def pulls_missing_applied_hots(casts, limit):
+    """
+    Kept pulls synced before buffs put out under another name (throughput.APPLIES) were kept, where someone cast
+    one of casts: {'report_code', 'fight_id', 'start_ms', 'end_ms', 'extras'}, newest first. The ones where nobody
+    did are just marked done, so they aren't looked through again.
+    """
+    likes = ['%"' + c + '"%' for c in casts]
+    _run(f"""
+        UPDATE raid_pulls p SET analysis = jsonb_set(p.analysis, '{{extras,applied_hots}}', 'true'::jsonb)
+        WHERE {_BEFORE_APPLIED_HOTS} AND NOT ((p.analysis->'extras'->'players')::text LIKE ANY(%s))
+    """, (likes,))
+    return _run(f"""
+        SELECT p.report_code, p.fight_id, p.start_ms, p.end_ms, p.analysis->'extras' AS extras
+        FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        WHERE {_BEFORE_APPLIED_HOTS}
+        ORDER BY r.start_time DESC, p.fight_id LIMIT %s
+    """, (limit,), fetch='all') or []
+
+
 def set_pull_extras(code, fight_id, extras):
     _run("""
         UPDATE raid_pulls SET analysis = jsonb_set(analysis, '{extras}', %s)
