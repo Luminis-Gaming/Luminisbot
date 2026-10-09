@@ -341,6 +341,7 @@ def defensive_insights(numbered, name, role, guide_for=None):
             soaked = p.get('guarded')
             if soaked and guide_for and soak_guide(guide_for(soaked, names.get(soaked))):
                 soaks.append((number, p))
+                continue  # praised as a soak - not again as "up for the raid-wide ..." (a soak isn't raid-wide)
             if p['kind'] in ('aimed', 'raid', 'heavy'):
                 good.append((number, p))
             elif p['kind'] == 'quiet' and p['name'] not in defensives.NOT_ONLY_DEFENSIVE:

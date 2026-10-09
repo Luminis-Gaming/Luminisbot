@@ -6,8 +6,8 @@ with the pull-by-pull breakdown. Numbers come from analyzer.player_report.
 import re
 from urllib.parse import quote
 
-from .render import (ROLE_ICONS, SERIES_PULL, esc, fmt_amount, fmt_duration, guide_button, per_pull_columns,
-                     player_name, sparkline)
+from .render import (CLASS_COLORS, ROLE_ICONS, SERIES_PULL, esc, fmt_amount, fmt_duration, guide_button,
+                     per_pull_columns, player_name, sparkline)
 
 SUBSCORES = (('survival', 'Survival', 'Share of pull time alive until half the raid was dead'),
              ('mechanics', 'Mechanics', 'Avoidable hits compared to the raid — 100 = never hit, ~70 = raid average'),
@@ -93,8 +93,35 @@ def _note(note, guide_for):
     return f'<li class="note {note["tone"]}"><span>{icon}</span><span>{esc(note["text"])}{clip}</span></li>'
 
 
-def players_view(players, guide_for, player_href):
-    """The grid. player_href(name) -> link to that player's page."""
+def _banner(p, href, portrait):
+    """
+    The top of a player card, one link to their full analysis: their character standing on the right (their
+    render, portraits.py - their class icon without one), the score, the name big in their class colour.
+    """
+    band, label = _band(p['score'])
+    cls = p['class'] or ''
+    art = (f'<img class="pc-render" src="{esc(portrait)}" alt="" loading="lazy" decoding="async">' if portrait else
+           f'<img class="pc-classicon" src="https://wow.zamimg.com/images/wow/icons/large/classicon_{esc(cls.lower())}.jpg" '
+           f'alt="" loading="lazy">' if cls else '')
+    spec = f'{esc(p["spec"])} ' if p['spec'] else ''
+    pulls = f"{p['pulls']} pull{'s' if p['pulls'] != 1 else ''}"
+    return f"""
+            <a class="pc-banner" href="{esc(href)}" title="Open {esc(p['name'])}'s full analysis">
+                <span class="pc-art">{art}</span>
+                <span class="pc-score {band}" title="{label} — {p['score']}/100"><b>{p['score']}</b><small>{label}</small></span>
+                <span class="pc-who">
+                    <span class="pc-name">{esc(p['name'])}</span>
+                    <span class="pc-meta">{ROLE_ICONS.get(p['role'], '')} {spec}{esc(_class_label(cls))}{_other_specs(p)}</span>
+                    <span class="pc-meta pc-pulls">{pulls} <span class="pc-go">Full analysis →</span></span>
+                </span>
+            </a>"""
+
+
+def players_view(players, guide_for, player_href, portrait_for=None):
+    """
+    The grid. player_href(name) -> link to that player's page; portrait_for(name) -> their character's portrait URL
+    (portraits.py) or None.
+    """
     if not players:
         return '<div class="card"><p class="muted">No players in these pulls.</p></div>'
     counts = {role: sum(1 for p in players if p['role'] == role) for role in ('tank', 'healer', 'dps')}
@@ -107,25 +134,19 @@ def players_view(players, guide_for, player_href):
     for p in players:
         notes = ''.join(_note(n, guide_for) for n in p['feedback'][:3])
         more = len(p['feedback']) - 3
-        spec = f'{esc(p["spec"])} ' if p['spec'] else ''
+        href = player_href(p['name'])
+        color = CLASS_COLORS.get(p['class'], '#9aa1b9')
         cards.append(f"""
-        <article class="player-card" data-role="{esc(p['role'])}">
-            <header>
-                <a href="{esc(player_href(p['name']))}" class="plain-link" title="Open {esc(p['name'])}'s full analysis">{score_ring(p['score'])}</a>
-                <div>
-                    <h3><a href="{esc(player_href(p['name']))}" class="plain-link player-card-name"
-                           title="Open {esc(p['name'])}'s full analysis">{player_name(p['name'], p['class'])}</a></h3>
-                    <p class="muted small">{ROLE_ICONS.get(p['role'], '')} {spec}{esc(_class_label(p['class']))}{_other_specs(p)} ·
-                       {p['pulls']} pull{'s' if p['pulls'] != 1 else ''}</p>
-                </div>
-            </header>
-            <div class="subscores">{_subscore_bars(p['scores'])}</div>
-            <div class="chips">{_contributions(p)}</div>
-            <ul class="notes">{notes or '<li class="note info"><span>👍</span><span>Nothing stands out.</span></li>'}</ul>
-            <details class="breakdown-toggle"><summary>Score breakdown ({len(p.get('components') or [])})</summary>
-                {breakdown(p, guide_for)}</details>
-            <a class="card-link" href="{esc(player_href(p['name']))}">
-                {f'+{more} more · ' if more > 0 else ''}Full analysis →</a>
+        <article class="player-card pc" data-role="{esc(p['role'])}" style="--c:{color}">
+            {_banner(p, href, portrait_for(p['name']) if portrait_for else None)}
+            <div class="pc-body">
+                <div class="subscores">{_subscore_bars(p['scores'])}</div>
+                <div class="chips">{_contributions(p)}</div>
+                <ul class="notes">{notes or '<li class="note info"><span>👍</span><span>Nothing stands out.</span></li>'}</ul>
+                <details class="breakdown-toggle"><summary>Score breakdown ({len(p.get('components') or [])})</summary>
+                    {breakdown(p, guide_for)}</details>
+                {f'<a class="card-link" href="{esc(href)}">+{more} more in the full analysis →</a>' if more > 0 else ''}
+            </div>
         </article>""")
     return f"""
     <div class="card">

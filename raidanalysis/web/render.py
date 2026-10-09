@@ -1160,6 +1160,46 @@ table.bars td.bar-cell { width: 55%; }
 .note.bad { background: var(--bad-soft); }
 .note.good { background: var(--good-soft); }
 
+/* Player cards (players_view): a banner in the class colour - their character on the right, the score, the name -
+   that is one link to the full analysis; the details below. */
+.player-card.pc { padding: 0; gap: 0; overflow: hidden; }
+.pc-banner { position: relative; display: flex; align-items: flex-end; gap: 14px; min-height: 128px; padding: 16px 18px;
+    color: var(--text); text-decoration: none; isolation: isolate; overflow: hidden;
+    background: radial-gradient(120% 140% at 88% 30%, color-mix(in srgb, var(--c) 42%, transparent) 0%, transparent 58%),
+                linear-gradient(115deg, color-mix(in srgb, var(--c) 16%, var(--surface)) 0%, var(--surface) 70%);
+    border-bottom: 1px solid color-mix(in srgb, var(--c) 30%, var(--border)); transition: filter .15s; }
+.pc-banner::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--c); }
+.pc-banner:hover { text-decoration: none; filter: brightness(1.12); }
+.pc-banner:focus-visible { outline: 2px solid var(--c); outline-offset: -2px; }
+.pc-art { position: absolute; right: -8px; bottom: 0; top: 0; width: 46%; z-index: -1; pointer-events: none;
+    display: flex; align-items: flex-end; justify-content: flex-end; }
+.pc-render { height: 128%; max-width: 100%; object-fit: contain; object-position: bottom right;
+    transform-origin: bottom right; transition: transform .25s;
+    filter: drop-shadow(0 6px 14px rgba(0,0,0,0.55));
+    -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent 98%); mask-image: linear-gradient(to bottom, #000 62%, transparent 98%); }
+.pc-banner:hover .pc-render { transform: translateY(-3px) scale(1.03); }
+.pc-classicon { width: 68px; height: 68px; margin: 0 22px 18px 0; border-radius: 14px; opacity: .85;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent), 0 8px 22px rgba(0,0,0,0.45); }
+.pc-score { flex: none; display: grid; place-items: center; width: 58px; height: 58px; border-radius: 14px;
+    background: rgba(8,10,20,0.55); backdrop-filter: blur(3px); box-shadow: inset 0 0 0 2px var(--band); line-height: 1; }
+.pc-score b { font-size: 24px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.pc-score small { margin-top: -6px; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--band); }
+.pc-score.good { --band: var(--good); } .pc-score.ok { --band: var(--warn); } .pc-score.bad { --band: var(--bad); }
+.pc-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 62%; }
+.pc-name { font-size: 24px; font-weight: 800; letter-spacing: -.01em; line-height: 1.05; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--c) 82%, #fff);
+    text-shadow: 0 2px 10px rgba(0,0,0,0.6); }
+.pc-meta { font-size: 12.5px; color: var(--text); opacity: .82; text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-pulls { opacity: .65; }
+.pc-go { margin-left: 6px; color: color-mix(in srgb, var(--c) 70%, #fff); opacity: 0; transition: opacity .15s; }
+.pc-banner:hover .pc-go, .pc-banner:focus-visible .pc-go { opacity: 1; }
+.pc-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; flex: 1; }
+.pc-body .card-link { margin-top: auto; font-size: 13px; }
+@media (hover: none) { .pc-go { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pc-render, .pc-banner { transition: none; } .pc-banner:hover .pc-render { transform: none; } }
+
 /* Phase heatmap + wipe reasons + trends */
 table.heatmap td.heat { background: rgba(116,132,236,var(--a)); color: var(--text); font-weight: 600; }
 table.heatmap td.heat small { color: var(--muted); font-weight: 400; }

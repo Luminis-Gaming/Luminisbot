@@ -2925,6 +2925,7 @@ class TestDefensives(unittest.TestCase):
         found = coach.defensive_insights([self.soak_pull(37, 'Obsidian Scales', self.SCALES)], 'A', 'dps', self.guide_for)
         soak = next(i for i in found if i['kind'] == 'soak')
         self.assertEqual(soak['tone'], 'good')
+        self.assertEqual([i['kind'] for i in found], ['soak'])                     # not praised twice for one press
         self.assertIn('Took mechanics for the team with Obsidian Scales up - Unstable Miasma (1×: #37 0:39)', soak['text'])
         self.assertEqual(soak['ability'], {'id': self.MIASMA, 'name': 'Unstable Miasma'})
         # Without a guide that says to take it: no soak praise (it was just damage)

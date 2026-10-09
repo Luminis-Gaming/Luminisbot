@@ -225,6 +225,25 @@ async def handle_static_js(request):
     return response
 
 
+def _portraits_by_name(names):
+    """
+    name -> its character's portrait URL, for the Players cards: the raid's players carry no realm, so a name
+    only gets one when exactly one stored character has it (two on different realms: no guess).
+    """
+    from .. import armory
+    found = {}
+    try:
+        wanted = {n.lower() for n in names}
+        for (key, realm), pic in armory.portraits().items():
+            if key in wanted and pic.get('render'):
+                found.setdefault(key, []).append((realm, pic['render']))
+    except Exception:
+        logger.exception('[RAIDS] Portraits for the player cards failed')
+        return lambda name: None
+    urls = {key: portrait_url(key, *hits[0]) for key, hits in found.items() if len(hits) == 1}
+    return lambda name: urls.get(name.lower())
+
+
 def portrait_url(name, realm_slug, render):
     """The Players tab's small portrait of a character (portraits.py) - its render's address in it, so a new one
     is a new address (browsers keep each for a day)."""
@@ -1470,7 +1489,8 @@ async def handle_night(request):
         report_rows = analyzer.player_report(_insight_pulls(numbered), tags)
         body = (_night_header(request, report, code, pulls, selected, view='players')
                 + players.players_view(report_rows, guide_for,
-                                       lambda player: players.player_url(code, player, selected)))
+                                       lambda player: players.player_url(code, player, selected),
+                                       _portraits_by_name([r['name'] for r in report_rows])))
         return _page(f"Players · {name}", session, body)
 
     enrage_ids = _enrage_ids(encounter_id, guide_for)
@@ -1586,7 +1606,8 @@ async def handle_pull(request):
         report_rows = analyzer.player_report(_insight_pulls([(number, pull)]), tags)
         body = (_night_header(request, report, code, pulls, selected, fight_id, view='players')
                 + players.players_view(report_rows, guide_for,
-                                       lambda player: players.player_url(code, player, selected, fight_id)))
+                                       lambda player: players.player_url(code, player, selected, fight_id),
+                                       _portraits_by_name([r['name'] for r in report_rows])))
         return _page(f"Players · {pull['encounter_name']} pull {number}", session, body)
 
     if request.query.get('focus_load') == 'adds':  # the raid timeline's cast bar
