@@ -1165,9 +1165,10 @@ table.bars td.bar-cell { width: 55%; }
 .note.good { background: var(--good-soft); }
 
 /* Our icons (icons.py): little illustrations, each drawn with room round it for its glow - so a bit bigger than
-   the text, pulled in by negative margins to keep the line's height. Section-head and "for the raid" tiles take on
+   the text, pulled in by negative margins to keep the line's height (equal top and bottom: an inline image's margin
+   box is what vertical-align places, so they keep it centred on the text's middle). Section-head and "for the raid" tiles take on
    their icon's tone. */
-.ic { display: inline-block; width: 1.5em; height: 1.5em; vertical-align: -0.4em; margin: -0.16em -0.08em; flex: none; }
+.ic { display: inline-block; width: 1.5em; height: 1.5em; vertical-align: middle; margin: -0.25em -0.08em; flex: none; }
 .sec-icon .ic { width: 34px; height: 34px; margin: -4px; vertical-align: middle; }
 .sec-icon:has(.ic) { background: color-mix(in srgb, var(--tile, var(--accent)) 16%, var(--surface-2));
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tile, var(--accent)) 34%, transparent); }
@@ -1183,7 +1184,7 @@ table.bars td.bar-cell { width: 55%; }
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tile, var(--accent)) 30%, transparent); }
 .ph-tile-icon .ic { width: 30px; height: 30px; margin: -4px; }
 .insight summary > span:first-child .ic { width: 24px; height: 24px; margin: -3px; }
-.note > span:first-child .ic { width: 22px; height: 22px; margin: -3px; vertical-align: -0.35em; }
+.note > span:first-child .ic { width: 22px; height: 22px; margin: -3px; }
 /* the nav's mark: centred on the text, the empty room round the crystal (its glow's) trimmed off on the left */
 .nav a:has(.ic-luminis) { display: inline-flex; align-items: center; gap: 3px; }
 .nav .ic-luminis { width: 24px; height: 24px; margin: -6px 0 -6px -6px; }
@@ -2623,13 +2624,13 @@ def spell_data_json(spells, spell_lookup=None):
     log's name and icon otherwise. spells: {id: (name, rpglogs icon file)}; spell_lookup(ids) ->
     {id: {'name', 'icon', 'meta', 'description'}} (spells.lookup).
     """
-    from ..spells import icon_url, offer
+    from ..spells import NOT_SPELLS, icon_url, offer
     known = spell_lookup(list(spells)) if spell_lookup and spells else {}
     offer(spells)
     out = {}
     for sid, (name, icon) in spells.items():
         info = known.get(sid) or {}
-        icon = safe_icon(icon)
+        icon = safe_icon(icon or ('ability_meleedamage.jpg' if sid in NOT_SPELLS else ''))
         out[sid] = {'name': info.get('name') or name,
                     'icon': (icon if icon.startswith('http') else f'{ICON_BASE}{icon}') if icon
                             else safe_icon(icon_url(info.get('icon'))),

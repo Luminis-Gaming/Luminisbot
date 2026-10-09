@@ -2022,6 +2022,8 @@ async def handle_spell(request):
         spell_id = int(request.match_info['spell_id'])
     except ValueError:
         raise web.HTTPNotFound()
+    if spell_id in spells.NOT_SPELLS:  # melee: the page's own name and icon stand
+        raise web.HTTPNotFound()
     found = db.get_spells([spell_id])
     # Only spells our pages showed, and rate limited: this endpoint is public.
     if spell_id not in found and spell_id not in db.attempted_spell_ids([spell_id]) and spells.may_fetch(spell_id):

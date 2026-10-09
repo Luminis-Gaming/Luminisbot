@@ -22,6 +22,9 @@ PER_RUN = 400
 PARSER = 2           # bump when parse() learns something new: older rows get looked up again
 CONCURRENCY = 4
 HEADERS = {'User-Agent': 'LuminisBot raid analysis (spell tooltips)'}
+# Ids the logs use that aren't the spell Wowhead has under them: 1 is Warcraft Logs' melee swing ("Melee"), Wowhead's
+# spell 1 an old unused one ("Word of Recall (OLD)"). Never looked up - the log's own name and icon stand.
+NOT_SPELLS = {1}
 
 _COMMENTS = re.compile(r'<!--.*?-->', re.S)
 _TAGS = re.compile(r'<[^>]+>')
@@ -87,7 +90,7 @@ def offer(spell_ids):
     """Remember spells a page showed (bounded; cleared when full - pages re-offer as they render)."""
     if len(_offered) > OFFERED_MAX:
         _offered.clear()
-    _offered.update(int(i) for i in spell_ids if i)
+    _offered.update(int(i) for i in spell_ids if i and int(i) not in NOT_SPELLS)
 
 
 def may_fetch(spell_id):
@@ -108,7 +111,7 @@ def lookup(spell_ids):
     pages don't have to wait for the next sync.
     """
     from . import db
-    ids = {int(i) for i in spell_ids if i}
+    ids = {int(i) for i in spell_ids if i} - NOT_SPELLS
     if not ids:
         return {}
     found = db.get_spells(ids)
@@ -133,7 +136,7 @@ def lookup(spell_ids):
 async def fetch_ids(spell_ids):
     """Look these spells up on Wowhead and cache the result (also not-found / failed). Returns how many."""
     from . import db
-    missing = list(spell_ids)
+    missing = [i for i in spell_ids if int(i) not in NOT_SPELLS]
     if not missing:
         return 0
     gate = asyncio.Semaphore(CONCURRENCY)

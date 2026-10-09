@@ -3160,3 +3160,21 @@ class TestIcons(unittest.TestCase):
         from raidanalysis.web import render
         self.assertNotIn('__LEGENDARIES__', render.PAGE_JS)
         self.assertIn('Thunderfury, Blessed Blade of the Windseeker', render.PAGE_JS)
+
+
+class TestMeleeIsNotASpell(unittest.TestCase):
+    """Warcraft Logs' melee swing is ability 1 - on Wowhead, spell 1 is "Word of Recall (OLD)"."""
+
+    def test_melee_keeps_the_logs_name_and_icon(self):
+        import asyncio
+        from unittest import mock
+        from raidanalysis import spells
+        from raidanalysis.web import render
+        wowhead = {1: {'name': 'Word of Recall (OLD)', 'icon': 'x', 'meta': '', 'description': ''}}
+        with mock.patch('raidanalysis.db.get_spells', lambda ids: {i: wowhead[i] for i in ids if i in wowhead}), \
+                mock.patch('raidanalysis.db.attempted_spell_ids', lambda ids: set(ids)):
+            data = render.spell_data_json({1: ('Melee', 'ability_meleedamage.jpg')}, spells.lookup)
+            self.assertEqual(spells.lookup([1]), {})
+        self.assertIn('Melee', data)
+        self.assertNotIn('Word of Recall', data)
+        self.assertEqual(asyncio.run(spells.fetch_ids([1])), 0)
