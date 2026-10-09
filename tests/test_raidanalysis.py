@@ -3109,7 +3109,7 @@ class TestUpgradedHots(unittest.TestCase):
 class TestIcons(unittest.TestCase):
     def test_every_mapped_icon_has_its_drawing_and_every_drawing_is_used(self):
         from raidanalysis.web import icons
-        used = {name for name, _ in icons.EMOJI.values()} | {name for name, _ in icons.LEGENDARIES} | {'luminis'}
+        used = {v[0] for v in icons.EMOJI.values()} | {name for name, _ in icons.LEGENDARIES} | {'luminis'}
         self.assertEqual(used - set(icons._SVGS), set())  # a renamed file breaks its emoji
         self.assertEqual(set(icons._SVGS) - used, set())  # a drawing nothing shows
 
@@ -3126,6 +3126,7 @@ class TestIcons(unittest.TestCase):
         self.assertIn('title="⚔ DPS"', html)
         self.assertIn('<script>"⚔"</script>', html)
         self.assertEqual(icons.iconize(html), html)
+        self.assertIn('class="ic ic-blade ic-dps no-legendary"', icons.iconize('🗡️ Arms Warrior'))  # role marker
 
     def test_a_tone_glows_from_the_body_in_place_of_the_aura(self):
         from raidanalysis.web import icons

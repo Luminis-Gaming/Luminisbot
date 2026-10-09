@@ -792,7 +792,7 @@ RECENT_NIGHTS, RECENT_MIN = 6, 2  # a regular (a portrait): in at least 2 of the
 REGULAR_SHARE = 0.3        # ...without night dates: in at least this share of the most-seen player's nights
 PORTRAIT_FILLS_AT_ONCE = 2  # characters without a stored picture: fetched in the background, at most this many at
                             # a time (each is ~20 Blizzard requests - more at once and its item icons time out)
-ROLE_GROUPS = (('tank', '🛡️', 'Tanks'), ('healer', '💚', 'Healers'), ('dps', '⚔️', 'DPS'))
+ROLE_GROUPS = (('tank', '🛡️', 'Tanks'), ('healer', '💚', 'Healers'), ('dps', '🗡️', 'DPS'))
 
 
 def _players(roster, owners):

@@ -12,7 +12,7 @@ CLASS_COLORS = {
     'Priest': '#FFFFFF', 'Rogue': '#FFF468', 'Shaman': '#0070DD', 'Warlock': '#8788EE',
     'Warrior': '#C69B6D',
 }
-ROLE_ICONS = {'tank': '🛡️', 'healer': '💚', 'dps': '⚔️'}
+ROLE_ICONS = {'tank': '🛡️', 'healer': '💚', 'dps': '🗡️'}  # 🗡: the plain blade, never a legendary (icons.py)
 
 # Chart series colors - validated (dataviz validate_palette.js, dark mode) on the card surface (#161a2c).
 SERIES_PULL = '#7484ec'
@@ -1184,7 +1184,9 @@ table.bars td.bar-cell { width: 55%; }
 .ph-tile-icon .ic { width: 30px; height: 30px; margin: -4px; }
 .insight summary > span:first-child .ic { width: 24px; height: 24px; margin: -3px; }
 .note > span:first-child .ic { width: 22px; height: 22px; margin: -3px; vertical-align: -0.35em; }
-.nav .ic-luminis { width: 1.7em; height: 1.7em; margin: -0.35em -0.1em; }
+/* the nav's mark: centred on the text, the empty room round the crystal (its glow's) trimmed off on the left */
+.nav a:has(.ic-luminis) { display: inline-flex; align-items: center; gap: 3px; }
+.nav .ic-luminis { width: 24px; height: 24px; margin: -6px 0 -6px -6px; }
 @media (max-width: 600px) { .sec-icon .ic { width: 30px; height: 30px; margin: -3px; } }
 
 /* Player cards (players_view): a banner in the class colour - their character on the right, the score, the name -
@@ -1354,12 +1356,12 @@ window.raidInit = root => INITS.forEach(([selector, setup]) => {
   if (root.matches(selector)) setup(root);
   root.querySelectorAll(selector).forEach(setup);
 });
-// The DPS icon's easter egg (icons.LEGENDARIES): every blade becomes a legendary weapon - its name on hover - dealt
-// from a shuffled deck, so each gets its own and none repeats before all of them have shown (a new page, swapped
-// in, deals on from the same deck).
+// The DPS icon's easter egg (icons.LEGENDARIES): every blade in a heading, tab or tile becomes a legendary weapon -
+// its name on hover - dealt from a shuffled deck, so each gets its own and none repeats before all of them have shown
+// (a new page, swapped in, deals on from the same deck). Not the DPS role marker in player lists (no-legendary).
 const LEGENDARIES = __LEGENDARIES__;
 let legendaryDeck = [];
-onEach('img.ic-blade', img => {
+onEach('img.ic-blade:not(.no-legendary)', img => {
   if (img.dataset.legendary) return;  // dealt already (set up again with its part of the page)
   if (!legendaryDeck.length) {
     legendaryDeck = LEGENDARIES.slice();

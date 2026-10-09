@@ -218,7 +218,7 @@ def players_view(players, guide_for, player_href, portrait_for=None):
         f'<button type="button" class="pull-chip role-filter{" active" if role == "all" else ""}" data-role="{role}">'
         f'{label}</button>'
         for role, label in (('all', f'Everyone ({len(players)})'), ('tank', f'🛡️ Tanks ({counts["tank"]})'),
-                            ('healer', f'💚 Healers ({counts["healer"]})'), ('dps', f'⚔️ DPS ({counts["dps"]})')))
+                            ('healer', f'💚 Healers ({counts["healer"]})'), ('dps', f'🗡️ DPS ({counts["dps"]})')))
     cards = []
     for p in players:
         notes = ''.join(_note(n, guide_for) for n in p['feedback'][:3])

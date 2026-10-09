@@ -15,8 +15,9 @@ in the page's text only: an attribute (a tooltip, a placeholder), a <script>, <s
 an image and keeps its emoji. Discord recaps keep theirs too. Typographic marks (✔ ✓ ★ ✕ → ·) aren't emojis and stay
 text.
 
-The DPS icon (blade) is an easter egg: on each page view the page script (render.PAGE_JS) turns every one into the
-same legendary weapon, picked at random from LEGENDARIES - its name in the tooltip.
+The DPS icon (blade) is an easter egg: the page script (render.PAGE_JS) turns each one into a legendary weapon from
+LEGENDARIES, its name in the tooltip - in headings, tabs and tiles (⚔). Not as the role marker next to each player
+(render.ROLE_ICONS: 🗡, class "no-legendary") - a list of DPS players, each with a different weapon, is too much.
 """
 import hashlib
 import re
@@ -31,11 +32,11 @@ TONES = {'good': '#4ade80', 'bad': '#ff5c5c', 'warn': '#f6c453', 'tank': '#5b9bf
          'accent': '#8f9bff', 'teal': '#2fd0bf', 'magic': '#c084fc', 'gold': '#f5b942'}
 PLAIN = 'plain'  # no tone: the drawing as it is, its own aura and all
 
-# emoji -> (drawing, tone or None) - by what it means: red death / bosses / mechanics, green healing / good, blue
+# emoji -> (drawing, tone or None[, extra class]) - by what it means: red death / bosses / mechanics, green healing / good, blue
 # tanks, amber warnings / for-the-raid, violet magic, teal consumables / numbers, gold the brand and achievements,
 # indigo finding your way. With and without the emoji variation selector (U+FE0F).
 EMOJI = {
-    '⚔': ('blade', 'dps'), '🛡': ('shield', 'tank'), '💚': ('plus-diamond', 'good'),
+    '⚔': ('blade', 'dps'), '🗡': ('blade', 'dps', 'no-legendary'), '🛡': ('shield', 'tank'), '💚': ('plus-diamond', 'good'),
     '💀': ('skull', 'bad'), '🎯': ('bullseye', 'bad'), '📌': ('pushpin', 'bad'), '📈': ('rising-chart', 'accent'),
     '🧪': ('flask', 'teal'), '📋': ('checklist', 'warn'), '⚠': ('warning', 'warn'), '🔄': ('cycle-arrows', 'accent'),
     '👥': ('figures', 'accent'), '👹': ('horned-helm', 'bad'), '🐉': ('horned-helm', 'bad'), '🧙': ('figures', 'accent'),
@@ -105,8 +106,7 @@ def icon(name, tone=None, cls=''):
 
 
 def _swap(match):
-    name, tone = EMOJI[match.group(1)]
-    return icon(name, tone)
+    return icon(*EMOJI[match.group(1)])
 
 
 DONE = '<!--ic-->'  # marks a page already through iconize(): the page cache serves it again as it is
