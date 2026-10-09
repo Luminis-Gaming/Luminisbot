@@ -6,8 +6,10 @@ with the pull-by-pull breakdown. Numbers come from analyzer.player_report.
 import re
 from urllib.parse import quote
 
-from .render import (CLASS_COLORS, ROLE_ICONS, SERIES_PULL, esc, fmt_amount, fmt_duration, guide_button,
-                     per_pull_columns, player_name, sparkline)
+from .render import (CLASS_COLORS, ICON_BASE, ROLE_ICONS, SERIES_PULL, esc, fmt_amount, fmt_duration, guide_button,
+                     per_pull_columns, player_name, safe_icon, sparkline)
+
+SPEC_ICON = 'https://assets.rpglogs.com/img/warcraft/icons/large/{cls}-{spec}.jpg'  # WCL's, as logs name specs
 
 SUBSCORES = (('survival', 'Survival', 'Share of pull time alive until half the raid was dead'),
              ('mechanics', 'Mechanics', 'Avoidable hits compared to the raid — 100 = never hit, ~70 = raid average'),
@@ -137,11 +139,12 @@ def _raid_strip(tiles):
         return ''
     out = []
     for t in tiles:
-        icon = (f'<img src="{esc(t["img"])}" alt="" loading="lazy">' if t.get('img') and t['img'].startswith('https://')
-                else f'<span>{t["icon"]}</span>')
+        img = t.get('img') or ''
+        src = safe_icon(img if img.startswith('http') else ICON_BASE + img) if img else None  # logs give file names
+        icon = f'<img src="{esc(src)}" alt="" loading="lazy">' if src else f'<span>{t["icon"]}</span>'
         spell = f' data-spell="{int(t["spell"])}"' if t.get('spell') else ''
         out.append(f'<div class="ph-tile has-tip" data-tip="{esc(t["tip"])}"{spell}><span class="ph-tile-icon">{icon}</span>'
-                   f'<span class="ph-tile-text"><b>{esc(t["value"])}</b> {esc(t["label"])}'
+                   f'<span class="ph-tile-text"><span class="ph-tile-line"><b>{esc(t["value"])}</b> {esc(t["label"])}</span>'
                    f'<small>{esc(t["sub"])}</small></span></div>')
     return (f'<div class="ph-raid"><h4>For the raid</h4><div class="ph-tiles">{"".join(out)}</div></div>')
 
@@ -241,39 +244,44 @@ def throughput_label(role):
 
 def player_hero(p, tab_href, active, character_href=None, portrait=None, tiles=None):
     """
-    The player page's header - their character standing on the right (portrait: their render, portraits.py), the
-    score, the name big in their class colour, the sub-scores, what they did for the raid (raid_tiles) - and
-    its section tabs. tab_href(key) -> link; character_href: their character page (every night).
+    The player page's header: who they are on the left (spec icon, the name big in their class colour, spec ·
+    pulls · deaths, their character page), their character standing in the middle (portrait: their render,
+    portraits.py), the score card on the right (the score and the sub-scores behind it) - then what they did for
+    the raid (raid_tiles) and the section tabs. tab_href(key) -> link; character_href: their character page.
     """
     tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" data-swap="page" href="{esc(tab_href(key))}">{icon} '
                    f'{throughput_label(p.get("role")) if key == "damage" else label}</a>'
                    for key, icon, label in PLAYER_TABS)
     band, label = _band(p['score'])
     cls = p['class'] or ''
-    art = (f'<img class="ph-render" src="{esc(portrait)}" alt="" decoding="async">' if portrait else
-           f'<img class="pc-classicon ph-classicon" src="https://wow.zamimg.com/images/wow/icons/large/'
-           f'classicon_{esc(cls.lower())}.jpg" alt="" loading="lazy">' if cls else '')
+    art = (f'<img class="ph-render" src="{esc(portrait)}" alt="" decoding="async">' if portrait else '')
+    spec_src = safe_icon(SPEC_ICON.format(cls=cls, spec=p['spec'])) if cls and p.get('spec') else None
+    icon_src = spec_src or (f'https://wow.zamimg.com/images/wow/icons/large/classicon_{cls.lower()}.jpg' if cls else None)
+    spec_icon = (f'<img class="ph-spec" src="{esc(icon_src)}" alt="" loading="lazy">' if icon_src else '')
     name = esc(p['name'])
     if character_href:
-        name = f'<a href="{esc(character_href)}" title="Every raid night of theirs">{name}</a>'
+        name = f'<a href="{esc(character_href)}">{name}</a>'
     deaths = p['deaths']
     facts = [f"{p['pulls']} pull{'s' if p['pulls'] != 1 else ''}",
              f"{deaths} early death{'s' if deaths != 1 else ''} by mistake" if deaths else 'no early deaths by mistake']
-    link = (f'<a class="ph-link" href="{esc(character_href)}">📈 Character page</a>' if character_href else '')
+    link = (f'<a class="ph-link" href="{esc(character_href)}">Character page →</a>' if character_href else '')
     return f"""
     <div class="card ph" style="--c:{CLASS_COLORS.get(cls, '#9aa1b9')}">
         <div class="ph-banner">
             <span class="ph-art">{art}</span>
-            <div class="ph-main">
-                <span class="pc-score lg {band}" title="{label} — {p['score']}/100"><b>{p['score']}</b><small>{label}</small></span>
+            <div class="ph-id">
+                {spec_icon}
                 <div class="ph-who">
                     <h2 class="ph-name">{name}</h2>
-                    <p class="ph-meta">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(cls))}{_other_specs(p)}
-                       <span>· {' · '.join(facts)}</span></p>
+                    <p class="ph-meta"><span class="ph-spec-name">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(cls))}{_other_specs(p)}</span>
+                       <span class="ph-dot">·</span>{' <span class="ph-dot">·</span> '.join(facts)}</p>
                     {link}
                 </div>
             </div>
-            <div class="subscores ph-subscores">{_subscore_bars(p['scores'])}</div>
+            <div class="ph-scorecard">
+                <div class="ph-score {band}"><b>{p['score']}</b><span><small>Score</small><em>{label}</em></span></div>
+                <div class="subscores">{_subscore_bars(p['scores'])}</div>
+            </div>
         </div>
         {_raid_strip(tiles or [])}
     </div>
