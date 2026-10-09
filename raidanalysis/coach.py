@@ -313,6 +313,26 @@ def soak_guide(guide):
     return bool(guide) and bool(SOAK_RE.search(f"{guide.get('category') or ''} {guide.get('subtitle') or ''}"))
 
 
+def soak_presses(numbered, name, role, guide_for):
+    """
+    Their defensives pressed to take a mechanic for the team (see defensive_insights): [(pull number, press with
+    'soaked_name')] - for the player page's "For the raid" strip. Tanks take mechanics by role: none.
+    """
+    if role == 'tank' or not guide_for:
+        return []
+    out = []
+    for number, pull in numbered:
+        analysis = pull.get('analysis') or {}
+        names = {a['id']: a['name'] for a in (analysis.get('abilities') or []) + (analysis.get('boss_abilities') or [])
+                 if a.get('id') and a.get('name')}
+        found = defensives.moments(analysis, name, defensives.presses(analysis, name), pull['end_ms'] - pull['start_ms'])
+        for p in (found or {}).get('presses') or []:
+            soaked = p.get('guarded')
+            if soaked and soak_guide(guide_for(soaked, names.get(soaked))):
+                out.append((number, dict(p, soaked_name=names.get(soaked))))
+    return out
+
+
 def defensive_insights(numbered, name, role, guide_for=None):
     """
     Personal defensives against the damage that came (defensives.moments) - healers and DPS; tanks press theirs

@@ -225,6 +225,35 @@ async def handle_static_js(request):
     return response
 
 
+def _portrait_of(name, realm):
+    """A character's portrait URL (portraits.py) - by name and realm when we know it, else by name alone."""
+    from .. import armory
+    try:
+        pic = armory.portraits().get((name.lower(), armory.realm_slug(realm))) if realm else None
+    except Exception:
+        pic = None
+    if pic and pic.get('render'):
+        return portrait_url(name, armory.realm_slug(realm), pic['render'])
+    return _portraits_by_name([name])(name)
+
+
+def _raid_tiles(numbered, player, report_rows, guide_for):
+    """The player page's "For the raid" strip (players.raid_tiles): their place among the raid for interrupts and
+    dispels, and the mechanics they took with a defensive (coach.soak_presses)."""
+    from .. import coach
+    rank = {}
+    for key in ('interrupts', 'dispels'):
+        did = sorted((r for r in report_rows if r.get(key)), key=lambda r: -r[key])
+        place = next((i for i, r in enumerate(did, 1) if r['name'] == player['name']), None)
+        rank[key] = (player.get(key) or 0, place, len(did))
+    try:
+        soaks = coach.soak_presses(numbered, player['name'], player.get('role'), guide_for)
+    except Exception:
+        logger.exception('[RAIDS] Soaks for %s failed', player['name'])
+        soaks = []
+    return players.raid_tiles(numbered, player['name'], rank, soaks)
+
+
 def _portraits_by_name(names):
     """
     name -> its character's portrait URL, for the Players cards: the raid's players carry no realm, so a name
@@ -1722,7 +1751,8 @@ async def handle_player(request):
     tags, _ = _effective_tags(selected[0])
     guides.apply_death_only(selected[0], tags, [p.get('analysis') for _, p in numbered])
     guide_for = _guide_lookup(selected[0])
-    player = next((p for p in analyzer.player_report(_insight_pulls(numbered), tags) if p['name'] == name), None)
+    report_rows = analyzer.player_report(_insight_pulls(numbered), tags)
+    player = next((p for p in report_rows if p['name'] == name), None)
     if not player:
         raise web.HTTPFound(f'/admin/raids/report/{quote(code)}?boss={selected[0]}-{selected[1]}&view=players'
                             f'&error=' + quote(f'{name} was not in those pulls.'))
@@ -1745,9 +1775,11 @@ async def handle_player(request):
             return None
         return (f'/admin/raids/report/{quote(code)}/player/{quote(name)}?boss={key[0]}-{key[1]}'
                 + ('' if tab == 'execution' else f'&tab={tab}'))
+    realm = db.realm_in(code, name)
     body = (_night_header(request, report, code, pulls, selected, fight_id, view='players', chip_href=chip_href,
                           boss_href=boss_href)
-            + players.player_hero(player, tab_href, tab, cview.url(name, db.realm_in(code, name))))
+            + players.player_hero(player, tab_href, tab, cview.url(name, realm), _portrait_of(name, realm),
+                                  _raid_tiles(numbered, player, report_rows, guide_for)))
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)
     elif tab == 'damage':

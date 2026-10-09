@@ -1200,6 +1200,59 @@ table.bars td.bar-cell { width: 55%; }
 @media (hover: none) { .pc-go { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .pc-render, .pc-banner { transition: none; } .pc-banner:hover .pc-render { transform: none; } }
 
+/* Player page header (player_hero): the card's banner, bigger - and what they did for the raid under it */
+.card.ph { padding: 0; overflow: hidden; }
+.ph-banner { position: relative; isolation: isolate; overflow: hidden; display: grid; gap: 16px 28px; align-items: end;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); padding: 26px 28px 24px; min-height: 190px;
+    background: radial-gradient(90% 160% at 92% 20%, color-mix(in srgb, var(--c) 40%, transparent) 0%, transparent 60%),
+                linear-gradient(110deg, color-mix(in srgb, var(--c) 18%, var(--surface)) 0%, var(--surface) 72%);
+    border-bottom: 1px solid color-mix(in srgb, var(--c) 30%, var(--border)); }
+.ph-banner::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--c); }
+.ph-art { position: absolute; right: 2%; bottom: 0; top: 0; width: 34%; z-index: -1; pointer-events: none;
+    display: flex; align-items: flex-end; justify-content: center; opacity: .95; }
+.ph-render { height: 135%; max-width: 100%; object-fit: contain; object-position: bottom center;
+    filter: drop-shadow(0 10px 24px rgba(0,0,0,0.6));
+    -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 97%); mask-image: linear-gradient(to bottom, #000 60%, transparent 97%); }
+.ph-classicon { width: 96px; height: 96px; margin: 0 0 40px; }
+.ph-main { display: flex; align-items: flex-end; gap: 18px; min-width: 0; }
+.pc-score.lg { width: 84px; height: 84px; border-radius: 18px; }
+.pc-score.lg b { font-size: 36px; }
+.pc-score.lg small { font-size: 10px; margin-top: -10px; }
+.ph-who { min-width: 0; }
+.ph-name { margin: 0; font-size: 36px; font-weight: 800; letter-spacing: -.02em; line-height: 1.05;
+    color: color-mix(in srgb, var(--c) 82%, #fff); text-shadow: 0 2px 14px rgba(0,0,0,0.6); }
+.ph-name a { color: inherit; text-decoration: none; }
+.ph-name a:hover { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 2px; }
+.ph-meta { margin: 6px 0 0; font-size: 14px; color: var(--text); opacity: .85; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+.ph-meta span { opacity: .75; }
+.ph-link { display: inline-flex; margin-top: 10px; padding: 4px 11px; border-radius: 999px; font-size: 12px;
+    color: var(--text); background: rgba(8,10,20,0.45); border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+    text-decoration: none; backdrop-filter: blur(3px); }
+.ph-link:hover { background: color-mix(in srgb, var(--c) 25%, rgba(8,10,20,0.45)); text-decoration: none; }
+.ph-subscores { padding: 12px 14px; border-radius: 12px; background: rgba(8,10,20,0.5); backdrop-filter: blur(4px);
+    border: 1px solid rgba(255,255,255,0.06); }
+.ph-subscores .subscore { color: var(--text); }
+.ph-raid { padding: 16px 28px 20px; }
+.ph-raid h4 { margin: 0 0 10px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); }
+.ph-tiles { display: flex; flex-wrap: wrap; gap: 10px; }
+.ph-tile { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border-radius: 12px;
+    background: var(--surface-2); border: 1px solid var(--border); cursor: help; transition: border-color .15s; }
+.ph-tile:hover { border-color: color-mix(in srgb, var(--c) 55%, var(--border)); }
+.ph-tile-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; flex: none;
+    background: var(--surface-3); font-size: 18px; overflow: hidden; }
+.ph-tile-icon img { width: 100%; height: 100%; object-fit: cover; }
+.ph-tile-text { display: flex; flex-direction: column; font-size: 13px; line-height: 1.25; }
+.ph-tile-text b { font-variant-numeric: tabular-nums; }
+.ph-tile-text small { font-size: 11.5px; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+@media (max-width: 760px) {
+    .ph-banner { grid-template-columns: 1fr; padding: 20px 18px; }
+    .ph-art { width: 46%; right: 0; opacity: .55; }
+    .ph-name { font-size: 28px; }
+    .ph-raid { padding: 14px 18px 18px; }
+}
+
 /* Phase heatmap + wipe reasons + trends */
 table.heatmap td.heat { background: rgba(116,132,236,var(--a)); color: var(--text); font-weight: 600; }
 table.heatmap td.heat small { color: var(--muted); font-weight: 400; }
@@ -1677,7 +1730,7 @@ onEach('.tl', tl => {
     place(x, y);
   };
   let lastX = 0, lastY = 0;
-  const target = e => e.target.closest && e.target.closest('.tl [data-tip], [data-spell]');
+  const target = e => e.target.closest && e.target.closest('.tl [data-tip], [data-spell], .has-tip[data-tip]');
   document.addEventListener('pointerover', e => {
     const el = target(e);
     lastX = e.clientX; lastY = e.clientY;

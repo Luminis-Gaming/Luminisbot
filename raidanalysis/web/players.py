@@ -73,9 +73,6 @@ def breakdown(p, guide_for):
 
 def _contributions(p):
     chips = []
-    if p.get('contribution') is not None:
-        chips.append(f'<span class="chip" title="Average of the bonus components (interrupts, dispels) - '
-                     f'not part of the score">⭐ Contribution {p["contribution"]}</span>')
     if p['interrupts']:
         chips.append(f'<span class="chip">✋ {p["interrupts"]} interrupt{"s" if p["interrupts"] != 1 else ""}</span>')
     if p['dispels']:
@@ -83,6 +80,70 @@ def _contributions(p):
     if p['defensives']:
         chips.append(f'<span class="chip">❤️ {p["defensives"]} healthstone{"s" if p["defensives"] != 1 else ""}</span>')
     return ''.join(chips)
+
+
+def _ordinal(n):
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def raid_tiles(numbered, name, rank=None, soaks=None):
+    """
+    What a player did for others over these pulls - the player page's "For the raid" strip, a tile per thing that
+    happened (nothing to show: nothing): raid cooldowns, externals and battle rezzes / utility given (the pulls'
+    tracked cooldowns, cooldowns.py), interrupts and dispels with their place in the raid, mechanics taken with a
+    defensive (coach soaks). rank: {'interrupts': (count, place, of), 'dispels': ...}; soaks: [(pull number,
+    press)] from the coach. -> [{'icon', 'value', 'label', 'sub', 'tip', 'spell'}]
+    """
+    from .. import cooldowns
+    groups = {}  # (category, ability) -> {'count', 'targets': {name: n}, 'sid', 'icon'}
+    for _, pull in numbered:
+        for use in (pull.get('analysis') or {}).get('cooldowns') or []:
+            if use.get('name') != name:
+                continue
+            cat = cooldowns.COOLDOWNS.get(use.get('ability'))
+            if cat not in ('raid', 'external', 'utility'):
+                continue
+            g = groups.setdefault((cat, use['ability']), {'count': 0, 'targets': {}, 'sid': use.get('ability_id'),
+                                                          'icon': use.get('icon')})
+            g['count'] += 1
+            if use.get('target'):
+                g['targets'][use['target']] = g['targets'].get(use['target'], 0) + 1
+    tiles = []
+    labels = {'raid': ('🛡️', 'raid cooldown'), 'external': ('🤝', 'on someone else'), 'utility': ('⚡', 'for the raid')}
+    for (cat, ability), g in sorted(groups.items(), key=lambda kv: (['raid', 'external', 'utility'].index(kv[0][0]),
+                                                                    -kv[1]['count'])):
+        who = ', '.join(f"{t}{f' ×{n}' if n > 1 else ''}" for t, n in sorted(g['targets'].items(), key=lambda kv: -kv[1]))
+        tiles.append({'icon': labels[cat][0], 'img': g['icon'], 'value': f"{g['count']}×", 'label': ability,
+                      'sub': f"→ {who}" if who else labels[cat][1], 'spell': g['sid'],
+                      'tip': f"{ability} pressed {g['count']} time{'s' if g['count'] != 1 else ''}"
+                             + (f" - on {who}" if who else '')})
+    for key, icon, word in (('interrupts', '✋', 'interrupt'), ('dispels', '✨', 'dispel')):
+        count, place, of = (rank or {}).get(key) or (0, None, None)
+        if count:
+            tiles.append({'icon': icon, 'value': str(count), 'label': f"{word}{'s' if count != 1 else ''}",
+                          'sub': f"{_ordinal(place)} of {of} in the raid" if place else '',
+                          'tip': f"{count} {word}{'s' if count != 1 else ''}"
+                                 + (f" - {_ordinal(place)} most of the {of} who did any" if place else '')})
+    if soaks:
+        what = sorted({p.get('soaked_name') for _, p in soaks if p.get('soaked_name')})
+        tiles.append({'icon': '🤝', 'value': f"{len(soaks)}×", 'label': 'mechanics taken',
+                      'sub': ', '.join(what) or 'with a defensive up',
+                      'tip': 'Took a mechanic for the team with a defensive up: ' + (', '.join(what) or 'soaks')})
+    return tiles
+
+
+def _raid_strip(tiles):
+    if not tiles:
+        return ''
+    out = []
+    for t in tiles:
+        icon = (f'<img src="{esc(t["img"])}" alt="" loading="lazy">' if t.get('img') and t['img'].startswith('https://')
+                else f'<span>{t["icon"]}</span>')
+        spell = f' data-spell="{int(t["spell"])}"' if t.get('spell') else ''
+        out.append(f'<div class="ph-tile has-tip" data-tip="{esc(t["tip"])}"{spell}><span class="ph-tile-icon">{icon}</span>'
+                   f'<span class="ph-tile-text"><b>{esc(t["value"])}</b> {esc(t["label"])}'
+                   f'<small>{esc(t["sub"])}</small></span></div>')
+    return (f'<div class="ph-raid"><h4>For the raid</h4><div class="ph-tiles">{"".join(out)}</div></div>')
 
 
 def _note(note, guide_for):
@@ -178,27 +239,43 @@ def throughput_label(role):
     return 'Healing & focus' if role == 'healer' else 'Damage & focus'
 
 
-def player_hero(p, tab_href, active, character_href=None):
+def player_hero(p, tab_href, active, character_href=None, portrait=None, tiles=None):
     """
-    The player page's header - score, sub-scores, contributions - and its section tabs. tab_href(key) -> link;
-    character_href: their character page (every night), linked from the name.
+    The player page's header - their character standing on the right (portrait: their render, portraits.py), the
+    score, the name big in their class colour, the sub-scores, what they did for the raid (raid_tiles) - and
+    its section tabs. tab_href(key) -> link; character_href: their character page (every night).
     """
     tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" data-swap="page" href="{esc(tab_href(key))}">{icon} '
                    f'{throughput_label(p.get("role")) if key == "damage" else label}</a>'
                    for key, icon, label in PLAYER_TABS)
+    band, label = _band(p['score'])
+    cls = p['class'] or ''
+    art = (f'<img class="ph-render" src="{esc(portrait)}" alt="" decoding="async">' if portrait else
+           f'<img class="pc-classicon ph-classicon" src="https://wow.zamimg.com/images/wow/icons/large/'
+           f'classicon_{esc(cls.lower())}.jpg" alt="" loading="lazy">' if cls else '')
+    name = esc(p['name'])
+    if character_href:
+        name = f'<a href="{esc(character_href)}" title="Every raid night of theirs">{name}</a>'
+    deaths = p['deaths']
+    facts = [f"{p['pulls']} pull{'s' if p['pulls'] != 1 else ''}",
+             f"{deaths} early death{'s' if deaths != 1 else ''} by mistake" if deaths else 'no early deaths by mistake']
+    link = (f'<a class="ph-link" href="{esc(character_href)}">📈 Character page</a>' if character_href else '')
     return f"""
-    <div class="card">
-        <div class="player-hero">
-            {score_ring(p['score'], 'lg')}
-            <div>
-                <h2>{f'<a class="ch-name-link" href="{esc(character_href)}" title="Every raid night of theirs">' if character_href else ''}{player_name(p['name'], p['class'])}{'</a>' if character_href else ''}
-                    {f'<a class="card-link small" href="{esc(character_href)}">📈 Character page →</a>' if character_href else ''}</h2>
-                <p class="muted">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(p['class']))} ·
-                   {p['pulls']} pulls · {p['deaths']} early death{'s' if p['deaths'] != 1 else ''} by mistake</p>
-                <div class="subscores wide">{_subscore_bars(p['scores'])}</div>
-                <div class="chips">{_contributions(p)}</div>
+    <div class="card ph" style="--c:{CLASS_COLORS.get(cls, '#9aa1b9')}">
+        <div class="ph-banner">
+            <span class="ph-art">{art}</span>
+            <div class="ph-main">
+                <span class="pc-score lg {band}" title="{label} — {p['score']}/100"><b>{p['score']}</b><small>{label}</small></span>
+                <div class="ph-who">
+                    <h2 class="ph-name">{name}</h2>
+                    <p class="ph-meta">{ROLE_ICONS.get(p['role'], '')} {esc(p['spec'])} {esc(_class_label(cls))}{_other_specs(p)}
+                       <span>· {' · '.join(facts)}</span></p>
+                    {link}
+                </div>
             </div>
+            <div class="subscores ph-subscores">{_subscore_bars(p['scores'])}</div>
         </div>
+        {_raid_strip(tiles or [])}
     </div>
     <nav class="ptabs">{tabs}</nav>"""
 
