@@ -296,7 +296,7 @@ def _raid_buff_tile(buff):
     if buff['missing']:
         which = ', '.join(f'#{n}' for n in buff['missing'])
         note = (f'<div class="bad-text small">The raid went without it in {len(buff["missing"])} of '
-                f'{len(buff["pulls"])} pulls ({which}) - nobody of your class kept it up.</div>')
+                f'{len(buff["pulls"])} pulls ({which}) - nobody of your class had it up when the pull started.</div>')
     else:
         n = len(buff['pulls'])
         note = f'<div class="muted small">{"Up the whole pull." if n == 1 else f"Up in all {n} pulls."}</div>'
@@ -432,7 +432,7 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
     if buff:
         sections.append(subsection('Raid buff', f"""
             <p class="muted small">Your class's buff for the whole raid - cast it before every pull. Anyone of your
-               class keeping it up counts (with two of you, whoever cast it last owns it).</p>{_raid_buff_tile(buff)}"""))
+               class having it up as the pull starts counts; dying later doesn't take it off the others.</p>{_raid_buff_tile(buff)}"""))
     rotational = compare.rotation_tiles(data, back) if data and data.get('rows') else ''
     if rotational:
         sections.append(subsection('Keep on cooldown', f"""

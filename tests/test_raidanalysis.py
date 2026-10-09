@@ -1596,6 +1596,28 @@ class TestHotsOnOthers(unittest.TestCase):
         old = [pull(1, {'Asiriel': 0, 'Alliuda': 0}, stored=False)]
         self.assertIsNone(throughput.raid_buff(old, 'Alliuda', 'Priest'))           # before they were kept: no alarm
 
+    def test_raid_buff_lost_to_deaths_isnt_missing(self):
+        """Boopsproops cast Blessing of the Bronze before the pull and died later: the raid still had it."""
+        from raidanalysis import throughput
+
+        def pull(number, bands=None, uptime=0, died=None, stored=True):
+            auras = [{'id': 364342, 'name': 'Blessing of the Bronze', 'kind': 'buff', 'uptime': uptime,
+                      'bands': bands or []}] if stored else []
+            return (number, {'analysis': {
+                'players': [{'name': 'Boopsproops', 'class': 'Evoker'}, {'name': 'Mangor', 'class': 'Monk'}],
+                'deaths': [{'name': 'Boopsproops', 't': died}] if died is not None else [],
+                'extras': {'detail': True, 'raid_buffs': True, 'duration': 300000,
+                           'players': {'Boopsproops': {'auras': auras}, 'Mangor': {'auras': []}}}}})
+        numbered = [pull(1, bands=[[0, 95]], uptime=95000, died=95000),          # up from the start, died at 1:35
+                    pull(2, uptime=300000),                                      # up all pull (no stretches kept)
+                    pull(3, bands=[[90, 300]], uptime=210000),                   # cast a minute and a half in
+                    pull(4, stored=False),                                       # never cast
+                    pull(5, stored=False, died=4000)]                            # died 4 s in: can't tell
+        buff = throughput.raid_buff(numbered, 'Boopsproops', 'Evoker')
+        self.assertEqual(buff['missing'], [3, 4])
+        self.assertEqual([p['number'] for p in buff['pulls']], [1, 2, 3, 4])      # pull 5 skipped
+        self.assertEqual(buff['pulls'][2]['share'], 0.7)                          # had it from 1:30 on
+
     def test_raid_buffs_are_not_an_uptime_goal(self):
         """Two priests: the other one's Fortitude was up all fight - yours shows 0%. Not a rotation problem."""
         from raidanalysis import throughput
@@ -2785,22 +2807,31 @@ class TestDefensives(unittest.TestCase):
     DEF = 108271  # Astral Shift
 
     @staticmethod
-    def pull(extra_hits, start=0, length=120):
-        """Steady 10k a second on everyone (A..D, tank T), plus extra_hits [(name, second, amount, buffs, ability)]."""
+    def pull(extra_hits, start=0, length=120, silent=()):
+        """
+        Steady 10k a second on everyone (A..D, tank T), plus extra_hits [(name, second, amount, buffs, ability)];
+        silent: [(name, from second, to second)] - nothing at all hits them then.
+        """
         ids = {'A': 1, 'B': 2, 'C': 3, 'D': 4, 'T': 5}
+        quiet = {(n, s) for n, a, b in silent for s in range(a, b)}
         events = [{'type': 'damage', 'timestamp': start + s * 1000 + 500, 'targetID': i, 'unmitigatedAmount': 10000,
-                   'abilityGameID': 7} for s in range(length) for i in ids.values()]
+                   'abilityGameID': 7} for s in range(length) for n, i in ids.items() if (n, s) not in quiet]
         for name, sec, amount, buffs, ability in extra_hits:
             events.append({'type': 'damage', 'timestamp': start + sec * 1000 + 100, 'targetID': ids[name],
                            'unmitigatedAmount': amount, 'abilityGameID': ability,
                            'buffs': '.'.join(str(b) for b in buffs) + '.' if buffs else None})
         return events, {i: n for n, i in ids.items()}
 
-    def summarize(self, extra, casts):
+    def summarize(self, extra, casts, silent=(), defensive_ids=None, immune=()):
+        """immune: [(name, second, ability, buffs)] - hits logged as immune for 0 (no unmitigated amount)."""
         from raidanalysis import defensives
-        events, names = self.pull(extra)
+        events, names = self.pull(extra, silent=silent)
+        ids = {n: i for i, n in names.items()}
+        events += [{'type': 'damage', 'timestamp': sec * 1000 + 200, 'targetID': ids[n], 'amount': 0, 'hitType': 10,
+                    'abilityGameID': ability, 'buffs': '.'.join(str(b) for b in buffs) + '.'}
+                   for n, sec, ability, buffs in immune]
         roles = {'A': 'dps', 'B': 'dps', 'C': 'healer', 'D': 'dps', 'T': 'tank'}
-        return defensives.summarize(events, 0, names, roles, casts)
+        return defensives.summarize(events, 0, names, roles, casts, defensive_ids)
 
     def test_raid_burst_aimed_and_quiet(self):
         import json
@@ -2812,12 +2843,13 @@ class TestDefensives(unittest.TestCase):
         for sec in range(80, 86):  # something aimed at C alone
             extra.append(('C', sec, 120000, [self.DEF], 55))
         casts = {'A': [[29000, self.DEF]], 'B': [[60000, self.DEF]], 'C': [[79500, self.DEF]]}
-        incoming = json.loads(json.dumps(self.summarize(extra, casts)))  # as stored
+        incoming = json.loads(json.dumps(self.summarize(extra, casts, silent=[('B', 56, 75)])))  # as stored
         self.assertNotIn('T', incoming['players'])  # tanks left out
         analysis = {'incoming': incoming}
         kind = lambda n, t: defensives.moments(analysis, n, [(t, self.DEF, 'Astral Shift')], 120000)['presses'][0]  # noqa: E731
         self.assertEqual((kind('A', 29000)['kind'], kind('A', 29000)['ability']), ('raid', 99))
-        self.assertEqual(kind('B', 60000)['kind'], 'quiet')
+        self.assertEqual(kind('B', 60000)['kind'], 'quiet')                        # nothing came at all
+        self.assertEqual(kind('D', 60000)['kind'], 'used')                         # the usual damage came: fine
         self.assertEqual((kind('C', 79500)['kind'], kind('C', 79500)['ability']), ('aimed', 55))
 
     def test_spike_with_no_defensive(self):
@@ -2840,7 +2872,7 @@ class TestDefensives(unittest.TestCase):
         for number in (1, 2):  # quiet presses while Shadow Brand hits hard with nothing up, twice
             extra = [('A', sec, 150000, [], 66) for sec in range(100, 104)]
             pulls.append((number, {'start_ms': 0, 'end_ms': 120000, 'analysis': {
-                'incoming': self.summarize(extra, {}),
+                'incoming': self.summarize(extra, {}, silent=[('A', 6, 25)]),
                 'cooldowns': [{'t': 10000, 'name': 'A', 'ability_id': self.DEF, 'ability': 'Astral Shift',
                                'category': 'personal'}],
                 'abilities': [{'id': 66, 'name': 'Shadow Brand'}], 'deaths': []}}))
@@ -2849,6 +2881,69 @@ class TestDefensives(unittest.TestCase):
         self.assertIn('Astral Shift up for the raid-wide Blight Vein (pull #3, 0:29)', found['good'])
         self.assertIn('Shadow Brand hit you hard with none up', found['bad'])
         self.assertEqual(coach.defensive_insights(pulls, 'A', 'tank'), [])
+
+    def test_better_safe_than_sorry_isnt_held_against_you(self):
+        """
+        Boopsproops' Obsidian Scales up through a soak (1.5-1.8× his usual, not "heavy"): what a defensive prevents
+        doesn't show in the damage - no tip, even with big unprotected hits elsewhere in the night.
+        """
+        from raidanalysis import coach
+        pulls = []
+        for number in (1, 2):
+            extra = [('A', sec, 7000, [self.DEF], 77) for sec in range(10, 20)]      # soaking with Scales up
+            extra += [('A', sec, 150000, [], 66) for sec in range(100, 104)]          # a big hit with nothing up
+            pulls.append((number, {'start_ms': 0, 'end_ms': 120000, 'analysis': {
+                'incoming': self.summarize(extra, {'A': [[9500, self.DEF]]}),
+                'cooldowns': [{'t': 9500, 'name': 'A', 'ability_id': self.DEF, 'ability': 'Obsidian Scales',
+                               'category': 'personal'}],
+                'abilities': [{'id': 66, 'name': 'Shadow Brand'}], 'deaths': []}}))
+        self.assertFalse([i for i in coach.defensive_insights(pulls, 'A', 'dps') if i['tone'] == 'bad'])
+
+    MIASMA = 1288232
+    SCALES, SHIELD = 363916, 642
+
+    def soak_pull(self, number, spell, sid, immune=False):
+        """A pull where A soaks Unstable Miasma at 0:40 with a defensive (Scales: hits for less; a bubble: immune)."""
+        if immune:
+            extra, imm = [], [('A', sec, self.MIASMA, [sid]) for sec in range(40, 46)]
+        else:
+            extra, imm = [('A', sec, 8000, [sid], self.MIASMA) for sec in range(40, 46)], []
+        return (number, {'start_ms': 0, 'end_ms': 120000, 'analysis': {
+            'incoming': self.summarize(extra, {'A': [[39500, sid]]}, defensive_ids={'A': {sid}}, immune=imm),
+            'cooldowns': [{'t': 39500, 'name': 'A', 'ability_id': sid, 'ability': spell, 'category': 'personal'}],
+            'abilities': [{'id': self.MIASMA, 'name': 'Unstable Miasma'}], 'deaths': []}})
+
+    @staticmethod
+    def guide_for(ability_id, name):
+        if name == 'Unstable Miasma':
+            return {'name': name, 'category': 'Soak together', 'subtitle': 'Soak'}
+        return None
+
+    def test_soaking_with_a_defensive_is_praised(self):
+        """Boopsproops' Obsidian Scales up to soak Unstable Miasma: taking a mechanic for the team."""
+        from raidanalysis import coach
+        found = coach.defensive_insights([self.soak_pull(37, 'Obsidian Scales', self.SCALES)], 'A', 'dps', self.guide_for)
+        soak = next(i for i in found if i['kind'] == 'soak')
+        self.assertEqual(soak['tone'], 'good')
+        self.assertIn('Took mechanics for the team with Obsidian Scales up - Unstable Miasma (1×: #37 0:39)', soak['text'])
+        self.assertEqual(soak['ability'], {'id': self.MIASMA, 'name': 'Unstable Miasma'})
+        # Without a guide that says to take it: no soak praise (it was just damage)
+        self.assertFalse([i for i in coach.defensive_insights([self.soak_pull(37, 'Obsidian Scales', self.SCALES)],
+                                                             'A', 'dps', lambda i, n: None) if i['kind'] == 'soak'])
+
+    def test_soaking_with_an_immunity_counts_too(self):
+        """Divine Shield up for it: every hit is logged as immune for 0 - still what the bubble was up for."""
+        from raidanalysis import coach
+        found = coach.defensive_insights([self.soak_pull(5, 'Divine Shield', self.SHIELD, immune=True)], 'A', 'dps',
+                                         self.guide_for)
+        self.assertIn('with Divine Shield up - Unstable Miasma', next(i for i in found if i['kind'] == 'soak')['text'])
+
+    def test_player_page_shows_the_coach(self):
+        from raidanalysis.web import routes
+        player = {'name': 'A', 'role': 'dps', 'feedback': [{'tone': 'bad', 'text': 'Hit by X', 'weight': 9, 'ability': None},
+                                                          {'tone': 'good', 'text': 'No deaths', 'weight': 1, 'ability': None}]}
+        notes = routes._coach_notes(9999, [self.soak_pull(37, 'Obsidian Scales', self.SCALES)], player, self.guide_for)
+        self.assertEqual([n['text'][:10] for n in notes], ['Hit by X', 'No deaths', 'Took mecha'])
 
     def test_older_pulls_say_nothing(self):
         from raidanalysis import coach

@@ -21,6 +21,7 @@ Runs in a worker thread (the Discord button: asyncio.to_thread), so the loads us
 """
 import asyncio
 import logging
+import re
 
 from . import analyzer, benchmarks, bossmech, db, defensives, focus, guides, throughput
 
@@ -302,16 +303,29 @@ def boss_mechanic_insights(encounter_id, numbered, name):
     return out
 
 
-def defensive_insights(numbered, name, role):
+# A Mythic Trap entry telling people to take it ("Soak together", "Run over droplets", "Split and soak"): a defensive
+# up for one of those is taking a mechanic for the team
+SOAK_RE = re.compile(r'\b(soak|run over|split|intercept|catch|take (it|the|a))', re.I)
+
+
+def soak_guide(guide):
+    """Whether a Mythic Trap entry is a mechanic someone takes for the raid."""
+    return bool(guide) and bool(SOAK_RE.search(f"{guide.get('category') or ''} {guide.get('subtitle') or ''}"))
+
+
+def defensive_insights(numbered, name, role, guide_for=None):
     """
     Personal defensives against the damage that came (defensives.moments) - healers and DPS; tanks press theirs
     all the time. A star for defensives up through damage aimed at you or a raid-wide burst; a gentle tip only for
-    a clear pattern: several pressed in quiet moments while big hits landed with none up (or one right before you
-    died). Pulls synced before the incoming damage was kept have nothing to say.
+    a clear pattern: several pressed when next to nothing came at you while big hits landed with none up (or one
+    right before you died). A defensive up through some damage (a soak, a droplet) is never held against anyone:
+    what it prevented doesn't show in the damage. Pulls synced before the incoming damage was kept have nothing
+    to say. guide_for(ability id, name) -> Mythic Trap entry: a defensive up while soaking a mechanic it says to
+    take (soak_guide) earns its own "going well" - taking it for the team.
     """
     if role == 'tank':
         return []
-    good, quiet, spikes, judged = [], [], [], 0
+    good, quiet, spikes, soaks, judged = [], [], [], [], 0
     names = {}
     for number, pull in numbered:
         analysis = pull.get('analysis') or {}
@@ -324,10 +338,13 @@ def defensive_insights(numbered, name, role):
         judged += len(found['presses'])
         died = [d['t'] for d in analysis.get('deaths') or [] if d.get('name') == name and d.get('t') is not None]
         for p in found['presses']:
+            soaked = p.get('guarded')
+            if soaked and guide_for and soak_guide(guide_for(soaked, names.get(soaked))):
+                soaks.append((number, p))
             if p['kind'] in ('aimed', 'raid', 'heavy'):
                 good.append((number, p))
-            elif p['name'] not in defensives.NOT_ONLY_DEFENSIVE:
-                quiet.append((number, p))
+            elif p['kind'] == 'quiet' and p['name'] not in defensives.NOT_ONLY_DEFENSIVE:
+                quiet.append((number, p))  # 'used' (damage came, not heavy - a soak): never held against them
         for s in found['spikes']:
             fatal = any(0 <= t - s['t'] <= (defensives.SPIKE_WINDOW_S + 3) * 1000 for t in died)
             spikes.append((number, dict(s, fatal=fatal)))
@@ -342,6 +359,14 @@ def defensive_insights(numbered, name, role):
             text += f" - {len(good)} of your {judged} defensives lined up with heavy damage"
         out.append(_insight('good', 20 + 6 * min(len(good), 4) + (10 if best['kind'] == 'aimed' else 0),
                             'defensive', text))
+    if soaks:
+        what = sorted({names.get(p['guarded']) for _, p in soaks if names.get(p['guarded'])})
+        spells = sorted({p['name'] for _, p in soaks})
+        where = ', '.join(f"#{n} {_clock(p['t'])}" for n, p in soaks[:3]) + (' …' if len(soaks) > 3 else '')
+        first = soaks[0][1]['guarded']
+        out.append(_insight('good', 30 + 5 * min(len(soaks), 4), 'soak',
+                            f"Took mechanics for the team with {' / '.join(spells)} up - {', '.join(what) or 'soaks'} "
+                            f"({len(soaks)}×: {where})", {'id': first, 'name': names.get(first) or ''}))
     fatal = [s for s in spikes if s[1]['fatal']]
     if (len(quiet) >= 2 and len({n for n, _ in spikes}) >= 2) or (fatal and quiet):
         shown = (fatal or sorted(spikes, key=lambda s: -s[1]['share']))[:2]
@@ -472,7 +497,7 @@ def night(code, character_names, load=True):
         if boss['weight'] >= DETAIL_MIN_WEIGHT:  # rotation tips only where it matters
             spell_names = {sid: info.get('name') for sid, info in ((data or {}).get('spells') or {}).items()}
             found += rotation_insights(numbered, character, role, data, tracked, spell_names)
-        found += defensive_insights(numbered, character, role)
+        found += defensive_insights(numbered, character, role, boss['guide_for'])
         more, boss['parse'] = output_insights(numbered, character, role)
         found += more
         if boss['killed'] and boss['pulls'] <= EASY_KILL_PULLS and not boss['deaths']:

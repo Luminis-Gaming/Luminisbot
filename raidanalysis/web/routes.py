@@ -1705,6 +1705,7 @@ async def handle_player(request):
     if not player:
         raise web.HTTPFound(f'/admin/raids/report/{quote(code)}?boss={selected[0]}-{selected[1]}&view=players'
                             f'&error=' + quote(f'{name} was not in those pulls.'))
+    player['feedback'] = _coach_notes(selected[0], numbered, player, guide_for)
     fights = {number: pull['fight_id'] for number, pull in numbered}
     tab = request.query.get('tab')
     tab = tab if tab in {key for key, _, _ in players.PLAYER_TABS} else 'execution'
@@ -1771,6 +1772,25 @@ async def _armory_card(request, code, name, player):
         text = f"Summoning {name}'s armory"
         return f'<div class="card">{section_head("🛡️", "Character")}{focusview.loader(text=text)}</div>'
     return armory_view.tab(data, player, stale, refreshing=_refresh_armory(code, name, realm, stale))
+
+
+def _coach_notes(encounter_id, numbered, player, guide_for):
+    """
+    The player's feedback with the coach's say on top (the same as their Discord recap): their defensives - stars,
+    soaks taken for the team, the gentle tip - and the boss's curated mechanics (bossmech.py). Problems first,
+    then everything else, then what went well.
+    """
+    from .. import coach
+    found = []
+    try:
+        found = (coach.defensive_insights(numbered, player['name'], player.get('role'), guide_for)
+                 + coach.boss_mechanic_insights(encounter_id, numbered, player['name']))
+    except Exception:
+        logger.exception('[RAIDS] Coach notes for %s failed', player['name'])
+    notes = [{'tone': i['tone'], 'text': i['text'], 'weight': i['impact'], 'ability': i.get('ability')}
+             for i in sorted(found, key=lambda i: -i['impact'])]
+    return ([n for n in notes if n['tone'] == 'bad'] + list(player.get('feedback') or [])
+            + [n for n in notes if n['tone'] != 'bad'])
 
 
 async def _damage_by_target(request, code, numbered, scope):

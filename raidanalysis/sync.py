@@ -150,8 +150,12 @@ async def _incoming(session, code, fight, actors, analysis):
         logger.info(f"[RAIDS] Incoming damage for {code}#{fight['id']} not fetched: {e}")
         return None
     roles = {p['name']: p.get('role') for p in analysis.get('players') or []}
+    mine = {}  # their personal defensives (cooldowns.py), to see what hit them with one up
+    for use in analysis.get('cooldowns') or []:
+        if use.get('category') == 'personal':
+            mine.setdefault(use['name'], set()).add(use['ability_id'])
     return defensives.summarize(events, fight['startTime'], {a['id']: a['name'] for a in actors}, roles,
-                                analysis.get('casts') or {})
+                                analysis.get('casts') or {}, mine)
 
 
 TAGGED_EVENTS_MAX = 60000  # the tagged mechanics' damage events in a pull (fetched on their own, first)

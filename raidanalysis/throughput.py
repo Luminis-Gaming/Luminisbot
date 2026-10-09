@@ -45,7 +45,8 @@ RAID_WIDE_AURAS = {
 # the class keeping it up counts - with two priests whoever cast it last owns it.
 RAID_BUFFS = {'Priest': 'Power Word: Fortitude', 'Warrior': 'Battle Shout', 'Mage': 'Arcane Intellect',
               'Druid': 'Mark of the Wild', 'Evoker': 'Blessing of the Bronze', 'Shaman': 'Skyfury'}
-RAID_BUFF_MIN = 0.9  # up less than this share of a pull: the raid went (partly) without it
+RAID_BUFF_START_MS = 10000  # the raid had it if one of the class had it up by now (cast before the pull, or right
+                            # at it) - their own copy going later (they died) doesn't take it off anyone else
 
 MIN_TOP_UPTIME = 0.4      # one of your spells the top players keep up less than this isn't an uptime goal
 MIN_TRACKED_UPTIME = 0.6  # ...a tracked buff that isn't one of your spells: below this it's a proc you spend
@@ -591,26 +592,40 @@ def _not_taken(aura, share, our_casts, talents):
 
 def raid_buff(numbered, name, cls):
     """
-    Your class's raid buff (RAID_BUFFS) in the pulls you were in: how much of each the raid had it - its uptime
-    summed over everyone of your class (the copy on the one who cast it last). {'buff', 'pulls': [{'number',
-    'share'}], 'share' (over the pulls), 'missing': [pull numbers under RAID_BUFF_MIN], 'verdict'} - None for a
-    class without one, or without pulls stored since raid buffs are kept (extras['raid_buffs']).
+    Your class's raid buff (RAID_BUFFS) in the pulls you were in: whether the raid had it - someone of your class
+    had it up by RAID_BUFF_START_MS (the copy on whoever cast it last; anyone of the class counts). How long that
+    copy lasted doesn't matter: it goes when its caster dies, but everyone else keeps theirs. {'buff', 'id',
+    'pulls': [{'number', 'share' (of the pull from when it was first up)}], 'share', 'missing': [pull numbers
+    without it at the start], 'verdict'} - None for a class without one, or without pulls stored since raid buffs
+    are kept (extras['raid_buffs']).
     """
     buff = RAID_BUFFS.get(cls)
     if not buff:
         return None
     pulls, spell_id = [], None
     for number, pull, _, extras in detail_pulls(numbered, name):
-        if not extras.get('raid_buffs') or not extras.get('duration'):
+        duration = extras.get('duration')
+        if not extras.get('raid_buffs') or not duration:
             continue
-        classes = {p['name']: p.get('class') for p in (pull.get('analysis') or {}).get('players') or []}
-        copies = [a for n, r in extras['players'].items() if classes.get(n) == cls
-                  for a in r.get('auras') or [] if a['name'] == buff and a['kind'] == 'buff']
+        analysis = pull.get('analysis') or {}
+        classes = {p['name']: p.get('class') for p in analysis.get('players') or []}
+        providers = [n for n in extras['players'] if classes.get(n) == cls]
+        copies = [a for n in providers for a in extras['players'][n].get('auras') or []
+                  if a['name'] == buff and a['kind'] == 'buff']
         spell_id = spell_id or next((a['id'] for a in copies), None)
-        pulls.append({'number': number, 'share': min(1.0, sum(a['uptime'] for a in copies) / extras['duration'])})
+        # When it was first up: a copy with no stretches stored was up (nearly) all pull
+        first = min(((a['bands'][0][0] * 1000 if a.get('bands') else 0) for a in copies), default=None)
+        if first is None:
+            died = {d['name']: d['t'] for d in analysis.get('deaths') or [] if d.get('t') is not None}
+            if providers and all(died.get(n, duration) < MIN_STORED_UPTIME * duration + RAID_BUFF_START_MS
+                                 for n in providers):
+                continue  # every one of them died too soon for their copy to be kept: can't tell
+        share = 1.0 if first is not None and first <= RAID_BUFF_START_MS else \
+            (max(0.0, 1 - first / duration) if first is not None else 0.0)
+        pulls.append({'number': number, 'share': share})
     if not pulls:
         return None
-    missing = [p['number'] for p in pulls if p['share'] < RAID_BUFF_MIN]
+    missing = [p['number'] for p in pulls if p['share'] < 1.0]
     return {'buff': buff, 'id': spell_id, 'pulls': pulls, 'share': sum(p['share'] for p in pulls) / len(pulls), 'missing': missing,
             'verdict': 'off' if missing else 'good'}
 
