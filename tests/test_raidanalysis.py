@@ -1618,6 +1618,29 @@ class TestHotsOnOthers(unittest.TestCase):
         self.assertEqual([p['number'] for p in buff['pulls']], [1, 2, 3, 4])      # pull 5 skipped
         self.assertEqual(buff['pulls'][2]['share'], 0.7)                          # had it from 1:30 on
 
+    def test_raid_buff_of_a_caster_who_died_at_0_29(self):
+        """
+        Entombed Sentinels pull #9: Boopsproops (the only Evoker) had Blessing of the Bronze up from 0:00 and died at
+        0:29 - his copy was up 9 % of the 5:28 pull. Synced now it's kept (raid buffs always are) and counts as cast;
+        stored before that (dropped as barely up), the early death means "can't tell", never "went without".
+        """
+        from raidanalysis import throughput
+        tables = {'damageDone': {'entries': []}, 'healing': {'entries': []}}
+        per_player = {2: {'buffs': {'auras': [{'guid': 381748, 'name': 'Blessing of the Bronze', 'totalUptime': 29416,
+                                                'bands': [{'startTime': 0, 'endTime': 29416}]}]},
+                          'debuffs': [], 'casts': {'entries': [{'name': 'Living Flame', 'total': 9}]}}}
+        fight = {'id': 43, 'startTime': 0, 'endTime': 327673, 'kill': False}
+        roster = [{'name': 'Boopsproops', 'class': 'Evoker'}, {'name': 'Mangor', 'class': 'Monk'}]
+        extras = throughput.build_extras(fight, roster, {2: 'Boopsproops', 3: 'Mangor'}, tables, per_player, {},
+                                         tracked={999})
+        self.assertEqual([a['name'] for a in extras['players']['Boopsproops']['auras']], ['Blessing of the Bronze'])
+        deaths = [{'name': 'Boopsproops', 't': 29418}]
+        new = (9, {'analysis': {'players': roster, 'deaths': deaths, 'extras': extras}})
+        self.assertEqual(throughput.raid_buff([new], 'Boopsproops', 'Evoker')['missing'], [])
+        old_extras = dict(extras, players={'Boopsproops': {'auras': []}, 'Mangor': {'auras': []}})
+        old = (9, {'analysis': {'players': roster, 'deaths': deaths, 'extras': old_extras}})
+        self.assertIsNone(throughput.raid_buff([old], 'Boopsproops', 'Evoker'))   # skipped: can't tell
+
     def test_raid_buffs_are_not_an_uptime_goal(self):
         """Two priests: the other one's Fortitude was up all fight - yours shows 0%. Not a rotation problem."""
         from raidanalysis import throughput

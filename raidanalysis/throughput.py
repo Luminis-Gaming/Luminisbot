@@ -113,12 +113,13 @@ def parses_from_scrape(scraped):
             for name, v in (scraped or {}).items() if isinstance(v, dict)}
 
 
-def auras(table, fight_start, duration, kind):
+def auras(table, fight_start, duration, kind, keep=()):
     """
     A Buffs / Debuffs table -> [{'id', 'name', 'kind', 'uptime' (ms), 'bands': [[from, to]] in seconds
     into the pull}], one per name (an aura logged under several spell ids keeps its longest) -
-    consumables and barely-up auras left out, and no bands for one that's up all fight (kept small:
-    every pull's analysis is loaded for a night's pages).
+    consumables and barely-up auras left out (but those named in keep: a raid buff whose caster died at 0:29 was
+    still cast before the pull), and no bands for one that's up all fight (kept small: every pull's analysis is
+    loaded for a night's pages).
     """
     best = {}
     for a in (table or {}).get('auras') or []:
@@ -126,7 +127,7 @@ def auras(table, fight_start, duration, kind):
         uptime = min(a.get('totalUptime') or 0, duration)
         if not a.get('guid') or any(w in name.lower() for w in SKIP_AURA_WORDS):
             continue
-        if not duration or uptime / duration < MIN_STORED_UPTIME:
+        if not duration or (uptime / duration < MIN_STORED_UPTIME and name not in keep):
             continue
         if name in best and best[name]['uptime'] >= uptime:
             continue
@@ -316,7 +317,7 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
         main = h if p.get('role') == 'healer' else d
         tables = per_player.get(ids_by_name.get(name)) or {}
         cast = cast_counts(tables.get('casts')) if tables.get('casts') else None
-        kept = [a for a in (auras(tables.get('buffs'), start, duration, 'buff')
+        kept = [a for a in (auras(tables.get('buffs'), start, duration, 'buff', keep=set(RAID_BUFFS.values()))
                             + boss_debuffs(tables.get('debuffs'), start, duration))
                 if _worth_keeping(a, cast or {}, tracked)]
         players[name] = {
