@@ -258,13 +258,18 @@ def _other_specs(p):
     return f' <span class="muted">(also {esc(text)})</span>'
 
 
-PLAYER_TABS = (('execution', '🧮', 'Execution'), ('damage', '📈', 'Damage & focus'),
-               ('cooldowns', '⚔️', 'Cooldowns'), ('rotation', '🔁', 'Rotation'), ('armory', '🛡️', 'Character'))
+PLAYER_TABS = (('execution', '🧮', 'Execution'), ('damage', '⚔️', 'Damage & focus'),
+               ('cooldowns', '⏳', 'Cooldowns'), ('rotation', '🔁', 'Rotation'), ('armory', '🛡️', 'Character'))
 
 
 def throughput_label(role):
     """The Damage & focus tab's name: healers are judged on healing."""
     return 'Healing & focus' if role == 'healer' else 'Damage & focus'
+
+
+def throughput_icon(role):
+    """...and its icon: healing's, or the damage one (which the page turns into a legendary weapon - icons.py)."""
+    return '💚' if role == 'healer' else '⚔️'
 
 
 def player_hero(p, tab_href, active, character_href=None, portrait=None, tiles=None):
@@ -274,7 +279,7 @@ def player_hero(p, tab_href, active, character_href=None, portrait=None, tiles=N
     portraits.py), the score card on the right (the score and the sub-scores behind it) - then what they did for
     the raid (raid_tiles) and the section tabs. tab_href(key) -> link; character_href: their character page.
     """
-    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" data-swap="page" href="{esc(tab_href(key))}">{icon} '
+    tabs = ''.join(f'<a class="ptab{" active" if key == active else ""}" data-swap="page" href="{esc(tab_href(key))}">{throughput_icon(p.get("role")) if key == "damage" else icon} '
                    f'{throughput_label(p.get("role")) if key == "damage" else label}</a>'
                    for key, icon, label in PLAYER_TABS)
     band, label = _band(p['score'])

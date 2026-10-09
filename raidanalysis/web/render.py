@@ -1354,12 +1354,24 @@ window.raidInit = root => INITS.forEach(([selector, setup]) => {
   if (root.matches(selector)) setup(root);
   root.querySelectorAll(selector).forEach(setup);
 });
-// The DPS icon's easter egg (icons.LEGENDARIES): every blade on the page becomes the same legendary weapon, picked
-// anew on each page load - its name on hover.
-const LEGENDARY = (all => all[Math.floor(Math.random() * all.length)])(__LEGENDARIES__);
+// The DPS icon's easter egg (icons.LEGENDARIES): every blade becomes a legendary weapon - its name on hover - dealt
+// from a shuffled deck, so each gets its own and none repeats before all of them have shown (a new page, swapped
+// in, deals on from the same deck).
+const LEGENDARIES = __LEGENDARIES__;
+let legendaryDeck = [];
 onEach('img.ic-blade', img => {
-  img.src = img.src.replace(/[^/]+\/blade\.svg$/, 'plain/' + LEGENDARY[0] + '.svg');
-  img.title = LEGENDARY[1];
+  if (img.dataset.legendary) return;  // dealt already (set up again with its part of the page)
+  if (!legendaryDeck.length) {
+    legendaryDeck = LEGENDARIES.slice();
+    for (let i = legendaryDeck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [legendaryDeck[i], legendaryDeck[j]] = [legendaryDeck[j], legendaryDeck[i]];
+    }
+  }
+  const [file, name] = legendaryDeck.pop();
+  img.dataset.legendary = file;
+  img.src = img.src.replace(/[^/]+\/blade\.svg$/, 'plain/' + file + '.svg');
+  img.title = name;
 });
 onEach('[data-ts]', el => {
   const d = new Date(+el.dataset.ts);

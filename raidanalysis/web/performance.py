@@ -10,7 +10,7 @@ The player page's "Damage & focus" and "Rotation" sections (numbers from through
 """
 from .. import spells, throughput
 from . import compare
-from .players import throughput_label
+from .players import throughput_icon, throughput_label
 from .render import (ICON_BASE, boss_portrait, esc, fmt_amount, fmt_duration, per_pull_columns, safe_icon, section_head,
                      stat_tiles, subsection)
 
@@ -70,7 +70,7 @@ def _damage_one_pull(r, role, metric, active, raid_active, focus_section, number
             WIPE_PARSE_NOTE.replace(' - no kill parse yet', '') if wipe else '')
     return f"""
     <div class="card">
-        {section_head('📈', throughput_label(role),
+        {section_head(throughput_icon(role), throughput_label(role),
                       f"Parse, {metric} and where your damage went in pull #{r['number']} "
                       f"({'kill' if r['kill'] else 'wipe'}, {fmt_duration(r['duration'])}).")}
         {subsection('Performance', stat_tiles(tiles) + wipe)}
@@ -88,7 +88,7 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
     metric = 'HPS' if role == 'healer' else 'DPS'
     rows = throughput.per_pull(numbered, name, role)
     if not rows:
-        return f'<div class="card">{section_head("📈", throughput_label(role))}{NO_EXTRAS}</div>'
+        return f'<div class="card">{section_head(throughput_icon(role), throughput_label(role))}{NO_EXTRAS}</div>'
     # Best / typical: kill parses whenever there are any - a short wipe's burst isn't a parse that counts
     parses, from_wipes = throughput.counted_parses([(r['parse'], r['kill']) for r in rows])
     kills = [r for r in rows if r['kill']]
@@ -132,7 +132,7 @@ def damage_tab(numbered, player, pull_href, focus_section='', pull_focus=None):
          if any(not r['kill'] and r['parse'] is not None for r in rows) else ''}"""
     return f"""
     <div class="card">
-        {section_head('📈', throughput_label(role),
+        {section_head(throughput_icon(role), throughput_label(role),
                       f'Parses, {metric} and where your damage went, pull by pull.' if role != 'healer' else
                       'Parses, HPS and active time pull by pull - and where your damage went, which still '
                       'matters on adds the raid has to burn.')}

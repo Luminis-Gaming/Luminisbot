@@ -2134,7 +2134,7 @@ def _compare_card(request, code, selected, name, numbered, page_href):
     data = benchmarks.for_player(numbered, name)
     why = _benchmark_status(data)
     if why or not data['rows']:
-        return (f'<div class="card" id="compare">{section_head("⚔️", "Cooldowns vs top players")}'
+        return (f'<div class="card" id="compare">{section_head("⏳", "Cooldowns vs top players")}'
                 f'<p class="muted">{why or "Not enough long pulls to compare yet."}</p></div>')
     eligible, pull = _compare_pull(data, request.query.get('tl') or request.query.get('pull'))
     joiner = '&' if '?' in page_href else '?'
@@ -2143,7 +2143,7 @@ def _compare_card(request, code, selected, name, numbered, page_href):
         back=None if request.get('public') else page_href)
     return f"""
     <div class="card" id="compare">
-        {section_head('⚔️', 'Cooldowns vs top players', data['subtitle'])}
+        {section_head('⏳', 'Cooldowns vs top players', data['subtitle'])}
         {intro}
         <details class="top-players"><summary class="small">The top {len(data['top'])} {esc(data['label'])}</summary>
             {compare.top_players(data)}</details>

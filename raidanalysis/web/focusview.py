@@ -287,7 +287,7 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                       f'<span>{esc(kind["target"])}</span></span><small>×{len(kind["spawns"])}</small>{prio}</div>',
                       'f-spawns', spawn_lane(kind, color, duration, potions, wins), keys[kind['target']]))
     lanes += boss_lanes
-    lanes += [_group('🎯 Who you were hitting', 'a change of color is a target switch'),
+    lanes += [_group('⚔️ Who you were hitting', 'a change of color is a target switch'),
               ('<div class="tl-lab f-ribbon">Your target</div>', 'f-ribbon', _ribbon(data, order, color_of, duration), None)]
     peak = max((sum(b[a:z + 1]) / ((z - a + 1) * step / 1000) for b in mine.values() for a, z in focus.runs(b)),
                default=0)
@@ -329,7 +329,7 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     (cd_lanes, cd_picks), (ext_lanes, ext_picks) = _cooldown_lanes(cooldowns, auras, duration), \
         _external_lanes(auras, duration)
     if cd_lanes:
-        lanes += [_group('⚔️ Your cooldowns', 'a marker per press · bar: its buff on you', 'cds')] + cd_lanes
+        lanes += [_group('⏳ Your cooldowns', 'a marker per press · bar: its buff on you', 'cds')] + cd_lanes
     if ext_lanes:
         lanes += [_group('🤝 Buffs from others', 'externals and lust on you · hover: who', 'ext')] + ext_lanes
     lanes += [_group('🧪 Your potion', 'bracket: potion → priority add appearing'),
@@ -341,11 +341,11 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     target_items = [(key, 't:' + target, _swatch(color_of.get(target, OTHER_COLOR), npc_icons.get(target)),
                      target, len(next(k['spawns'] for k in kinds if k['target'] == target)) if target in add_kinds else None,
                      None, None, key in on) for target, key in keys.items()]
-    groups = [(cat, label, picks) for cat, label, picks in (('cds', '⚔️ Your cooldowns', cd_picks),
+    groups = [(cat, label, picks) for cat, label, picks in (('cds', '⏳ Your cooldowns', cd_picks),
                                                            ('ext', '🤝 Buffs from others', ext_picks)) if picks]
     on |= {key for _, _, picks in groups for key, *_ in picks}
     spells.offer([sid for _, _, picks in groups for *_, sid, _ in picks])  # their tooltips may be looked up
-    chips = _dropdown('targets', '🎯 Targets', target_items) + ''.join(
+    chips = _dropdown('targets', '⚔️ Targets', target_items) + ''.join(
         _dropdown(cat, label, [(key, f'{cat}:{name}', _icon(icon), name, count, sid, tip, True)
                                for key, name, icon, count, sid, tip in picks])
         for cat, label, picks in groups)

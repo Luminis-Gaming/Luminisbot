@@ -86,7 +86,7 @@ def section(ranked, priority=(), scope='', loading='', npc_icons=None, npc_links
             </div>""")
     return f"""
     <div class="card dt-wrap" id="damage-by-target">
-        <div class="sec-head"><div class="sec-title"><span class="sec-icon">🎯</span><div><h2>Damage by target</h2>
+        <div class="sec-head"><div class="sec-title"><span class="sec-icon">⚔️</span><div><h2>Damage by target</h2>
             <p class="sec-sub">Who did the damage to each target{f' - {esc(scope)}' if scope else ''}: priority adds
                first, then the boss and the rest. Ranked by DPS on it while it was up, over the pulls each player was in
                that had it, so missing a few pulls doesn't count against you: the bar is DPS, the number on the right total damage.
