@@ -3178,3 +3178,8 @@ class TestMeleeIsNotASpell(unittest.TestCase):
         self.assertIn('Melee', data)
         self.assertNotIn('Word of Recall', data)
         self.assertEqual(asyncio.run(spells.fetch_ids([1])), 0)
+
+    def test_the_page_never_asks_about_melee(self):
+        from raidanalysis.web import render
+        self.assertIn('const NOT_SPELLS = new Set([1]);', render.PAGE_JS)
+        self.assertIn('!NOT_SPELLS.has(+id)', render.PAGE_JS)

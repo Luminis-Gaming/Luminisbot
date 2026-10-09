@@ -2,6 +2,7 @@
 import html
 import json
 
+from ..spells import NOT_SPELLS
 from .icons import LEGENDARIES
 
 DIFFICULTY_NAMES = {1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic'}
@@ -1756,6 +1757,9 @@ onEach('.tl', tl => {
     tip.style.top = (y + 18 + h > innerHeight ? Math.max(8, y - h - 12) : y + 18) + 'px';
   };
   const fetched = new Map();  // spell id -> data, or a promise while it loads
+  // Ids that aren't Wowhead's spell (spells.NOT_SPELLS - melee): never asked about; the page's own name and icon
+  // stand (and a browser's cached answer from before, "Word of Recall (OLD)", is never used)
+  const NOT_SPELLS = new Set(__NOT_SPELLS__);
   const remote = id => {
     if (!fetched.has(id)) {
       fetched.set(id, fetch('/raids/spell/' + id).then(r => r.ok ? r.json() : null).catch(() => null)
@@ -1768,7 +1772,7 @@ onEach('.tl', tl => {
     current = el;
     const id = el.dataset.spell;
     let spell = id ? spellsFor(el)[id] : null;
-    if (id && (!spell || !spell.desc)) {
+    if (id && !NOT_SPELLS.has(+id) && (!spell || !spell.desc)) {
       const got = remote(id);
       if (got && !(got instanceof Promise)) spell = Object.assign({}, spell || {}, got);
       else if (got) got.then(() => { if (current === el && !tip.hidden) show(el, lastX, lastY); });
@@ -1784,7 +1788,7 @@ onEach('.tl', tl => {
     }
     if (el.dataset.tip) line('sp-ctx', el.dataset.tip);
     if (spell && spell.desc) line('sp-desc', spell.desc);
-    else if (id && fetched.get(id) instanceof Promise) line('sp-meta', 'Loading description…');
+    else if (id && fetched.get(id) instanceof Promise && !NOT_SPELLS.has(+id)) line('sp-meta', 'Loading description…');
     tip.hidden = !tip.childNodes.length;
     place(x, y);
   };
@@ -2198,7 +2202,8 @@ onEach('[data-ch-find]', box => {
 })();
 window.addEventListener('popstate', () => location.reload());
 """
-PAGE_JS = PAGE_JS.replace('__LEGENDARIES__', json.dumps(LEGENDARIES))
+PAGE_JS = PAGE_JS.replace('__LEGENDARIES__', json.dumps(LEGENDARIES)).replace(
+    '__NOT_SPELLS__', json.dumps(sorted(NOT_SPELLS)))
 
 # A film strip: reads as "short clip" (and not as a YouTube logo, which a red ▶ did).
 FILM_ICON = ('<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">'
@@ -2624,7 +2629,7 @@ def spell_data_json(spells, spell_lookup=None):
     log's name and icon otherwise. spells: {id: (name, rpglogs icon file)}; spell_lookup(ids) ->
     {id: {'name', 'icon', 'meta', 'description'}} (spells.lookup).
     """
-    from ..spells import NOT_SPELLS, icon_url, offer
+    from ..spells import icon_url, offer
     known = spell_lookup(list(spells)) if spell_lookup and spells else {}
     offer(spells)
     out = {}
