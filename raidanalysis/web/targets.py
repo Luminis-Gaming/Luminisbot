@@ -17,11 +17,12 @@ def _row(p, rank, top, highlight=None, extra=False, of_pulls=None):
     past the top shown, until the card's button opens it; of_pulls: how many pulls had the target.
     """
     color = CLASS_COLORS.get(p['class'], '#9aa1b9')
-    badge = ('<span class="dt-star" title="Highest DPS on it">★</span>' if rank == 1 else
+    badge = ('<span class="dt-star has-tip" data-tip="Highest DPS on it">★</span>' if rank == 1 else
              f'<span class="dt-num">{rank}</span>')
     classes = 'dt-row' + (' you' if p['name'] == highlight else '') + (' extra' if extra else '')
     pulls = f' in {p["pulls"]} of {of_pulls} pulls' if of_pulls and of_pulls > 1 else ''
-    return (f'<div class="{classes}" title="{esc(p["name"])}: {fmt_amount(p["dps"])} DPS on it{pulls} · '
+    # The page's own tooltip (PAGE_JS: .has-tip), like the rest of the page's hovers - not the browser's
+    return (f'<div class="{classes} has-tip" data-tip="{esc(p["name"])}: {fmt_amount(p["dps"])} DPS on it{pulls} · '
             f'{fmt_amount(p["damage"])} damage ({100 * p["share"]:.1f}% of all damage to it)">'
             f'<span class="dt-rank">{badge}</span>'
             f'<span class="dt-name" style="color:{color}">{ROLE_ICONS.get(p["role"], "")} {esc(p["name"])}</span>'

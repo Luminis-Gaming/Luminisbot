@@ -1043,7 +1043,8 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .sp-head img { width: 22px; height: 22px; border-radius: 4px; }
 .sp-name { font-weight: 600; font-size: 13px; }
 .sp-meta { color: var(--muted); font-size: 11px; }
-.sp-ctx { margin-top: 4px; color: #ffd43b; }
+.sp-ctx { margin-top: 4px; color: #ffd43b; white-space: pre-line; }
+.sp-tip.plain .sp-ctx { margin-top: 0; color: var(--text); }
 .sp-desc { margin-top: 6px; color: #c9cfe6; white-space: pre-line; }
 .legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
 .legend span::before { content: ''; display: inline-block; width: 14px; height: 3px; border-radius: 2px;
@@ -1716,6 +1717,7 @@ onEach('.tl', tl => {
       else if (got) got.then(() => { if (current === el && !tip.hidden) show(el, lastX, lastY); });
     }
     tip.replaceChildren();
+    tip.classList.toggle('plain', !spell);  // just text (a plain hover): not the timeline's yellow context line
     if (spell) {
       const headRow = document.createElement('div'); headRow.className = 'sp-head';
       if (spell.icon) { const img = document.createElement('img'); img.src = spell.icon; img.alt = ''; headRow.appendChild(img); }
@@ -1730,7 +1732,29 @@ onEach('.tl', tl => {
     place(x, y);
   };
   let lastX = 0, lastY = 0;
-  const target = e => e.target.closest && e.target.closest('.tl [data-tip], [data-spell], .has-tip[data-tip]');
+  // Every other hover text on the page (a title="..." attribute, or an SVG chart's <title>) becomes this tooltip
+  // too - moved over the moment the pointer reaches it, before the browser shows its own box. Not an iframe's
+  // (its accessible name), nor one on something already carrying a data-tip of its own (a clip's pop-up text).
+  const SVG = 'http://www.w3.org/2000/svg';
+  const adopt = node => {
+    for (let el = node; el && el.nodeType === 1 && el !== document.body; el = el.parentNode) {
+      if (el.tagName === 'IFRAME' || el.matches('.tl [data-tip], [data-spell], .has-tip[data-tip]')) return;
+      const own = el.namespaceURI === SVG ? [...el.children].find(c => c.tagName.toLowerCase() === 'title') : null;
+      const text = el.getAttribute('title') || (own && own.textContent);
+      if (!text) continue;
+      if (el.hasAttribute('data-tip')) return;
+      el.setAttribute('data-tip', text.trim());
+      el.removeAttribute('title');
+      if (own) own.remove();
+      el.classList.add('has-tip');
+      return;
+    }
+  };
+  const target = e => {
+    if (!e.target.closest) return null;
+    adopt(e.target);
+    return e.target.closest('.tl [data-tip], [data-spell], .has-tip[data-tip]');
+  };
   document.addEventListener('pointerover', e => {
     const el = target(e);
     lastX = e.clientX; lastY = e.clientY;
