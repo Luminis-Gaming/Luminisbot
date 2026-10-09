@@ -121,6 +121,7 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
     # Everyone's talents this pull: an ability you never pressed is only "not talented" when it really wasn't
     analysis['talents'] = analyzer.talent_entries({a['id']: a['name'] for a in actors},
                                                   {p['name'] for p in analysis.get('players') or []}, combatant_events)
+    analysis['buffs_given'] = await _buffs_given(session, code, fight, actors, analysis)
     analysis['cast_ids'] = cast_ids  # which spells 'casts' is complete for (benchmarks.compare)
     # Every spell anyone in the raid cast this pull: one that isn't here was really never pressed
     # (a talent you don't take), as opposed to one we didn't fetch.
@@ -130,6 +131,43 @@ async def _analyze_pull(session, code, fight, actors, detail=True):
     if extras:
         analysis['extras'] = extras
     return analysis
+
+
+async def _buffs_given(session, code, fight, actors, analysis):
+    """
+    Who got the externals and one-player utility the raid cast this pull (Power Infusion, Blessing of Freedom...):
+    [[ms, caster, receiver, ability]] for the ones that landed on someone other than the caster. The cast alone
+    can't say: a self-cast Power Infusion still goes to a random ally (a talent), and Freedom is logged as cast on
+    yourself while it also lands on whoever you targeted. One small request - none when nobody cast one.
+    """
+    from . import cooldowns
+    wanted = sorted({u['ability'] for u in analysis.get('cooldowns') or []
+                     if cooldowns.COOLDOWNS.get(u.get('ability')) == 'external' or u.get('ability') in cooldowns.ON_SOMEONE})
+    if not wanted:
+        return []
+    names = ', '.join('"' + n.replace('"', '') + '"' for n in wanted)
+    try:
+        events = await wcl.get_events(session, code, fight['id'], 'Buffs',
+                                      f'type = "applybuff" and ability.name in ({names})')
+    except wcl.WCLRateLimited:
+        raise
+    except wcl.WCLError as e:
+        logger.info(f"[RAIDS] Buffs given for {code}#{fight['id']} not fetched: {e}")
+        return None
+    names_by_id = {a['id']: a['name'] for a in actors}
+    abilities = {}
+    out = []
+    for e in events:
+        src, tgt = names_by_id.get(e.get('sourceID')), names_by_id.get(e.get('targetID'))
+        if not src or not tgt or src == tgt:
+            continue
+        ability = (e.get('ability') or {}).get('name')
+        if not ability:  # v2 events carry only the id
+            if not abilities:
+                abilities = await wcl.get_report_abilities(session, code)
+            ability = (abilities.get(e.get('abilityGameID')) or ('',))[0]
+        out.append([e['timestamp'] - fight['startTime'], src, tgt, ability])
+    return out
 
 
 async def _incoming(session, code, fight, actors, analysis):

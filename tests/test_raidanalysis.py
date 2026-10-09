@@ -1290,6 +1290,49 @@ class TestTalents(unittest.TestCase):
         self.assertTrue(all(r['not_taken'] for r in throughput.uptime(night, 'Mangor', top, frozenset({1}))))
 
 
+class TestForTheRaid(unittest.TestCase):
+    """The player page's "For the raid" strip only counts what helped someone else."""
+
+    def test_self_only_spells_dont_count(self):
+        from raidanalysis import benchmarks, cooldowns
+        from raidanalysis.web import players
+        use = lambda ab, tgt=None: {'t': 1, 'name': 'Azzazel', 'ability': ab, 'ability_id': 1, 'icon': '', 'target': tgt}
+        numbered = [(1, {'analysis': {'cooldowns': [
+            use("Spiritwalker's Grace"), use("Spiritwalker's Grace"),        # only lets them cast while moving
+            use('Power Infusion'),                                            # on themselves
+            use('Power Infusion', 'Futhark'),                                 # on someone else: counts
+            use('Blessing of Freedom'),                                       # on themselves
+            use('Blessing of Freedom', 'Mangor'),                             # on the tank: counts
+            use('Bloodlust')]}})]                                             # raid-wide: counts
+        tiles = {t['label']: t for t in players.raid_tiles(numbered, 'Azzazel')}
+        self.assertEqual(set(tiles), {'Power Infusion', 'Blessing of Freedom', 'Bloodlust'})
+        self.assertEqual((tiles['Power Infusion']['value'], tiles['Power Infusion']['sub']), ('1×', '→ Futhark'))
+        self.assertEqual(tiles['Blessing of Freedom']['value'], '1×')
+        self.assertNotIn("Spiritwalker's Grace", cooldowns.COOLDOWNS)
+        self.assertIsNone(benchmarks.category(1, {'name': "Spiritwalker's Grace", 'meta': '2 min cooldown'}))
+
+    def test_landings_decide_for_self_casts(self):
+        """
+        From a real log: Alliuda's Power Infusion on Futhark (the talent echoes a cast on herself 12 ms later) - one;
+        a self-cast PI the talent sent to Arvidkk - counts; Stonasloth's Freedom, logged on himself, landing on
+        Futhark - counts; a self-cast that landed on nobody else - doesn't.
+        """
+        from raidanalysis.web import players
+        pi = lambda t, tgt=None: {'t': t, 'name': 'Alliuda', 'ability': 'Power Infusion', 'ability_id': 10060,
+                                  'icon': '', 'target': tgt}
+        numbered = [(1, {'analysis': {
+            'cooldowns': [pi(1000, 'Futhark'), pi(1012), pi(60000), pi(120000)],
+            'buffs_given': [[1001, 'Alliuda', 'Futhark', 'Power Infusion'], [60000, 'Alliuda', 'Arvidkk', 'Power Infusion']]}})]
+        tile = next(t for t in players.raid_tiles(numbered, 'Alliuda') if t['label'] == 'Power Infusion')
+        self.assertEqual((tile['value'], tile['sub']), ('2×', '→ Futhark, Arvidkk'))
+        freedom = [(1, {'analysis': {
+            'cooldowns': [{'t': 5000, 'name': 'Stonasloth', 'ability': 'Blessing of Freedom', 'ability_id': 1044,
+                           'icon': '', 'target': None}],
+            'buffs_given': [[5001, 'Stonasloth', 'Futhark', 'Blessing of Freedom']]}})]
+        tile = next(t for t in players.raid_tiles(freedom, 'Stonasloth'))
+        self.assertEqual((tile['label'], tile['sub']), ('Blessing of Freedom', '→ Futhark'))
+
+
 class TestDisciplineRamp(unittest.TestCase):
     """Evangelism / Ultimate Penitence are a Disc Priest's own cooldowns, not raid assignments."""
 
@@ -3061,3 +3104,58 @@ class TestUpgradedHots(unittest.TestCase):
         names = {a['name'] for a in saved[0]['players']['Boopsproops']['on_others']}
         self.assertEqual(names, {'Reversion', "Merithra's Blessing"})
         self.assertTrue(saved[0]['applied_hots'])
+
+
+class TestIcons(unittest.TestCase):
+    def test_every_mapped_icon_has_its_drawing_and_every_drawing_is_used(self):
+        from raidanalysis.web import icons
+        used = {name for name, _ in icons.EMOJI.values()} | {name for name, _ in icons.LEGENDARIES} | {'luminis'}
+        self.assertEqual(used - set(icons._SVGS), set())  # a renamed file breaks its emoji
+        self.assertEqual(set(icons._SVGS) - used, set())  # a drawing nothing shows
+
+    def test_every_drawing_has_a_body_to_glow_from(self):
+        from raidanalysis.web import icons
+        for name, text in icons._SVGS.items():
+            self.assertEqual(text.count('<g id="body">'), 1, name)
+
+    def test_iconize_swaps_text_only(self):
+        from raidanalysis.web import icons
+        html = icons.iconize('<span title="⚔ DPS">⚔ Damage</span><script>"⚔"</script>')
+        self.assertIn('class="ic ic-blade ic-dps"', html)
+        self.assertIn(f'src="{icons.URL_BASE}dps/blade.svg"', html)
+        self.assertIn('title="⚔ DPS"', html)
+        self.assertIn('<script>"⚔"</script>', html)
+        self.assertEqual(icons.iconize(html), html)
+
+    def test_a_tone_glows_from_the_body_in_place_of_the_aura(self):
+        from raidanalysis.web import icons
+        plain, toned = icons.svg('healthstone'), icons.svg('healthstone', 'good')
+        self.assertIn('<g class="aura">', plain)
+        self.assertNotIn('<g class="aura">', toned)
+        self.assertIn('<use href="#body" filter="url(#tone)"/><g id="body">', toned)
+        self.assertIn(icons.TONES['good'], toned)
+        self.assertIn('<g class="fx">', toned)  # the glimmer stays, unglowed
+        self.assertIsNone(icons.svg('healthstone', 'nope'))
+        self.assertIsNone(icons.svg('nope'))
+
+    def test_icon_route_serves_them(self):
+        import asyncio
+        from aiohttp import web
+        from aiohttp.test_utils import make_mocked_request
+        from raidanalysis.web import icons, routes
+
+        def get(version, tone, file):
+            request = make_mocked_request('GET', f'/raids/static/icons/{version}/{tone}/{file}',
+                                          match_info={'version': version, 'tone': tone, 'file': file})
+            return asyncio.run(routes.handle_icon(request))
+        response = get(icons.VERSION, 'bad', 'skull.svg')
+        self.assertEqual(response.content_type, 'image/svg+xml')
+        self.assertIn('immutable', response.headers['Cache-Control'])
+        self.assertIn('max-age=300', get('0ld', 'bad', 'skull.svg').headers['Cache-Control'])
+        with self.assertRaises(web.HTTPNotFound):
+            get(icons.VERSION, 'plain', '..%2Fsecret.svg')
+
+    def test_page_script_knows_the_legendaries(self):
+        from raidanalysis.web import render
+        self.assertNotIn('__LEGENDARIES__', render.PAGE_JS)
+        self.assertIn('Thunderfury, Blessed Blade of the Windseeker', render.PAGE_JS)

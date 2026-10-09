@@ -1,5 +1,8 @@
 """HTML building blocks for the raid analysis pages (charts, tables, formatting)."""
 import html
+import json
+
+from .icons import LEGENDARIES
 
 DIFFICULTY_NAMES = {1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic'}
 
@@ -1161,6 +1164,29 @@ table.bars td.bar-cell { width: 55%; }
 .note.bad { background: var(--bad-soft); }
 .note.good { background: var(--good-soft); }
 
+/* Our icons (icons.py): little illustrations, each drawn with room round it for its glow - so a bit bigger than
+   the text, pulled in by negative margins to keep the line's height. Section-head and "for the raid" tiles take on
+   their icon's tone. */
+.ic { display: inline-block; width: 1.5em; height: 1.5em; vertical-align: -0.4em; margin: -0.16em -0.08em; flex: none; }
+.sec-icon .ic { width: 34px; height: 34px; margin: -4px; vertical-align: middle; }
+.sec-icon:has(.ic) { background: color-mix(in srgb, var(--tile, var(--accent)) 16%, var(--surface-2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tile, var(--accent)) 34%, transparent); }
+.sec-icon:has(.ic-good), .ph-tile-icon:has(.ic-good) { --tile: #4ade80; }
+.sec-icon:has(.ic-bad), .ph-tile-icon:has(.ic-bad) { --tile: #ff6b6b; }
+.sec-icon:has(.ic-warn), .ph-tile-icon:has(.ic-warn) { --tile: #f6c453; }
+.sec-icon:has(.ic-tank), .ph-tile-icon:has(.ic-tank) { --tile: #6ea8ff; }
+.sec-icon:has(.ic-dps), .ph-tile-icon:has(.ic-dps) { --tile: #ff8a6b; }
+.sec-icon:has(.ic-teal), .ph-tile-icon:has(.ic-teal) { --tile: #34d4c3; }
+.sec-icon:has(.ic-magic), .ph-tile-icon:has(.ic-magic) { --tile: #c084fc; }
+.sec-icon:has(.ic-gold), .ph-tile-icon:has(.ic-gold) { --tile: #f5b942; }
+.ph-tile-icon:has(.ic) { background: color-mix(in srgb, var(--tile, var(--accent)) 16%, var(--surface-3));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tile, var(--accent)) 30%, transparent); }
+.ph-tile-icon .ic { width: 30px; height: 30px; margin: -4px; }
+.insight summary > span:first-child .ic { width: 24px; height: 24px; margin: -3px; }
+.note > span:first-child .ic { width: 22px; height: 22px; margin: -3px; vertical-align: -0.35em; }
+.nav .ic-luminis { width: 1.7em; height: 1.7em; margin: -0.35em -0.1em; }
+@media (max-width: 600px) { .sec-icon .ic { width: 30px; height: 30px; margin: -3px; } }
+
 /* Player cards (players_view): a banner in the class colour - their character on the right, the score, the name -
    that is one link to the full analysis; the details below. */
 .player-card.pc { padding: 0; gap: 0; overflow: hidden; }
@@ -1327,6 +1353,13 @@ const onEach = (selector, setup) => { INITS.push([selector, setup]); document.qu
 window.raidInit = root => INITS.forEach(([selector, setup]) => {
   if (root.matches(selector)) setup(root);
   root.querySelectorAll(selector).forEach(setup);
+});
+// The DPS icon's easter egg (icons.LEGENDARIES): every blade on the page becomes the same legendary weapon, picked
+// anew on each page load - its name on hover.
+const LEGENDARY = (all => all[Math.floor(Math.random() * all.length)])(__LEGENDARIES__);
+onEach('img.ic-blade', img => {
+  img.src = img.src.replace(/[^/]+\/blade\.svg$/, 'plain/' + LEGENDARY[0] + '.svg');
+  img.title = LEGENDARY[1];
 });
 onEach('[data-ts]', el => {
   const d = new Date(+el.dataset.ts);
@@ -2150,6 +2183,7 @@ onEach('[data-ch-find]', box => {
 })();
 window.addEventListener('popstate', () => location.reload());
 """
+PAGE_JS = PAGE_JS.replace('__LEGENDARIES__', json.dumps(LEGENDARIES))
 
 # A film strip: reads as "short clip" (and not as a YouTube logo, which a red ▶ did).
 FILM_ICON = ('<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">'

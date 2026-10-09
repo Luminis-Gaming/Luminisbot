@@ -60,6 +60,7 @@ def register_routes(app):
     get(STATIC_CSS_URL, handle_static_css)
     get('/raids/portrait/{realm}/{name}', handle_portrait)
     get(STATIC_JS_URL, handle_static_js)
+    get('/raids/static/icons/{version}/{tone}/{file}', handle_icon)
     get('/raids/report/{code}', _public(handle_night))
     get('/raids/report/{code}/{fight_id}', _public(handle_pull))
     get('/raids/report/{code}/player/{name}', _public(handle_player))
@@ -221,6 +222,21 @@ async def handle_static_css(request):
 
 async def handle_static_js(request):
     response = web.Response(text=PAGE_JS, content_type='application/javascript', headers=STATIC_HEADERS)
+    response.enable_compression()
+    return response
+
+
+async def handle_icon(request):
+    """GET /raids/static/icons/{version}/{tone}/{name}.svg - one of our icons (icons.py), with its tone's glow."""
+    from . import icons
+    file = request.match_info['file']
+    text = icons.svg(file[:-4], request.match_info['tone']) if file.endswith('.svg') else None
+    if text is None:
+        raise web.HTTPNotFound()
+    # An old version's address (a page from before a deploy) gets today's drawing - not to be kept for good
+    headers = STATIC_HEADERS if request.match_info['version'] == icons.VERSION else \
+        {'Cache-Control': 'public, max-age=300', 'X-Content-Type-Options': 'nosniff'}
+    response = web.Response(text=text, content_type='image/svg+xml', headers=headers)
     response.enable_compression()
     return response
 
@@ -442,14 +458,17 @@ def public_base_url():
 
 def _page(title, session, body, waiting=False):
     from oauth_server import ADMIN_CSS, render_nav
+    from .icons import iconize
+    body = iconize(body)  # the page's emojis -> our own icons (icons.py), before it's cached or sent
     holder = _RENDERED.get()
     if holder is not None:  # being built for the page cache (_serve_cached): the body, as the admin page has it
         holder.update(title=title, body=body, waiting=waiting)
     banner = ''
     if session is PUBLIC_SESSION:
         body = _publicize(body)
-        nav = ('<nav class="nav"><a href="/raids" class="active">⚔️ Raid Analysis</a><div class="spacer"></div>'
-               '<span class="user-info">Read-only view</span></nav>')
+        from .icons import icon
+        nav = (f'<nav class="nav"><a href="/raids" class="active">{icon("luminis", "gold")} Raid Analysis</a>'
+               '<div class="spacer"></div><span class="user-info">Read-only view</span></nav>')
         render_nav = lambda _session, active=None: nav  # noqa: E731 - public pages get their own nav
     else:
         banner = sync_banner(sync.status, waiting)

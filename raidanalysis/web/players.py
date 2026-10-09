@@ -99,17 +99,42 @@ def raid_tiles(numbered, name, rank=None, soaks=None):
     from .. import cooldowns
     groups = {}  # (category, ability) -> {'count', 'targets': {name: n}, 'sid', 'icon'}
     for _, pull in numbered:
-        for use in (pull.get('analysis') or {}).get('cooldowns') or []:
-            if use.get('name') != name:
-                continue
+        analysis = pull.get('analysis') or {}
+        # Who actually got their externals / one-player utility (sync._buffs_given): each landing counts once
+        given = [g for g in analysis.get('buffs_given') or [] if g[1] == name]
+        used = set()
+
+        def landed(use, target=None):
+            """The landing on someone else that goes with this cast (within a second), or None."""
+            for i, (t, _, tgt, ability) in enumerate(given):
+                if i not in used and ability == use['ability'] and abs(t - use['t']) <= 1000 \
+                        and (target is None or tgt == target):
+                    used.add(i)
+                    return tgt
+            return None
+        mine = sorted((u for u in analysis.get('cooldowns') or [] if u.get('name') == name),
+                      key=lambda u: (not u.get('target'), u['t']))  # targeted casts take their landing first
+        for use in mine:
             cat = cooldowns.COOLDOWNS.get(use.get('ability'))
             if cat not in ('raid', 'external', 'utility'):
                 continue
+            target = use.get('target')
+            if cat == 'external' or use['ability'] in cooldowns.ON_SOMEONE:
+                if target:
+                    landed(use, target)
+                elif 'buffs_given' in analysis:
+                    # Cast on themselves - but a self Power Infusion goes to a random ally too (a talent), and
+                    # Freedom is logged on yourself while it also lands on whoever you targeted: count it if it did
+                    target = landed(use)
+                    if not target:
+                        continue
+                else:
+                    continue  # older pulls without the landings: on themselves, not something for others
             g = groups.setdefault((cat, use['ability']), {'count': 0, 'targets': {}, 'sid': use.get('ability_id'),
                                                           'icon': use.get('icon')})
             g['count'] += 1
-            if use.get('target'):
-                g['targets'][use['target']] = g['targets'].get(use['target'], 0) + 1
+            if target:
+                g['targets'][target] = g['targets'].get(target, 0) + 1
     tiles = []
     labels = {'raid': ('🛡️', 'raid cooldown'), 'external': ('🤝', 'on someone else'), 'utility': ('⚡', 'for the raid')}
     for (cat, ability), g in sorted(groups.items(), key=lambda kv: (['raid', 'external', 'utility'].index(kv[0][0]),

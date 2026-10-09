@@ -80,6 +80,7 @@ NOT_MAJOR = {
     'Roll', 'Chi Torpedo', 'Transcendence', 'Transcendence: Transfer', 'Fel Rush', 'Vengeful Retreat',
     'Infernal Strike', "Death's Advance", 'Wraith Walk', 'Death Grip', 'Sprint', 'Dash', 'Tiger Dash', 'Wild Charge',
     'Divine Steed', 'Spirit Walk', 'Ghost Wolf', 'Hover', 'Glide', 'Aspect of the Cheetah', 'Angelic Feather',
+    "Spiritwalker's Grace",
     'Shadowstep', 'Grappling Hook', 'Burning Rush', 'Feral Lunge', 'Flying Serpent Kick', 'Rescue', 'Leap of Faith',
     'Kick', 'Pummel', 'Mind Freeze', 'Counterspell', 'Wind Shear', 'Rebuke', 'Skull Bash', 'Solar Beam', 'Disrupt',
     'Spear Hand Strike', 'Quell', 'Counter Shot', 'Muzzle', 'Silence', 'Spell Lock', 'Axe Toss', 'Optical Blast',

@@ -45,11 +45,16 @@ _BY_CATEGORY = {
     ),
     'utility': (
         'Bloodlust', 'Heroism', 'Time Warp', 'Fury of the Aspects', 'Primal Rage', 'Ancient Hysteria',
-        'Stampeding Roar', 'Wind Rush Totem', "Spiritwalker's Grace", 'Time Spiral', 'Blessing of Freedom',
+        'Stampeding Roar', 'Wind Rush Totem', 'Time Spiral', 'Blessing of Freedom',
         'Leap of Faith', "Tiger's Lust", 'Rescue', 'Demonic Gateway', "Gorefiend's Grasp", "Ursol's Vortex", 'Ring of Peace',
         'Rebirth', 'Raise Ally', 'Soulstone', 'Intercession', 'Symbol of Hope',
+        # Not Spiritwalker's Grace: it only lets the shaman cast while moving - movement (benchmarks.NOT_MAJOR)
     ),
 }
+# Utility cast on one player - often yourself (Freedom, Tiger's Lust): only something for the raid when it went on
+# someone else. (Externals the same: plenty of priests Power Infusion themselves.)
+ON_SOMEONE = {'Blessing of Freedom', "Tiger's Lust", 'Leap of Faith', 'Rescue', 'Rebirth', 'Raise Ally', 'Soulstone',
+              'Intercession'}
 COOLDOWNS = {name: category for category, names in _BY_CATEGORY.items() for name in names}
 
 
