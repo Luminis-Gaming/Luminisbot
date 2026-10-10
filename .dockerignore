@@ -1,0 +1,3 @@
+# Keep source renders, PNG originals and browser previews out of the application image.
+# Website-ready artwork remains included under raidanalysis/web/static/cartoons/.
+output/character-cartoons/

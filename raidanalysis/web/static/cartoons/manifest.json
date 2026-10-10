@@ -1,0 +1,1644 @@
+{
+  "characters": [
+    {
+      "id": "frostwhisper-tallgrogu",
+      "name": "Tallgrogu",
+      "poses": [
+        {
+          "file": "frostwhisper-tallgrogu-01-idle-62c1aead95b4.webp",
+          "width": 624,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "frostwhisper-tallgrogu-02-anime-hero-11e77fe53974.webp",
+          "width": 626,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "frostwhisper-tallgrogu-03-victory-78742c68e95c.webp",
+          "width": 624,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "frostwhisper-tallgrogu-04-panic-35c8b83b6c4b.webp",
+          "width": 624,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "frostwhisper-tallgrogu-05-dazed-648eedc9905b.webp",
+          "width": 624,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "frostwhisper-tallgrogu-06-faceplant-ef91f94ea40c.webp",
+          "width": 624,
+          "height": 720,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "tarren-mill-barathrum",
+      "name": "Barathrûm",
+      "poses": [
+        {
+          "file": "tarren-mill-barathrum-01-idle-e495fb32ea79.webp",
+          "width": 640,
+          "height": 700,
+          "id": "01-idle"
+        },
+        {
+          "file": "tarren-mill-barathrum-02-anime-hero-505540fda6dd.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "tarren-mill-barathrum-03-victory-029a6a782082.webp",
+          "width": 640,
+          "height": 700,
+          "id": "03-victory"
+        },
+        {
+          "file": "tarren-mill-barathrum-04-panic-5077bb8593f9.webp",
+          "width": 640,
+          "height": 700,
+          "id": "04-panic"
+        },
+        {
+          "file": "tarren-mill-barathrum-05-dazed-54439cd446f7.webp",
+          "width": 640,
+          "height": 700,
+          "id": "05-dazed"
+        },
+        {
+          "file": "tarren-mill-barathrum-06-faceplant-ba4f2936df70.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "outland-krabamimi",
+      "name": "Krabamimi",
+      "poses": [
+        {
+          "file": "outland-krabamimi-01-idle-0f8a1d4b6a77.webp",
+          "width": 590,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "outland-krabamimi-02-anime-hero-4926815d0325.webp",
+          "width": 640,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "outland-krabamimi-03-victory-3d93b8c61246.webp",
+          "width": 597,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "outland-krabamimi-04-panic-6dfeb7ca8979.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "outland-krabamimi-05-dazed-6a3e33c4ca36.webp",
+          "width": 590,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "outland-krabamimi-06-faceplant-a095f408bfc8.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "frostwhisper-boopsboops",
+      "name": "Boopsboops",
+      "poses": [
+        {
+          "file": "frostwhisper-boopsboops-01-idle-4255a2a2e13e.webp",
+          "width": 600,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "frostwhisper-boopsboops-02-anime-hero-90d7c777bb0b.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "frostwhisper-boopsboops-03-victory-57bec0770651.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "frostwhisper-boopsboops-04-panic-a034c1482ded.webp",
+          "width": 611,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "frostwhisper-boopsboops-05-dazed-b1289a7c91c0.webp",
+          "width": 640,
+          "height": 700,
+          "id": "05-dazed"
+        },
+        {
+          "file": "frostwhisper-boopsboops-06-faceplant-3453d280361e.webp",
+          "width": 640,
+          "height": 533,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "ravencrest-gastronomic",
+      "name": "Gastronomic",
+      "poses": [
+        {
+          "file": "ravencrest-gastronomic-01-idle-00452c00f113.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "ravencrest-gastronomic-02-anime-hero-4a38fd1ccf8c.webp",
+          "width": 640,
+          "height": 700,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "ravencrest-gastronomic-03-victory-d066fbfec043.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "ravencrest-gastronomic-04-panic-96e655caedea.webp",
+          "width": 640,
+          "height": 672,
+          "id": "04-panic"
+        },
+        {
+          "file": "ravencrest-gastronomic-05-dazed-6109bc0b7e74.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "ravencrest-gastronomic-06-faceplant-c29264764254.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "kazzak-kohnah",
+      "name": "Kohnah",
+      "poses": [
+        {
+          "file": "kazzak-kohnah-01-idle-fc2b13ca9546.webp",
+          "width": 640,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "kazzak-kohnah-02-anime-hero-475cdb4e7d93.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "kazzak-kohnah-03-victory-00018afb2467.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "kazzak-kohnah-04-panic-00e35e0a388b.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "kazzak-kohnah-05-dazed-485552aa384e.webp",
+          "width": 640,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "kazzak-kohnah-06-faceplant-b7cd91d26dbd.webp",
+          "width": 640,
+          "height": 488,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "tarren-mill-alliuda",
+      "name": "Alliuda",
+      "poses": [
+        {
+          "file": "tarren-mill-alliuda-01-idle-ce1d4f66fb2e.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "tarren-mill-alliuda-02-anime-hero-e5fd9516568b.webp",
+          "width": 576,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "tarren-mill-alliuda-03-victory-b62998bf44e0.webp",
+          "width": 480,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "tarren-mill-alliuda-04-panic-6f0aeb8beb35.webp",
+          "width": 480,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "tarren-mill-alliuda-05-dazed-b18f669cf047.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "tarren-mill-alliuda-06-faceplant-b10cb29702a7.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "tarren-mill-azzazel",
+      "name": "Azzazel",
+      "poses": [
+        {
+          "file": "tarren-mill-azzazel-01-idle-4fb5526daa60.webp",
+          "width": 640,
+          "height": 700,
+          "id": "01-idle"
+        },
+        {
+          "file": "tarren-mill-azzazel-02-anime-hero-8a6cdc1844ed.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "tarren-mill-azzazel-03-victory-1f4091140de0.webp",
+          "width": 640,
+          "height": 700,
+          "id": "03-victory"
+        },
+        {
+          "file": "tarren-mill-azzazel-04-panic-e11b9a0d0507.webp",
+          "width": 640,
+          "height": 700,
+          "id": "04-panic"
+        },
+        {
+          "file": "tarren-mill-azzazel-05-dazed-0b8fb1021800.webp",
+          "width": 640,
+          "height": 704,
+          "id": "05-dazed"
+        },
+        {
+          "file": "tarren-mill-azzazel-06-faceplant-fac26510ff11.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "karazhan-vebj-rnius",
+      "name": "Vebjørnius",
+      "poses": [
+        {
+          "file": "karazhan-vebj-rnius-01-idle-5c87e74663c3.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "karazhan-vebj-rnius-02-anime-hero-1a0f37947b6c.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "karazhan-vebj-rnius-03-victory-414d29f486d0.webp",
+          "width": 536,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "karazhan-vebj-rnius-04-panic-bb8f1327acc6.webp",
+          "width": 480,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "karazhan-vebj-rnius-05-dazed-5ecdaf775228.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "karazhan-vebj-rnius-06-faceplant-64c54888382a.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "uldum-fujurmix",
+      "name": "Fujurmix",
+      "poses": [
+        {
+          "file": "uldum-fujurmix-01-idle-f002e19fdbed.webp",
+          "width": 640,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "uldum-fujurmix-02-anime-hero-bf44f549a625.webp",
+          "width": 640,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "uldum-fujurmix-03-victory-0f13da9658eb.webp",
+          "width": 640,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "uldum-fujurmix-04-panic-e56c0ba36b3e.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "uldum-fujurmix-05-dazed-0dab116faf8b.webp",
+          "width": 640,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "uldum-fujurmix-06-faceplant-b3a1fe450a38.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "tarren-mill-mageblazee",
+      "name": "Mageblazee",
+      "poses": [
+        {
+          "file": "tarren-mill-mageblazee-01-idle-597df85868e3.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "tarren-mill-mageblazee-02-anime-hero-33c4d18f3102.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "tarren-mill-mageblazee-03-victory-993aa1390617.webp",
+          "width": 525,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "tarren-mill-mageblazee-04-panic-f88c1f64a8f8.webp",
+          "width": 480,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "tarren-mill-mageblazee-05-dazed-f446d36f5ce6.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "tarren-mill-mageblazee-06-faceplant-70edb1966fd8.webp",
+          "width": 612,
+          "height": 720,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "tarren-mill-scrumsh",
+      "name": "Scrumsh",
+      "poses": [
+        {
+          "file": "tarren-mill-scrumsh-01-idle-07e498458acb.webp",
+          "width": 600,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "tarren-mill-scrumsh-02-anime-hero-138211eebe4b.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "tarren-mill-scrumsh-03-victory-bd2439473992.webp",
+          "width": 640,
+          "height": 700,
+          "id": "03-victory"
+        },
+        {
+          "file": "tarren-mill-scrumsh-04-panic-30fd16ead749.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "tarren-mill-scrumsh-05-dazed-c7e177faa77a.webp",
+          "width": 600,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "tarren-mill-scrumsh-06-faceplant-27ba909c4f86.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "draenor-arvidkk",
+      "name": "Arvidkk",
+      "poses": [
+        {
+          "file": "draenor-arvidkk-01-idle-945390287b79.webp",
+          "width": 477,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "draenor-arvidkk-02-anime-hero-7c1de7111066.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "draenor-arvidkk-03-victory-dbda0452f0ee.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "draenor-arvidkk-04-panic-338d7a12ba34.webp",
+          "width": 480,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "draenor-arvidkk-05-dazed-d85e438adc99.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "draenor-arvidkk-06-faceplant-85235cce91ee.webp",
+          "width": 611,
+          "height": 720,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "ragnaros-clloud",
+      "name": "Clloud",
+      "poses": [
+        {
+          "file": "ragnaros-clloud-01-idle-0875cd3b1da2.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "ragnaros-clloud-02-anime-hero-640fea6317eb.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "ragnaros-clloud-03-victory-3eb119d3579a.webp",
+          "width": 604,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "ragnaros-clloud-04-panic-75498c0a5061.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "ragnaros-clloud-05-dazed-afc4b7e89178.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "ragnaros-clloud-06-faceplant-b432d50c694d.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "dethecus-qeek",
+      "name": "Qeek",
+      "poses": [
+        {
+          "file": "dethecus-qeek-01-idle-332af36f2645.webp",
+          "width": 640,
+          "height": 712,
+          "id": "01-idle"
+        },
+        {
+          "file": "dethecus-qeek-02-anime-hero-a02b152fd0e1.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "dethecus-qeek-03-victory-854f81e1888d.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "dethecus-qeek-04-panic-2ac5453828bb.webp",
+          "width": 640,
+          "height": 701,
+          "id": "04-panic"
+        },
+        {
+          "file": "dethecus-qeek-05-dazed-579bb7ffa17a.webp",
+          "width": 640,
+          "height": 712,
+          "id": "05-dazed"
+        },
+        {
+          "file": "dethecus-qeek-06-faceplant-4c88b4064381.webp",
+          "width": 640,
+          "height": 674,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "earthen-ring-raema",
+      "name": "Raema",
+      "poses": [
+        {
+          "file": "earthen-ring-raema-01-idle-e775c2f9a79b.webp",
+          "width": 576,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "earthen-ring-raema-02-anime-hero-7f628724ce17.webp",
+          "width": 640,
+          "height": 709,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "earthen-ring-raema-03-victory-5893ab2aa184.webp",
+          "width": 586,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "earthen-ring-raema-04-panic-de800d355a2a.webp",
+          "width": 576,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "earthen-ring-raema-05-dazed-2670fbe3ab40.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "earthen-ring-raema-06-faceplant-c2102905dd1f.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "draenor-malystryx",
+      "name": "Mâlystryx",
+      "poses": [
+        {
+          "file": "draenor-malystryx-01-idle-cb0b5d78dcfb.webp",
+          "width": 525,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "draenor-malystryx-02-anime-hero-72ab4cf99e29.webp",
+          "width": 640,
+          "height": 700,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "draenor-malystryx-03-victory-7a36bd9bd3c9.webp",
+          "width": 640,
+          "height": 693,
+          "id": "03-victory"
+        },
+        {
+          "file": "draenor-malystryx-04-panic-fe09f5dbf918.webp",
+          "width": 640,
+          "height": 700,
+          "id": "04-panic"
+        },
+        {
+          "file": "draenor-malystryx-05-dazed-d7cf785fb493.webp",
+          "width": 525,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "draenor-malystryx-06-faceplant-944c7c324df0.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "silvermoon-aedrios",
+      "name": "Aedrios",
+      "poses": [
+        {
+          "file": "silvermoon-aedrios-01-idle-72efaab68e89.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "silvermoon-aedrios-02-anime-hero-2fb52f442e5e.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "silvermoon-aedrios-03-victory-90425dd31742.webp",
+          "width": 640,
+          "height": 674,
+          "id": "03-victory"
+        },
+        {
+          "file": "silvermoon-aedrios-04-panic-425e7717d77e.webp",
+          "width": 603,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "silvermoon-aedrios-05-dazed-1845899745cc.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "silvermoon-aedrios-06-faceplant-aea2c118cfdb.webp",
+          "width": 640,
+          "height": 711,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "turalyon-noprocs",
+      "name": "Noprocs",
+      "poses": [
+        {
+          "file": "turalyon-noprocs-01-idle-b7a65969bcaa.webp",
+          "width": 565,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "turalyon-noprocs-02-anime-hero-deddd9fed072.webp",
+          "width": 640,
+          "height": 654,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "turalyon-noprocs-03-victory-62ce647b1732.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "turalyon-noprocs-04-panic-27fef455145d.webp",
+          "width": 640,
+          "height": 690,
+          "id": "04-panic"
+        },
+        {
+          "file": "turalyon-noprocs-05-dazed-78270fcaaa5f.webp",
+          "width": 565,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "turalyon-noprocs-06-faceplant-db972319f81d.webp",
+          "width": 640,
+          "height": 689,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "outland-xzashia",
+      "name": "Xzashia",
+      "poses": [
+        {
+          "file": "outland-xzashia-01-idle-a330c454cdf3.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "outland-xzashia-02-anime-hero-9ad217f9c260.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "outland-xzashia-03-victory-8ed55dbf17b2.webp",
+          "width": 637,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "outland-xzashia-04-panic-7b285d6f5e72.webp",
+          "width": 480,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "outland-xzashia-05-dazed-80775c14db2a.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "outland-xzashia-06-faceplant-3c2b51067e6a.webp",
+          "width": 640,
+          "height": 706,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "suramar-hathanael",
+      "name": "Hathanael",
+      "poses": [
+        {
+          "file": "suramar-hathanael-01-idle-1ea93d863b8b.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "suramar-hathanael-02-anime-hero-e52ca9af5fbd.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "suramar-hathanael-03-victory-52b60e93a43a.webp",
+          "width": 620,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "suramar-hathanael-04-panic-45dddb7fd61e.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "suramar-hathanael-05-dazed-e1eb84791e94.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "suramar-hathanael-06-faceplant-6b4715e737ee.webp",
+          "width": 640,
+          "height": 720,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "ravencrest-anavim",
+      "name": "Anavim",
+      "poses": [
+        {
+          "file": "ravencrest-anavim-01-idle-67c81eb24bb9.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "ravencrest-anavim-02-anime-hero-7db03f3fac3d.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "ravencrest-anavim-03-victory-f73a41fb7230.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "ravencrest-anavim-04-panic-10e3574409f4.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "ravencrest-anavim-05-dazed-d853f0c32a1d.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "ravencrest-anavim-06-faceplant-de4fa5e76658.webp",
+          "width": 640,
+          "height": 720,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "frostwhisper-futhark",
+      "name": "Futhark",
+      "poses": [
+        {
+          "file": "frostwhisper-futhark-01-idle-65f7e463e18b.webp",
+          "width": 558,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "frostwhisper-futhark-02-anime-hero-038d71bd782e.webp",
+          "width": 640,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "frostwhisper-futhark-03-victory-886d78db4ef0.webp",
+          "width": 640,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "frostwhisper-futhark-04-panic-22ee13df261d.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "frostwhisper-futhark-05-dazed-409a1d1b3ca5.webp",
+          "width": 558,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "frostwhisper-futhark-06-faceplant-93bd00c70460.webp",
+          "width": 640,
+          "height": 677,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "blackmoore-oegron",
+      "name": "Oegron",
+      "poses": [
+        {
+          "file": "blackmoore-oegron-01-idle-df80f0cd306b.webp",
+          "width": 623,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "blackmoore-oegron-02-anime-hero-00a97a198b1a.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "blackmoore-oegron-03-victory-a34b2793ef3d.webp",
+          "width": 628,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "blackmoore-oegron-04-panic-73dbaf596035.webp",
+          "width": 624,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "blackmoore-oegron-05-dazed-5dc30e008338.webp",
+          "width": 624,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "blackmoore-oegron-06-faceplant-a87c79b08be4.webp",
+          "width": 640,
+          "height": 688,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "silvermoon-moerade",
+      "name": "Moerade",
+      "poses": [
+        {
+          "file": "silvermoon-moerade-01-idle-a7d490dc1786.webp",
+          "width": 600,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "silvermoon-moerade-02-anime-hero-c1068464afbf.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "silvermoon-moerade-03-victory-c3861c6df2e5.webp",
+          "width": 640,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "silvermoon-moerade-04-panic-881f2541209c.webp",
+          "width": 640,
+          "height": 700,
+          "id": "04-panic"
+        },
+        {
+          "file": "silvermoon-moerade-05-dazed-940e3fb359b5.webp",
+          "width": 600,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "silvermoon-moerade-06-faceplant-38f838bbb5fb.webp",
+          "width": 640,
+          "height": 665,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "tarren-mill-rentacharge",
+      "name": "Rentacharge",
+      "poses": [
+        {
+          "file": "tarren-mill-rentacharge-01-idle-551b6cc73356.webp",
+          "width": 640,
+          "height": 672,
+          "id": "01-idle"
+        },
+        {
+          "file": "tarren-mill-rentacharge-02-anime-hero-e5024d64b202.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "tarren-mill-rentacharge-03-victory-4d579fe9f326.webp",
+          "width": 640,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "tarren-mill-rentacharge-04-panic-a506f880513d.webp",
+          "width": 640,
+          "height": 672,
+          "id": "04-panic"
+        },
+        {
+          "file": "tarren-mill-rentacharge-05-dazed-19ee5b242197.webp",
+          "width": 640,
+          "height": 700,
+          "id": "05-dazed"
+        },
+        {
+          "file": "tarren-mill-rentacharge-06-faceplant-0c7f17132e4e.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "blackrock-haldrik",
+      "name": "Haldrik",
+      "poses": [
+        {
+          "file": "blackrock-haldrik-01-idle-49f7dd9ac19a.webp",
+          "width": 635,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "blackrock-haldrik-02-anime-hero-59db23c6d9f2.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "blackrock-haldrik-03-victory-9509d726bdbe.webp",
+          "width": 640,
+          "height": 700,
+          "id": "03-victory"
+        },
+        {
+          "file": "blackrock-haldrik-04-panic-5166251f33db.webp",
+          "width": 640,
+          "height": 662,
+          "id": "04-panic"
+        },
+        {
+          "file": "blackrock-haldrik-05-dazed-794f2d28cc09.webp",
+          "width": 635,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "blackrock-haldrik-06-faceplant-64c651291c30.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "arathor-bence",
+      "name": "Bence",
+      "poses": [
+        {
+          "file": "arathor-bence-01-idle-c4ed4f987bc3.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "arathor-bence-02-anime-hero-b5a29bf82c45.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "arathor-bence-03-victory-b067094af662.webp",
+          "width": 632,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "arathor-bence-04-panic-8c814ed535af.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "arathor-bence-05-dazed-d74f4328a77f.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "arathor-bence-06-faceplant-b93f9e071d07.webp",
+          "width": 640,
+          "height": 700,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "proudmoore-catastrophe",
+      "name": "Catastrophe",
+      "poses": [
+        {
+          "file": "proudmoore-catastrophe-01-idle-4179b7709b4e.webp",
+          "width": 640,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "proudmoore-catastrophe-02-anime-hero-3e52274578e6.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "proudmoore-catastrophe-03-victory-3171282feb37.webp",
+          "width": 640,
+          "height": 700,
+          "id": "03-victory"
+        },
+        {
+          "file": "proudmoore-catastrophe-04-panic-d50dfc93f43d.webp",
+          "width": 640,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "proudmoore-catastrophe-05-dazed-854dad34c530.webp",
+          "width": 640,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "proudmoore-catastrophe-06-faceplant-cc120ee5dd60.webp",
+          "width": 640,
+          "height": 720,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "kazzak-leugimnas",
+      "name": "Leugimnas",
+      "poses": [
+        {
+          "file": "kazzak-leugimnas-01-idle-45ecc8e8a95f.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "kazzak-leugimnas-02-anime-hero-a2edccf692a2.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "kazzak-leugimnas-03-victory-15036a3c748b.webp",
+          "width": 480,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "kazzak-leugimnas-04-panic-84225d37c6be.webp",
+          "width": 517,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "kazzak-leugimnas-05-dazed-198212c3db0e.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "kazzak-leugimnas-06-faceplant-b7fba79851a8.webp",
+          "width": 640,
+          "height": 591,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "doomhammer-stonasloth",
+      "name": "Stonasloth",
+      "poses": [
+        {
+          "file": "doomhammer-stonasloth-01-idle-1c7fa8f99336.webp",
+          "width": 611,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "doomhammer-stonasloth-02-anime-hero-5f523e8a6602.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "doomhammer-stonasloth-03-victory-759c04a1116a.webp",
+          "width": 611,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "doomhammer-stonasloth-04-panic-9f864452deed.webp",
+          "width": 614,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "doomhammer-stonasloth-05-dazed-738ce1ef00a2.webp",
+          "width": 611,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "doomhammer-stonasloth-06-faceplant-996d78180dce.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "suramar-asiriel",
+      "name": "Asiriel",
+      "poses": [
+        {
+          "file": "suramar-asiriel-01-idle-addda8c3addb.webp",
+          "width": 480,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "suramar-asiriel-02-anime-hero-6e7bff420faf.webp",
+          "width": 480,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "suramar-asiriel-03-victory-633efc49869e.webp",
+          "width": 480,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "suramar-asiriel-04-panic-7a7ac9858587.webp",
+          "width": 480,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "suramar-asiriel-05-dazed-8e43376479ae.webp",
+          "width": 480,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "suramar-asiriel-06-faceplant-7f5a716168cb.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "ravencrest-naautilus",
+      "name": "Naautilus",
+      "poses": [
+        {
+          "file": "ravencrest-naautilus-01-idle-0bb912fb5900.webp",
+          "width": 552,
+          "height": 720,
+          "id": "01-idle"
+        },
+        {
+          "file": "ravencrest-naautilus-02-anime-hero-aafbea2d73de.webp",
+          "width": 599,
+          "height": 720,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "ravencrest-naautilus-03-victory-fadf291f4b7a.webp",
+          "width": 552,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "ravencrest-naautilus-04-panic-0a252f623103.webp",
+          "width": 552,
+          "height": 720,
+          "id": "04-panic"
+        },
+        {
+          "file": "ravencrest-naautilus-05-dazed-091a460d40e9.webp",
+          "width": 552,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "ravencrest-naautilus-06-faceplant-9dab90481228.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "silvermoon-pokhara",
+      "name": "Pokhara",
+      "poses": [
+        {
+          "file": "silvermoon-pokhara-01-idle-e0ea5e76fcba.webp",
+          "width": 640,
+          "height": 672,
+          "id": "01-idle"
+        },
+        {
+          "file": "silvermoon-pokhara-02-anime-hero-4ab66d91c014.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "silvermoon-pokhara-03-victory-68ec5a41cd8a.webp",
+          "width": 621,
+          "height": 720,
+          "id": "03-victory"
+        },
+        {
+          "file": "silvermoon-pokhara-04-panic-d2277e6ca39e.webp",
+          "width": 640,
+          "height": 700,
+          "id": "04-panic"
+        },
+        {
+          "file": "silvermoon-pokhara-05-dazed-30fb78f54a8f.webp",
+          "width": 640,
+          "height": 672,
+          "id": "05-dazed"
+        },
+        {
+          "file": "silvermoon-pokhara-06-faceplant-7ec12818811d.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "uldum-zorromix",
+      "name": "Zorromix",
+      "poses": [
+        {
+          "file": "uldum-zorromix-01-idle-9fb3c1aca8f0.webp",
+          "width": 640,
+          "height": 672,
+          "id": "01-idle"
+        },
+        {
+          "file": "uldum-zorromix-02-anime-hero-8c8bb2044e58.webp",
+          "width": 640,
+          "height": 672,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "uldum-zorromix-03-victory-d81dc81cf0f2.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "uldum-zorromix-04-panic-41ccc647b7a7.webp",
+          "width": 640,
+          "height": 672,
+          "id": "04-panic"
+        },
+        {
+          "file": "uldum-zorromix-05-dazed-dbcba8d607c7.webp",
+          "width": 536,
+          "height": 720,
+          "id": "05-dazed"
+        },
+        {
+          "file": "uldum-zorromix-06-faceplant-3b214a0e812e.webp",
+          "width": 640,
+          "height": 672,
+          "id": "06-faceplant"
+        }
+      ]
+    },
+    {
+      "id": "frostwhisper-cirth",
+      "name": "Cirth",
+      "poses": [
+        {
+          "file": "frostwhisper-cirth-01-idle-a34319b715f8.webp",
+          "width": 640,
+          "height": 672,
+          "id": "01-idle"
+        },
+        {
+          "file": "frostwhisper-cirth-02-anime-hero-e32af23cd544.webp",
+          "width": 640,
+          "height": 585,
+          "id": "02-anime-hero"
+        },
+        {
+          "file": "frostwhisper-cirth-03-victory-1d90b4e6f545.webp",
+          "width": 640,
+          "height": 672,
+          "id": "03-victory"
+        },
+        {
+          "file": "frostwhisper-cirth-04-panic-b76801e83b52.webp",
+          "width": 640,
+          "height": 672,
+          "id": "04-panic"
+        },
+        {
+          "file": "frostwhisper-cirth-05-dazed-597e3b10e9c0.webp",
+          "width": 640,
+          "height": 672,
+          "id": "05-dazed"
+        },
+        {
+          "file": "frostwhisper-cirth-06-faceplant-8f3ce50170bf.webp",
+          "width": 640,
+          "height": 585,
+          "id": "06-faceplant"
+        }
+      ]
+    }
+  ],
+  "wordmark": {
+    "file": "luminis-wordmark-v1-3abc4c467996.webp",
+    "width": 1300,
+    "height": 434,
+    "id": "luminis-wordmark-v1"
+  },
+  "wordmarks": [
+    {
+      "file": "luminis-wordmark-v1-3abc4c467996.webp",
+      "width": 1300,
+      "height": 434,
+      "id": "luminis-wordmark-v1"
+    },
+    {
+      "file": "luminis-wordmark-v10-2d761a53823e.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v10"
+    },
+    {
+      "file": "luminis-wordmark-v11-fb543156a68b.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v11"
+    },
+    {
+      "file": "luminis-wordmark-v12-5d9023f7e3ce.webp",
+      "width": 1300,
+      "height": 434,
+      "id": "luminis-wordmark-v12"
+    },
+    {
+      "file": "luminis-wordmark-v13-7f6772cf5513.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v13"
+    },
+    {
+      "file": "luminis-wordmark-v14-7e5c38027727.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v14"
+    },
+    {
+      "file": "luminis-wordmark-v15-33197ed99b20.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v15"
+    },
+    {
+      "file": "luminis-wordmark-v16-ecf605b4930a.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v16"
+    },
+    {
+      "file": "luminis-wordmark-v17-5e2d7bd8764b.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v17"
+    },
+    {
+      "file": "luminis-wordmark-v18-c5d108d0f891.webp",
+      "width": 1300,
+      "height": 437,
+      "id": "luminis-wordmark-v18"
+    },
+    {
+      "file": "luminis-wordmark-v19-a3a93ef286c3.webp",
+      "width": 1300,
+      "height": 433,
+      "id": "luminis-wordmark-v19"
+    },
+    {
+      "file": "luminis-wordmark-v2-0ec5591866aa.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v2"
+    },
+    {
+      "file": "luminis-wordmark-v20-f75bb61a9fa5.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v20"
+    },
+    {
+      "file": "luminis-wordmark-v3-1df3c1bf2f1a.webp",
+      "width": 1300,
+      "height": 434,
+      "id": "luminis-wordmark-v3"
+    },
+    {
+      "file": "luminis-wordmark-v4-238709780d7c.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v4"
+    },
+    {
+      "file": "luminis-wordmark-v5-09d041d544d1.webp",
+      "width": 1300,
+      "height": 434,
+      "id": "luminis-wordmark-v5"
+    },
+    {
+      "file": "luminis-wordmark-v6-f6bc49d94ee5.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v6"
+    },
+    {
+      "file": "luminis-wordmark-v7-5787af127ee1.webp",
+      "width": 1300,
+      "height": 434,
+      "id": "luminis-wordmark-v7"
+    },
+    {
+      "file": "luminis-wordmark-v8-55dcc391228d.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v8"
+    },
+    {
+      "file": "luminis-wordmark-v9-d15ab6450ebe.webp",
+      "width": 1300,
+      "height": 435,
+      "id": "luminis-wordmark-v9"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ from urllib.parse import quote
 from aiohttp import web
 
 from .. import BENCHMARK_NIGHT_HOURS, SYNC_INTERVAL_MINUTES, SYNC_REPORT_LIMIT, analyzer, benchmarks, db, guides, progstats, spells, sync, teams
-from . import compare, consumables, insights, performance, players
+from . import brand, compare, consumables, insights, performance, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
                      section_head, stat_tiles, subsection,
                      hit_timeline,
@@ -57,6 +57,7 @@ def register_routes(app):
     get('/raids/spell/{spell_id}', handle_spell)
     get('/raids/item/{item_id}', handle_item)
     get('/raids/favicon.png', handle_favicon)
+    get('/raids/art/{filename}', handle_brand_asset)
     get(STATIC_CSS_URL, handle_static_css)
     get('/raids/portrait/{realm}/{name}', handle_portrait)
     get(STATIC_JS_URL, handle_static_js)
@@ -313,6 +314,13 @@ async def handle_favicon(request):
         raise web.HTTPNotFound()
     return web.FileResponse(FAVICON, headers={'Cache-Control': 'public, max-age=86400'})
 
+
+async def handle_brand_asset(request):
+    path = brand.asset_path(request.match_info['filename'])
+    if path is None:
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers=STATIC_HEADERS)
+
 # Every raid page: a content security policy (scripts/styles are inline, so the value is mostly in
 # locking down where anything else may load from and who may frame us), no MIME sniffing, no framing
 # by other sites, and no full URLs leaking to Warcraft Logs / Wowhead in the Referer.
@@ -489,6 +497,7 @@ def _page(title, session, body, waiting=False):
 </head>
 <body>
     <div class="container">
+        {brand.markup('/raids' if session is PUBLIC_SESSION else '/admin/raids')}
         {render_nav(session, active='raids')}
         {banner}
         <main id="page">{body}</main>

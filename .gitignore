@@ -1,6 +1,11 @@
 # Environment variables
 .env
 
+# Local artwork workspace: masters, prompts, plans, tools and previews.
+# Deployable WebPs and manifest remain versioned in raidanalysis/web/static/cartoons/.
+/output/character-cartoons/
+/ARTWORK_RESUME.md
+
 # Documentation (internal/temporary)
 WOW_CHARACTER_CONNECTION_PLAN.md
 WOW_ADDON_API_INTEGRATION.md

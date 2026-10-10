@@ -4,6 +4,7 @@ import json
 
 from ..spells import NOT_SPELLS
 from .icons import LEGENDARIES
+from .brand import CSS as BRAND_CSS, JS as BRAND_JS
 
 DIFFICULTY_NAMES = {1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic'}
 
@@ -22,7 +23,7 @@ STATUS_GOOD = '#51cf66'
 
 ICON_BASE = 'https://assets.rpglogs.com/img/warcraft/abilities/'
 
-PAGE_CSS = """
+PAGE_CSS = BRAND_CSS + """
 /* Raid analysis theme - layered over the shared ADMIN_CSS, raid pages only. */
 :root {
     --bg: #0d1020; --surface: #161a2c; --surface-2: #1d2238; --surface-3: #252b45;
@@ -1349,7 +1350,7 @@ details.breakdown-toggle[open] > summary::before { content: '▾ '; }
 """
 
 # Sortable tables + local timestamps. Kept dependency-free.
-PAGE_JS = """
+PAGE_JS = BRAND_JS + """
 // Setup per element: onEach(selector, setup) runs setup on every match now, and raidInit(root) re-runs every
 // setup on the matches inside a part of the page swapped in later (a data-swap link) - so new content works.
 const INITS = [];
