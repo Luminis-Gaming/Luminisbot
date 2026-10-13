@@ -275,6 +275,33 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (class, spec, ability_name)
         );
     """)
+    # Who uses the raid pages (analytics.py): page views (an anonymous browser id - never an IP) and "My performance"
+    # clicks in Discord. src: how a view came in - 'full' (a Full analysis link), 'mine' (the recap's own link).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_analytics (
+            id BIGSERIAL PRIMARY KEY,
+            at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            kind TEXT NOT NULL,
+            src TEXT,
+            visitor TEXT,
+            discord_id BIGINT,
+            discord_name TEXT,
+            admin_user TEXT,
+            report_code TEXT,
+            path TEXT
+        );
+        CREATE INDEX IF NOT EXISTS raid_analytics_at ON raid_analytics (at);
+        CREATE INDEX IF NOT EXISTS raid_analytics_report ON raid_analytics (report_code);
+    """)
+    # A browser's id -> the Discord user it belongs to: learned when someone opens a link from their own private
+    # "My performance" recap (signed with their Discord id), so their other views count as theirs too.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_visitors (
+            visitor TEXT PRIMARY KEY,
+            discord_id BIGINT NOT NULL,
+            linked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
 
 
 # Connections are kept and reused (a pool): opening one - connecting and logging in - for every query added up to
@@ -520,6 +547,30 @@ def pulls_missing_applied_hots(casts, limit):
         SELECT p.report_code, p.fight_id, p.start_ms, p.end_ms, p.analysis->'extras' AS extras
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         WHERE {_BEFORE_APPLIED_HOTS}
+        ORDER BY r.start_time DESC, p.fight_id LIMIT %s
+    """, (limit,), fetch='all') or []
+
+
+_BEFORE_PREPULL_BUFFS = """
+    p.analysis ? 'extras' AND NOT p.analysis ? 'archived'
+    AND NOT COALESCE((p.analysis->'extras'->>'prepull_buffs')::boolean, false)
+"""
+
+
+def pulls_missing_prepull_buffs(limit):
+    """
+    Kept pulls synced before self-buffs cast before the pull were kept (throughput.up_at_start), with the per-player
+    detail: {'report_code', 'fight_id', 'start_ms', 'end_ms', 'extras'}, newest first. The ones without the detail
+    (no auras stored at all) are just marked done.
+    """
+    _run(f"""
+        UPDATE raid_pulls p SET analysis = jsonb_set(p.analysis, '{{extras,prepull_buffs}}', 'true'::jsonb)
+        WHERE {_BEFORE_PREPULL_BUFFS} AND NOT COALESCE((p.analysis->'extras'->>'detail')::boolean, TRUE)
+    """)
+    return _run(f"""
+        SELECT p.report_code, p.fight_id, p.start_ms, p.end_ms, p.analysis->'extras' AS extras
+        FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
+        WHERE {_BEFORE_PREPULL_BUFFS}
         ORDER BY r.start_time DESC, p.fight_id LIMIT %s
     """, (limit,), fetch='all') or []
 
@@ -1393,3 +1444,119 @@ def get_benchmarks(encounter_id, difficulty):
         SELECT class, spec, players FROM raid_benchmarks
         WHERE encounter_id = %s AND difficulty = %s AND status <> 'empty'
     """, (encounter_id, difficulty), fetch='all')
+
+
+# ============================================================================
+# Analytics (analytics.py): page views and "My performance" clicks
+# ============================================================================
+
+def record_analytics(kind, src=None, visitor=None, discord_id=None, discord_name=None, admin_user=None,
+                     report_code=None, path=None):
+    _run("""
+        INSERT INTO raid_analytics (kind, src, visitor, discord_id, discord_name, admin_user, report_code, path)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (kind, src, visitor, discord_id, discord_name, admin_user, report_code, path))
+
+
+def link_visitor(visitor, discord_id):
+    """This browser is that Discord user's (they opened their own recap's link) - the latest link wins."""
+    _run("""
+        INSERT INTO raid_visitors (visitor, discord_id) VALUES (%s, %s)
+        ON CONFLICT (visitor) DO UPDATE SET discord_id = EXCLUDED.discord_id, linked_at = NOW()
+    """, (visitor, discord_id))
+
+
+def prune_analytics(days):
+    _run("DELETE FROM raid_analytics WHERE at < NOW() - make_interval(days => %s)", (days,))
+
+
+def _since(days, column='a.at'):
+    return (f' AND {column} >= NOW() - make_interval(days => %s)', [days]) if days else ('', [])
+
+
+# Every row with who it was (the Discord user: clicked as them, or a view from a browser tied to them) and, for a
+# night's page, that night's event (the event's channel says the team).
+_ANALYTICS = """
+    SELECT a.*, COALESCE(a.discord_id, v.discord_id) AS who, ev.event_id, ev.event_title, ev.event_channel_id,
+           r.title AS report_title, r.start_time AS report_start
+    FROM raid_analytics a
+    LEFT JOIN raid_visitors v ON v.visitor = a.visitor
+    LEFT JOIN raid_reports r ON r.code = a.report_code
+""" + _EVENT_JOIN
+
+_COUNTS = """
+    COUNT(*) FILTER (WHERE kind = 'view') AS views,
+    COUNT(DISTINCT visitor) FILTER (WHERE kind = 'view') AS visitors,
+    COUNT(*) FILTER (WHERE kind = 'my_performance') AS my_performance,
+    COUNT(DISTINCT discord_id) FILTER (WHERE kind = 'my_performance') AS my_performance_users,
+    COUNT(*) FILTER (WHERE kind = 'view' AND src = 'full') AS full_analysis,
+    COUNT(*) FILTER (WHERE kind = 'view' AND src = 'mine') AS own_analysis
+"""
+
+
+def analytics_totals(days):
+    where, params = _since(days)
+    return _run(f"SELECT {_COUNTS}, COUNT(DISTINCT who) AS discord_users FROM ({_ANALYTICS} WHERE TRUE {where}) x",
+                params, fetch='one')
+
+
+def analytics_daily(days):
+    """[{'day', 'visitors', 'views'}] oldest first - days without a view left out."""
+    where, params = _since(days)
+    return _run(f"""
+        SELECT date_trunc('day', at)::date AS day, COUNT(DISTINCT visitor) AS visitors, COUNT(*) AS views
+        FROM raid_analytics a WHERE kind = 'view' {where}
+        GROUP BY 1 ORDER BY 1
+    """, params, fetch='all') or []
+
+
+def analytics_nights(days):
+    """Per raid night that had any: the counts, its title / date and event, newest night first."""
+    where, params = _since(days)
+    return _run(f"""
+        SELECT report_code, MAX(report_title) AS title, MAX(report_start) AS start_time, MAX(event_id) AS event_id,
+               MAX(event_title) AS event_title, MAX(event_channel_id) AS event_channel_id, {_COUNTS}
+        FROM ({_ANALYTICS} WHERE a.report_code IS NOT NULL {where}) x
+        GROUP BY report_code
+        ORDER BY MAX(report_start) DESC NULLS LAST, report_code
+    """, params, fetch='all') or []
+
+
+def analytics_by_channel(days, team_channels):
+    """
+    The counts per group of pages: 'team' (one row per team channel), 'other' (events outside them - for fun),
+    'no_event' (a night without an event), 'not_a_night' (the front page, boss and character pages).
+    """
+    where, params = _since(days)
+    return _run(f"""
+        SELECT bucket, channel_id, {_COUNTS} FROM (
+            SELECT x.*, CASE WHEN report_code IS NULL THEN 'not_a_night' WHEN event_channel_id IS NULL THEN 'no_event'
+                             WHEN event_channel_id = ANY(%s) THEN 'team' ELSE 'other' END AS bucket,
+                        CASE WHEN event_channel_id = ANY(%s) THEN event_channel_id END AS channel_id
+            FROM ({_ANALYTICS} WHERE TRUE {where}) x
+        ) y
+        GROUP BY bucket, channel_id
+        ORDER BY bucket, channel_id
+    """, [team_channels, team_channels] + params, fetch='all') or []
+
+
+def analytics_users(days):
+    """
+    Per Discord user we know: their clicks, views and nights looked at, and their name (what Discord called them
+    when they clicked, else their linked Battle.net connection's). Most active first.
+    """
+    where, params = _since(days)
+    return _run(f"""
+        SELECT who AS discord_id,
+               COALESCE((SELECT a2.discord_name FROM raid_analytics a2 WHERE a2.discord_id = x.who
+                         AND a2.discord_name IS NOT NULL ORDER BY a2.at DESC LIMIT 1),
+                        (SELECT COALESCE(c.discord_display_name, c.discord_username) FROM wow_connections c
+                         WHERE c.discord_id = x.who::text LIMIT 1)) AS name,
+               {_COUNTS},
+               COUNT(DISTINCT report_code) FILTER (WHERE kind = 'view') AS nights,
+               MAX(at) AS last_seen
+        FROM ({_ANALYTICS} WHERE TRUE {where}) x
+        WHERE who IS NOT NULL
+        GROUP BY who
+        ORDER BY COUNT(*) FILTER (WHERE kind = 'my_performance') DESC, COUNT(*) DESC
+    """, params, fetch='all') or []

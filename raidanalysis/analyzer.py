@@ -1116,9 +1116,13 @@ def _feedback(p, n, has_tags, raid_hits, raid_deaths, raid_no_defensive, raid_by
 # Why a pull ended, and how far pulls got (render-time, from stored analyses)
 # ============================================================================
 
-BURST_WINDOW_MS = 10000      # deaths this close together count as one burst
-TANK_DEATH_LEAD_MS = 45000   # a tank death this long before the end counts as the trigger
+BURST_WINDOW_MS = 10000      # deaths this close together count as one burst (a mechanic chain)
+COLLAPSE_GAP_MS = 8000       # the final collapse: deaths back from the last one, each this close to the next...
+COLLAPSE_SPAN_MS = 30000     # ...over at most this long - a raid going down over 20 s is one collapse
+TANK_DEATH_LEAD_MS = 45000   # a tank death this long before the collapse counts as the trigger
+TANK_FIRST_GAP_MS = 3000     # ...or the collapse's first death, this long before the next (not one raid-wide hit)
 ENRAGE_WORDS = ('berserk', 'enrage', 'frenzy')
+UNKNOWN_ABILITY = 'Unknown'  # a death's ability when no killing blow was logged
 
 
 def _fmt_ms(ms):
@@ -1131,6 +1135,18 @@ def _top(deaths):
     for d in deaths:
         counts[d['ability']] = counts.get(d['ability'], 0) + 1
     return sorted(counts.items(), key=lambda kv: -kv[1])
+
+
+def _collapse(deaths):
+    """The final collapse: the deaths back from the last one while each is within COLLAPSE_GAP_MS of the next, over
+    at most COLLAPSE_SPAN_MS - the raid going down, however many seconds that took. deaths: sorted by time."""
+    if not deaths:
+        return []
+    last = deaths[-1]['t']
+    i = len(deaths) - 1
+    while i > 0 and deaths[i]['t'] - deaths[i - 1]['t'] <= COLLAPSE_GAP_MS and last - deaths[i - 1]['t'] <= COLLAPSE_SPAN_MS:
+        i -= 1
+    return deaths[i:]
 
 
 def wipe_reason(analysis, kill, duration, enrage_ids=()):
@@ -1154,17 +1170,18 @@ def wipe_reason(analysis, kill, duration, enrage_ids=()):
     if duration < 30000 and len(counted) <= 2:
         return {'code': 'reset', 'label': 'Early reset', 'detail': f'Pull ended after {_fmt_ms(duration)}'}
 
-    burst = []
-    if deaths:
-        last = deaths[-1]['t']
-        burst = [d for d in deaths if d['t'] >= last - BURST_WINDOW_MS]
-        if len(burst) < max(4, 0.35 * raid):
-            burst = []
+    burst = _collapse(deaths)
+    if len(burst) < max(4, 0.35 * raid):
+        burst = []
     end = burst[0]['t'] if burst else duration
     before = [d for d in deaths if d['t'] < end]
 
-    # What went wrong before the end (if anything)
+    # What went wrong before the end (if anything). A tank death only when it led into the collapse: before it
+    # started, or the first to go with a moment before the rest - not the 19th of 21 in a raid already going down.
     tank = next((d for d in before if roles.get(d['name']) == 'tank' and end - d['t'] <= TANK_DEATH_LEAD_MS), None)
+    if not tank and burst and roles.get(burst[0]['name']) == 'tank' and len(burst) > 1 \
+            and burst[1]['t'] - burst[0]['t'] >= TANK_FIRST_GAP_MS:
+        tank, burst = burst[0], burst[1:]
     healers = [d for d in before if roles.get(d['name']) == 'healer']
     trigger = None
     if tank:
@@ -1178,7 +1195,8 @@ def wipe_reason(analysis, kill, duration, enrage_ids=()):
         trigger = ('attrition', f'{len(before)} early deaths', top)
 
     if burst:
-        ability, n = _top(burst)[0]
+        # deaths without a logged killing blow ('Unknown') say nothing about what did it
+        ability, n = (_top([d for d in burst if d['ability'] != UNKNOWN_ABILITY]) or [(UNKNOWN_ABILITY, 0)])[0]
         dominant = n / len(burst) >= 0.5
         span = max((burst[-1]['t'] - burst[0]['t']) / 1000, 1)
         burst_text = (f'{n} died to {ability} within {span:.0f}s' if dominant

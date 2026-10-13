@@ -4,7 +4,7 @@
 The button sits on raid events with a linked log (and older log posts). Clicking it replies with an
 ephemeral message (only the clicker sees it): one message for the night - the few things to work on and
 what went well, picked by coach.py from everything we know (mechanics, priority adds, potion timing,
-cooldowns and rotation against the top players, output) and weighted toward the bosses that mattered, a
+rotation and uptime against the top players, output) and weighted toward the bosses that mattered, a
 line per boss, and links to the full pages. The coaching may load the key pulls' focus data from Warcraft
 Logs first - Discord shows "thinking" meanwhile.
 
@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import discord
 
-from . import coach, db
+from . import analytics, coach, db
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +103,11 @@ def _boss_line(b):
             f'score **{b["score"]}**{parse}{star}')
 
 
-def recap_message(recap):
-    """(embed, view) for one player's night (coach.night): work on, going well, a line per boss, links."""
+def recap_message(recap, discord_id=None):
+    """
+    (embed, view) for one player's night (coach.night): work on, going well, a line per boss, links. discord_id: who
+    it's for - their links carry it, signed (analytics.py), so the pages they open count as theirs.
+    """
     from .web.routes import public_base_url
     report, bosses = recap['report'], recap['bosses']
     main = max(bosses, key=lambda b: b['weight']) if bosses else None
@@ -137,13 +140,16 @@ def recap_message(recap):
 
     view = discord.ui.View()
     base = public_base_url()
+    token = analytics.sign(discord_id)
+    mark = f'&u={quote(token)}' if token else ''
     if base and main:
         url = (f'{base}/raids/report/{report["code"]}/player/{quote(recap["character"])}'
-               f'?boss={main["key"][0]}-{main["key"][1]}&tab=damage')
+               f'?boss={main["key"][0]}-{main["key"][1]}&tab=damage&src=mine{mark}')
         view.add_item(discord.ui.Button(label=f'My full analysis ({main["name"]})'[:80], emoji='🎯',
                                         style=discord.ButtonStyle.link, url=url))
     night = full_analysis_url(report['code'])
     if night:
+        night += mark
         view.add_item(discord.ui.Button(label='Full raid analysis', emoji='⚔️', style=discord.ButtonStyle.link, url=night))
     return embed, view
 
@@ -196,6 +202,8 @@ async def handle_my_analysis(interaction: discord.Interaction):
         if not code:
             await interaction.followup.send(ERRORS['no_report'], ephemeral=True)
             return
+        await asyncio.to_thread(analytics.record_click, interaction.user.id,
+                                getattr(interaction.user, 'display_name', None) or interaction.user.name, code)
         names = await asyncio.to_thread(_player_characters, interaction.user.id, message.id if message else None)
         if not names:
             await interaction.followup.send(ERRORS['no_characters'], ephemeral=True)
@@ -214,13 +222,13 @@ async def handle_my_analysis(interaction: discord.Interaction):
                 await reply.edit(content=ERRORS.get(recap['error'], ERRORS['not_analyzed'])
                                  + (f'\n-# {why[:300]}' if why else ''))
                 return
-            embed, view = recap_message(recap)
+            embed, view = recap_message(recap, interaction.user.id)
             await reply.edit(content=None, embed=embed, view=view)
             return
         if recap.get('error'):
             await interaction.followup.send(ERRORS[recap['error']], ephemeral=True)
             return
-        embed, view = recap_message(recap)
+        embed, view = recap_message(recap, interaction.user.id)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     except Exception:
         logger.exception('[RAIDS] My performance failed')
@@ -249,7 +257,7 @@ def full_analysis_url(code):
     """Public, read-only night page (no admin login) - None when the site address isn't known."""
     from .web.routes import public_base_url
     base = public_base_url()
-    return f'{base}/raids/report/{code}' if base and code else None
+    return f'{base}/raids/report/{code}?src=full' if base and code else None  # src: counted (analytics.py)
 
 
 def add_button(view, row=None, code=None, log_url=None):

@@ -193,6 +193,36 @@ class TestWipeReasons(unittest.TestCase):
         self.assertEqual(r['code'], 'tank')
         self.assertTrue(r['label'].startswith('Tank died (A)'))
 
+    def test_tank_dying_late_in_the_collapse_isnt_the_reason(self):
+        """
+        The Coiled Altar pull 4: 6 early deaths (4 to one Grim Guillotine), then 15 die from 8:10 to 8:28 - the tank
+        19th of 21, 2 s before the end. The raid was already gone: not "Tank died".
+        """
+        seq = [(349.5, 'Btd', 'Unknown'), (415.2, 'Baaka', 'Venom Rupture'), (456.6, 'Malys', 'Grim Guillotine'),
+               (456.6, 'Tjack', 'Grim Guillotine'), (456.6, 'Renta', 'Grim Guillotine'),
+               (456.6, 'Madshaman', 'Grim Guillotine'), (490.1, 'Madshaman', 'Coalesced Venom'),
+               (491.7, 'Raema', 'Unknown'), (492.7, 'Cata', 'Coalesced Venom'), (492.7, 'Asiriel', 'Unknown'),
+               (494.0, 'Kyuby', 'Unknown'), (494.0, 'Tiolaa', 'Unknown'), (495.0, 'Pokhara', 'Unknown'),
+               (495.3, 'Xzashia', 'Coalesced Venom'), (497.5, 'Meffy', 'Unknown'), (499.8, 'Beadin', 'Volatile Venom'),
+               (502.1, 'Baaka', 'Unknown'), (504.6, 'Pog', 'Melee'), (506.7, 'Krabamimi', 'Unknown'),
+               (506.8, 'Bence', 'Unknown'), (508.2, 'Boops', 'Melee')]
+        roles = {'Krabamimi': 'tank', 'Madshaman': 'healer', 'Asiriel': 'healer', 'Boops': 'healer'}
+        names = sorted({n for _, n, _ in seq}) + ['Tank2']
+        pull = {'players': [{'name': n, 'role': roles.get(n, 'dps')} for n in names], 'wipe_at': 494000,
+                'deaths': [{'t': int(t * 1000), 'name': n, 'ability': a, 'ability_id': 1} for t, n, a in seq]}
+        r = analyzer.wipe_reason(pull, False, 508306)
+        self.assertNotEqual(r['code'], 'tank')
+        self.assertEqual(r['code'], 'attrition')          # 6 early deaths, then the raid went down
+        self.assertIn('15 died within 18s at 8:10', r['detail'])
+
+    def test_tank_first_to_go_then_the_raid(self):
+        deaths = [(300000, 'A', 'Crush')] + [(304000 + i * 700, n, 'Melee') for i, n in enumerate('BCDEF')]
+        r = analyzer.wipe_reason(self.pull(deaths, roles={'A': 'tank'}), False, 310000)
+        self.assertEqual(r['code'], 'tank')
+        # ...but going down in the same raid-wide hit as everyone else isn't the tank's death leading anywhere
+        deaths = [(300000 + i * 300, n, 'Cataclysm') for i, n in enumerate('ABCDEF')]
+        self.assertEqual(analyzer.wipe_reason(self.pull(deaths, roles={'A': 'tank'}), False, 310000)['code'], 'mass')
+
     def test_mixed_burst_from_healthy_raid_is_a_called_wipe(self):
         deaths = [(300000 + i * 400, n, f'Ability {i}') for i, n in enumerate('ABCDEF')]
         self.assertEqual(analyzer.wipe_reason(self.pull(deaths), False, 310000)['code'], 'called')
@@ -1704,6 +1734,33 @@ class TestHotsOnOthers(unittest.TestCase):
         self.assertEqual([r['name'] for r in throughput.on_others_rows(numbered, 'Boops', top)], ['Power Word: Shield'])
         self.assertNotIn("Hunter's Mark", throughput.RAID_WIDE_AURAS)               # one per hunter: still theirs
 
+    def test_buff_cast_before_the_pull_counts(self):
+        """
+        Ula'tek pull 1: Xzashia's Moonkin Form was up 266.5 of 270 s - shifted before the pull, so it's not in that
+        pull's casts. It's kept (and uptime() shows ~99%, not 0%); a proc landing mid-pull that she never cast isn't.
+        """
+        from raidanalysis import throughput
+        start = 7120623
+        buffs = {'auras': [
+            {'guid': 24858, 'name': 'Moonkin Form', 'totalUptime': 266509,
+             'bands': [{'startTime': start, 'endTime': start + 266509}]},
+            {'guid': 1297663, 'name': "Halazzi's Rite", 'totalUptime': 174722,
+             'bands': [{'startTime': start + 36066, 'endTime': start + 210788}]}]}
+        per_player = {170: {'buffs': buffs, 'debuffs': [],
+                            'casts': {'entries': [{'name': 'Starfire', 'total': 62}]}}}
+        fight = {'id': 11, 'startTime': start, 'endTime': start + 269996, 'kill': False}
+        tables = {'damageDone': {'entries': []}, 'healing': {'entries': []}}
+        extras = throughput.build_extras(fight, [{'name': 'Xzashia', 'class': 'Druid'}], {170: 'Xzashia'}, tables,
+                                         per_player, {}, tracked={999})
+        self.assertTrue(extras['prepull_buffs'])
+        self.assertEqual([a['name'] for a in extras['players']['Xzashia']['auras']], ['Moonkin Form'])
+        numbered = [(1, {'fight_id': 11, 'analysis': {'extras': extras}})]
+        top = [{'duration': 300000, 'cast_names': {'Moonkin Form': 1, 'Starfire': 70},
+                'auras': [{'id': 24858, 'name': 'Moonkin Form', 'kind': 'buff', 'uptime': 285000}]}] * 5
+        row = next(r for r in throughput.uptime(numbered, 'Xzashia', top) if r['name'] == 'Moonkin Form')
+        self.assertGreater(row['ours'], 0.95)
+        self.assertEqual(row['verdict'], 'good')
+
 
 class TestFocusTimeline(unittest.TestCase):
     """The Venomous Heart is up 25 s: the raid piles into it - were you on it, and was your potion ready?"""
@@ -2067,7 +2124,8 @@ class TestCoach(unittest.TestCase):
                    'score': 62, 'parse': 53.0, 'weight': 1, 'star': 'Venomous Heart'}]
         recap = {'report': {'title': 'Tuesday', 'code': 'abc'}, 'character': 'Futhark', 'other_characters': [],
                  'bosses': bosses, 'work_on': work, 'going_well': good, 'missing': None}
-        with mock.patch('raidanalysis.web.routes.public_base_url', return_value='https://lumi.example'):
+        with mock.patch('raidanalysis.web.routes.public_base_url', return_value='https://lumi.example'), \
+                mock.patch.dict('os.environ', {'OAUTH_STATE_SECRET': ''}):
             embed, view = discord_recap.recap_message(recap)
         fields = {f.name: f.value for f in embed.fields}
         self.assertIn("**Ula'tek** · Venomous Heart: you put 34%", fields['🔧 Work on'])
@@ -2075,7 +2133,17 @@ class TestCoach(unittest.TestCase):
                       fields['📋 Boss by boss'])
         self.assertIn('Best parse **71**', embed.description)
         urls = [b.url for b in view.children]
-        self.assertIn("https://lumi.example/raids/report/abc/player/Futhark?boss=2-5&tab=damage", urls)
+        self.assertIn("https://lumi.example/raids/report/abc/player/Futhark?boss=2-5&tab=damage&src=mine", urls)
+        self.assertIn("https://lumi.example/raids/report/abc?src=full", urls)
+        # ...for someone we know: their links carry their Discord id, signed - counted as theirs (analytics.py)
+        from urllib.parse import parse_qs, urlsplit
+        from raidanalysis import analytics
+        with mock.patch('raidanalysis.web.routes.public_base_url', return_value='https://lumi.example'), \
+                mock.patch.dict('os.environ', {'OAUTH_STATE_SECRET': 'shh'}):
+            _, view = discord_recap.recap_message(recap, 1234)
+            tokens = [parse_qs(urlsplit(b.url).query)['u'][0] for b in view.children]
+            self.assertEqual([analytics.verify(t) for t in tokens], [1234, 1234])
+            self.assertIsNone(analytics.verify(tokens[0].replace('1234', '1235')))   # someone else's id: no
 
     def test_no_rotation_tip_for_a_filler_button(self):
         """Top players pressing Blackout Kick once in downtime isn't a rotation to work on."""
@@ -2550,7 +2618,7 @@ class TestBossTabsKeepThePlayer(unittest.TestCase):
         with mock.patch.object(db, 'report_archived', lambda code: False):
             html = routes._night_header(SimpleNamespace(query={}), report, 'CODE', pulls, (10, 5), view='players',
                                         boss_href=href)
-        self.assertIn('class="boss-tab active" data-swap="page" href="/player-page"', html)
+        self.assertIn('class="boss-chip active" data-swap="page" href="/player-page"', html)
         self.assertIn('href="/admin/raids/report/CODE?boss=20-5&amp;view=players"', html)  # not in that boss: its page
 
 

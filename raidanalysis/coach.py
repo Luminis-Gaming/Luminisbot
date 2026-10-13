@@ -2,13 +2,14 @@
 Coaching for one player's raid night - what the "📊 My performance" recap says.
 
 Every insight the data has is a candidate - mechanics and deaths (analyzer feedback), priority adds and
-reaction, potion timing (the focus data), cooldowns against the top players, rotation and uptime, wasted
-procs, active time, output (parses, most damage to a priority add) - each with an impact (0-100: how much
+reaction, potion timing (the focus data), rotation and uptime against the top players, wasted procs,
+active time, output (parses, most damage to a priority add) - each with an impact (0-100: how much
 it cost you, or how good it was). Impacts are weighted by how much the boss mattered tonight: the hardest
 difficulty first - every Mythic boss over every Heroic one over every Normal one - then, within a difficulty,
 the later bosses of the raid and the ones you pulled most; an easy one- or two-pull kill hardly counts -
 nobody needs three tips about a boss that died first try. The best-weighted few become "work on" and
-"going well".
+"going well". Not the Cooldowns tab's timing against the top players: when a cooldown goes out is often the
+raid leader's call (an assigned raid cooldown, a burst held for an add), so it's no tip for the player.
 
 Tips fit the role. DPS get everything. Healers get no add tips (damage share, reaction, potion timing
 against spawns - not their job), gentler rotation tips (a healer casts to the damage coming in, not on
@@ -106,14 +107,6 @@ def feedback_insights(row):
     """The score's feedback notes (mechanics, deaths, consumables, contributions) on the common scale."""
     return [_insight(n['tone'], 4 * n['weight'], _note_kind(n), n['text'], n.get('ability'))
             for n in row.get('feedback') or [] if n['tone'] in ('bad', 'good')]
-
-
-def cooldown_insights(data):
-    """Major cooldowns lined up (or not) with the top players' moments (benchmarks.notes)."""
-    if not data or not data.get('top') or not data.get('rows'):
-        return []
-    return [_insight(n['tone'], 30 if n['tone'] == 'bad' else 20, 'cooldowns', n['text'])
-            for n in benchmarks.notes(data['rows'], data['label'], limit=2) if n['tone'] in ('bad', 'good')]
 
 
 def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_names=None):
@@ -514,7 +507,6 @@ def night(code, character_names, load=True):
         except Exception:
             logger.exception('[RAIDS] Top-player comparison for the recap failed')
             data = None
-        found += cooldown_insights(data)
         if boss['weight'] >= DETAIL_MIN_WEIGHT:  # rotation tips only where it matters
             spell_names = {sid: info.get('name') for sid, info in ((data or {}).get('spells') or {}).items()}
             found += rotation_insights(numbered, character, role, data, tracked, spell_names)

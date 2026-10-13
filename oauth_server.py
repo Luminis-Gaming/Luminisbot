@@ -1619,6 +1619,7 @@ def render_nav(session, active='characters'):
         <a href="/admin/events" class="{'active' if active == 'events' else ''}">📅 Events</a>
         <a href="/admin/mplus" class="{'active' if active == 'mplus' else ''}">🔑 Mythic+</a>
         <a href="/admin/raids" class="{'active' if active == 'raids' else ''}">⚔️ Raid Analysis</a>
+        {'<a href="/admin/raids/analytics" class="' + ('active' if active == 'analytics' else '') + '">📈 Analytics</a>' if is_event_manager else ''}
         {'<a href="/admin/users" class="' + ('active' if active == 'users' else '') + '">⚙️ Admin Users</a>' if is_admin else ''}
         <a href="/admin/change-password" class="{'active' if active == 'password' else ''}">🔑 Password</a>
         <div class="spacer"></div>

@@ -545,20 +545,58 @@ tr.muted-row td { opacity: 0.7; }
 .dtable tr.dt-detail > td { background: rgba(0,0,0,0.2); padding: 14px 16px; }
 .dt-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
 .dt-split h5 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
-/* The night's pull chips + Mechanics / Players: pinned to the top while scrolling a long page */
+/* The Analytics page (web/analyticsview.py): unique visitors a day - one hue, thin bars rounded at the top, a 2px
+   gap between them; the whole column is the hover target, not just the bar */
+.an-chart { position: relative; display: flex; align-items: stretch; gap: 2px; height: 140px; padding: 14px 0 0 30px;
+    border-bottom: 1px solid var(--border); }
+.an-top { position: absolute; left: 0; top: 0; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.an-chart::before { content: ''; position: absolute; left: 30px; right: 0; top: 14px; border-top: 1px dashed var(--border); }
+.an-day { flex: 1 1 0; min-width: 0; display: flex; align-items: flex-end; cursor: default; }
+.an-day i { display: block; width: 100%; max-width: 22px; margin: 0 auto; min-height: 2px; border-radius: 4px 4px 0 0;
+    background: var(--accent); }
+.an-day:hover i { background: color-mix(in srgb, var(--accent) 70%, #fff); }
+.an-axis { display: flex; justify-content: space-between; padding: 4px 0 0 30px; font-size: 11px; color: var(--faint); }
+/* The night's bosses, pull chips + Mechanics / Players: pinned to the top while scrolling a long page */
 .night-bar { position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
     margin: -8px 0 20px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius);
     background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
-/* The chips take what's left beside the switch and wrap among themselves - a long night's pulls flow onto a
-   second row instead of pushing Mechanics / Players down; only a narrow screen (< ~320px for chips) stacks them */
-.night-bar .pull-chips { margin: 0; flex: 1 1 320px; min-width: 0; }
-.night-bar .view-tabs { margin: 0; flex: 0 0 auto; padding: 3px; align-self: flex-start; }
-/* pinned, the Mechanics / Players switch is two compact pills - its explanation is the tooltip */
-.night-bar .view-tab { flex: 0 0 auto; gap: 7px; padding: 6px 14px; }
-.night-bar .view-tab .vt-icon { font-size: 16px; }
-.night-bar .view-tab strong { font-size: 13px; }
-.night-bar .view-tab small { display: none; }
+/* A raid night's bar (.nb): the bosses, a hairline, the selected boss's pulls - labels in a column of their own so
+   the rows line up - and the Mechanics / Players switch standing beside both. Rows wrap; on a phone they scroll
+   sideways instead, so the pinned bar stays two rows high however long the night was */
+.night-bar.nb { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0 14px; align-items: center;
+    padding: 8px 8px 8px 16px; }
+.nb .nb-label { grid-column: 1; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); }
+.nb .nb-row { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; margin: 0;
+    padding: 2px 0; }
+.nb .nb-rule { grid-column: 1 / 3; height: 1px; margin: 7px 0; background: var(--border); }
+.nb .pull-chip { padding: 5px 11px; border-radius: 9px; }
+/* pinned, the Mechanics / Players switch is two compact pills, one above the other - its explanation is the tooltip */
+.nb .view-tabs { grid-column: 3; grid-row: 1 / span 3; flex-direction: column; gap: 4px; margin: 0; padding: 3px;
+    align-self: center; }
+.nb .view-tab { flex: 0 0 auto; gap: 7px; padding: 6px 14px; }
+.nb .view-tab .vt-icon { font-size: 16px; }
+.nb .view-tab strong { font-size: 13px; }
+.nb .view-tab small { display: none; }
+.boss-chip { display: inline-flex; align-items: center; gap: 9px; padding: 3px 12px 3px 3px; border-radius: 11px;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); white-space: nowrap; }
+.boss-chip:hover { border-color: var(--border-strong); text-decoration: none; }
+.boss-chip.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px rgba(109,124,255,0.18); }
+.boss-chip .boss-portrait { width: 32px; height: 32px; border-radius: 8px; }
+.boss-chip:not(.active) .boss-portrait { filter: saturate(0.7); }
+.boss-chip strong { display: block; font-size: 13px; line-height: 1.25; }
+.boss-chip small { display: block; font-size: 11px; line-height: 1.25; color: var(--muted); }
+.boss-chip small b { font-weight: 600; color: var(--good); }
+@media (max-width: 700px) {
+    .night-bar.nb { grid-template-columns: minmax(0, 1fr); padding: 8px; }
+    .nb .nb-label { display: none; }
+    .nb .nb-row, .nb .nb-rule { grid-column: 1; }
+    .nb .nb-row { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+    .nb .nb-row::-webkit-scrollbar { display: none; }
+    .nb .nb-row > * { flex: none; }
+    .nb .view-tabs { grid-column: 1; grid-row: auto; flex-direction: row; justify-self: start; margin-bottom: 8px; order: -1; }
+}
 tr[data-href] { cursor: pointer; }
 tr[data-href]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* ---- The character page (web/character.py) and the front page's tabs ---- */
@@ -819,18 +857,18 @@ h2 .card-link { margin-left: 10px; font-size: 13px; font-weight: 600; vertical-a
 .swapped-in { animation: swap-in 0.18s ease-out; }
 @keyframes swap-in { from { opacity: 0.4; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* Feedback on everything you can press: a quick hover lift and a press-down - the site should feel alive */
-.pull-chip, .boss-tab, .view-tab, .ptab, .tl-chip, .tl-dd summary, .btn, .dt-toggle, .ftabs button, .card-link {
+.pull-chip, .boss-chip, .view-tab, .ptab, .tl-chip, .tl-dd summary, .btn, .dt-toggle, .ftabs button, .card-link {
     transition: background-color 0.15s, border-color 0.15s, color 0.15s, transform 0.1s, box-shadow 0.15s; }
-.pull-chip:active, .boss-tab:active, .view-tab:active, .ptab:active, .tl-chip:active, .btn:active { transform: scale(0.97); }
-.boss-tab:hover, .view-tab:hover { transform: translateY(-1px); }
+.pull-chip:active, .boss-chip:active, .view-tab:active, .ptab:active, .tl-chip:active, .btn:active { transform: scale(0.97); }
+.boss-chip:hover, .view-tab:hover { transform: translateY(-1px); }
 .player-card { transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s; }
 .player-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
 .click-row, .dtable tr.dt-click { transition: background-color 0.12s; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
     .swapped-in { animation: none; }
-    .pull-chip:active, .boss-tab:active, .view-tab:active, .ptab:active, .tl-chip:active, .btn:active,
-    .boss-tab:hover, .view-tab:hover, .player-card:hover { transform: none; }
+    .pull-chip:active, .boss-chip:active, .view-tab:active, .ptab:active, .tl-chip:active, .btn:active,
+    .boss-chip:hover, .view-tab:hover, .player-card:hover { transform: none; }
 }
 .swapping { opacity: 0.55; transition: opacity 0.15s; pointer-events: none; }
 /* The Character tab (web/armory.py): the in-game character panel */
@@ -1073,22 +1111,14 @@ table.bars td.bar-cell { width: 55%; }
 .inline-form { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .inline-form input[type=text], .inline-form input[type=number] { width: auto; margin: 0; padding: 8px 12px; font-size: 14px; }
 
-/* Night header: boss tabs, pull chips, view switch */
+/* Night header: boss chips, pull chips, view switch */
 .sync-banner { padding: 14px 20px; border-color: rgba(109,124,255,0.5); background: var(--accent-soft); }
 .sync-banner[hidden] { display: none; }
-.boss-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
-.boss-tab { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border-radius: 12px;
-    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
-    transition: border-color .15s, background .15s, box-shadow .15s; }
-.boss-tab:hover { border-color: var(--border-strong); text-decoration: none; }
-.boss-tab.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px rgba(109,124,255,0.18); }
-.boss-tab small { display: block; color: var(--muted); margin-top: 2px; }
 .boss-portrait { width: 40px; height: 40px; border-radius: 10px; flex: none; object-fit: cover;
     box-shadow: 0 0 0 2px var(--surface-3); background: var(--surface-3); }
 .boss-portrait.killed { box-shadow: 0 0 0 2px var(--good); }
 .boss-portrait.sm { width: 26px; height: 26px; border-radius: 7px; vertical-align: middle; margin-right: 8px; }
 .boss-portrait.lg { width: 52px; height: 52px; border-radius: 12px; vertical-align: middle; margin-right: 12px; }
-.boss-tab:not(.active) .boss-portrait { filter: saturate(0.7); }
 .chips-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
     color: var(--faint); margin-right: 4px; }
 .pull-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
@@ -1404,8 +1434,11 @@ if (syncBanner && syncBanner.dataset.running === '1') {
     try {
       const s = await (await fetch('/admin/raids/sync/status', {credentials: 'same-origin'})).json();
       if (!s.running) {
-        if (s.last_new > 0 || syncBanner.dataset.waiting === '1') {
+        if (syncBanner.dataset.waiting === '1') {  // the page itself was waiting for this report
           const url = new URL(location.href); url.searchParams.delete('msg'); location.replace(url);
+        } else if (s.last_new > 0) {  // new pulls: the page again, in place
+          syncBanner.hidden = true;
+          window.softRefresh();
         } else {
           syncBanner.hidden = true;
         }
@@ -1498,8 +1531,9 @@ onEach('.cons-tl, .focus-tl', tl => {
   boxes.forEach(b => b.addEventListener('change', apply));
   apply();
 });
-// Focus loading: a cast bar while ?focus_load=1 fetches the pull from Warcraft Logs, then a reload
-// (the browser keeps the scroll position) renders the timeline from the stored data.
+// Focus loading: a cast bar while ?focus_load=1 fetches the pull from Warcraft Logs, then the page again (softRefresh,
+// in place) renders the timeline from the stored data. Only while its page is the one showing: click on to another
+// pull and the load is called off - it never brings you back here.
 onEach('[data-focus-load]', box => {
   const fill = box.querySelector('.cb-fill'), time = box.querySelector('.cb-time');
   const name = box.querySelector('.cb-name'), flavor = box.querySelector('.cb-flavor');
@@ -1526,16 +1560,25 @@ onEach('[data-focus-load]', box => {
   const url = new URL(location.href);
   url.hash = '';
   url.searchParams.set('focus_load', box.dataset.focusLoad || '1');
-  fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
+  const abort = new AbortController();
+  const gone = () => {
+    if (box.isConnected) return;
+    finished = true; clearInterval(rotate); abort.abort();
+    document.removeEventListener('raid:swapped', gone);
+  };
+  document.addEventListener('raid:swapped', gone);
+  fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}, signal: abort.signal})
     .then(r => r.ok ? r.json() : Promise.reject())
     .then(res => {
+      document.removeEventListener('raid:swapped', gone);
+      if (!box.isConnected) return;
       if (!res.ok) return fail(res.why);
       finished = true; clearInterval(rotate);
       box.classList.add('done'); fill.style.width = '100%'; name.textContent = 'Cast complete';
       flavor.textContent = 'Here it comes…';
-      setTimeout(() => location.reload(), 400);
+      setTimeout(() => { if (box.isConnected) window.softRefresh(); }, 400);
     })
-    .catch(() => fail());
+    .catch(() => { if (box.isConnected) fail(); });
 });
 // Armory refresh: a stored character older than a few hours shows at once while it's fetched again in the
 // background. Wait for that (?armory_wait=1), then swap the fresh parts in place (data-armory-part: the gear
@@ -1551,6 +1594,7 @@ onEach('[data-armory-refresh]', card => {
   fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
     .then(r => r.ok ? r.json() : Promise.reject())
     .then(res => {
+      if (!card.isConnected) return;  // you've moved on to another page: nothing to light up here
       if (!res.ok) return say(res.why || "Couldn't refresh from the armory right now - showing what we had.", 'failed');
       const page = new URL(location.href);
       page.hash = '';
@@ -1923,8 +1967,12 @@ const swapLink = el => {  // the link a click / hover is about, if it's one we s
   return link;
 };
 const prefetched = new Map();  // url -> fetch promise, fresh for 30 s
-const fetchPage = href => {
+const fetchPage = (href, fresh = false) => {
   const url = href.split('#')[0], hit = prefetched.get(url);
+  if (fresh) {  // a refresh: never what a hover fetched a moment ago (that was the page still loading)
+    return fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+      .then(r => r.ok ? r.text().then(html => [html, r.url]) : Promise.reject());
+  }
   if (hit && Date.now() - hit.at < 30000) return hit.promise;
   const promise = fetch(url, {credentials: 'same-origin'})
     .then(r => r.ok ? r.text().then(html => [html, r.url]) : Promise.reject());
@@ -1938,13 +1986,46 @@ document.addEventListener('pointerover', e => {
   clearTimeout(hoverTimer);
   if (link) hoverTimer = setTimeout(() => fetchPage(hrefOf(link)), 90);  // a deliberate hover, not a sweep past
 });
-const swapTo = (href, id = 'page', keepScroll = false) => {
+// A page view for the officers' Analytics page (analytics.py): on load and on every swap to another page - not
+// hover prefetches, not refreshes. ?src= / ?u= (a Discord link's way in, and whose recap it came from) go along once,
+// then leave the address, so a copied link doesn't carry them. A first page reached from outside the site straight
+// onto a night (the Full analysis button on older Discord posts, before it said ?src=full) counts as one too.
+let viewed = false;
+const trackView = () => {
+  try {
+    const url = new URL(location.href), q = url.searchParams;
+    if (!/^\\/(admin\\/)?raids(\\/|$)/.test(url.pathname)) return;
+    let src = q.get('src');
+    const outside = !document.referrer || new URL(document.referrer).origin !== location.origin;
+    if (!src && !viewed && outside && /^\\/raids\\/report\\/[A-Za-z0-9]{16}$/.test(url.pathname)) src = 'full';
+    viewed = true;
+    fetch((url.pathname.startsWith('/admin/') ? '/admin' : '') + '/raids/hit', {
+      method: 'POST', keepalive: true, credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: url.pathname, src, u: q.get('u')}),
+    }).catch(() => {});
+    if (q.has('src') || q.has('u')) {
+      q.delete('src'); q.delete('u');
+      history.replaceState(history.state, '', url.pathname + (q.toString() ? '?' + q : '') + url.hash);
+    }
+  } catch (e) { /* never in the way of the page */ }
+};
+trackView();
+// Only the latest swap counts: click #4, then #5 before #4 arrived, and #4 landing late must not replace #5 (nor
+// turn into a full load of #4 if it fails). refresh: the same page again, fresh from the server and in place of
+// this history entry - what a cast bar does once its data is in (see softRefresh).
+let swapSeq = 0, swapPending = false;
+const swapTo = (href, id = 'page', keepScroll = false, refresh = false) => {
   const target = document.getElementById(id);
   if (!target) { location.href = href; return; }
+  const seq = ++swapSeq;
+  const latest = () => seq === swapSeq;
+  swapPending = true;
   target.classList.add('swapping');
   swapProgress(true);
-  fetchPage(href)
+  fetchPage(href, refresh)
     .then(([html, url]) => {
+      if (!latest()) return;
+      swapPending = false;
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const fresh = doc.getElementById(id);
       if (!fresh) return Promise.reject();
@@ -1952,23 +2033,37 @@ const swapTo = (href, id = 'page', keepScroll = false) => {
       target.replaceWith(fresh);
       document.title = doc.title;
       const hash = new URL(href, location.href).hash;
-      history.pushState({swapped: true}, '', (url || href).split('#')[0] + hash);
-      window.raidInit(fresh);
+      history[refresh ? 'replaceState' : 'pushState']({swapped: true}, '', (url || href).split('#')[0] + hash);
+      document.dispatchEvent(new Event('raid:swapped'));  // what was loading for the old page can stop
+      prefetched.clear();  // what we prefetched may be stale now (filters, a sync)
+      swapProgress(false);
+      try { window.raidInit(fresh); } catch (e) { console.error(e); }  // swapped in already: no reload over it
+      if (!refresh && id === 'page') trackView();
       if (!keepScroll) {  // a different page: to its top, or its #anchor
         const anchor = hash && document.getElementById(decodeURIComponent(hash.slice(1)));
         if (anchor) anchor.scrollIntoView(); else window.scrollTo(0, 0);
       }
-      prefetched.clear();  // what we prefetched may be stale now (filters, a sync)
-      swapProgress(false);
     })
-    .catch(() => { location.href = href; });
+    .catch(() => { if (latest()) { swapPending = false; location.href = href; } });
 };
+// The page shown again with what's just been loaded for it (a cast bar's WCL data, a sync's new pulls) - swapped
+// in place, keeping the scroll, instead of a reload (which jumps to the top, and lands on whatever address was
+// current when it started, even after you've clicked on to another pull).
+// Not while you're already on your way to another page: that one's coming.
+window.softRefresh = () => { if (!swapPending) swapTo(location.href, 'page', true, true); };
 document.addEventListener('click', e => {
   const link = swapLink(e.target);
   if (!link || e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
   if (!document.getElementById(link.dataset.swap || 'page')) return;
   e.preventDefault();
   swapTo(hrefOf(link), link.dataset.swap || 'page', !!link.dataset.swap);
+});
+// The night bar's rows scroll sideways on a phone: start each one with its selected boss / pull in view.
+onEach('.nb .nb-row', row => {
+  const on = row.querySelector('.active');
+  if (!on || row.scrollWidth <= row.clientWidth) return;
+  const r = row.getBoundingClientRect(), o = on.getBoundingClientRect();
+  row.scrollLeft += o.left - r.left - (r.width - o.width) / 2;
 });
 // The front page's tab, once it's on screen (not when a hover prefetches it): the nav's "Raid Analysis" reopens it.
 onEach('[data-home-tab]', home => {

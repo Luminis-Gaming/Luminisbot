@@ -287,12 +287,33 @@ def proc_waste(events, names_by_id):
     return out
 
 
-def _worth_keeping(aura, cast, tracked):
+PREPULL_SLACK_MS = 1000  # a buff up this soon after the pull started was put up before it
+
+
+def up_at_start(table, fight_start):
+    """
+    The names of the self-buffs up as the pull began: cast before it (Moonkin Form, a stance, a pre-pull buff), so
+    they're not in its Casts table - but they're still the player's own.
+    """
+    return {a.get('name') for a in (table or {}).get('auras') or []
+            if any((b.get('startTime') or 0) <= fight_start + PREPULL_SLACK_MS for b in a.get('bands') or [])}
+
+
+def _worth_keeping(aura, cast, tracked, prepull=frozenset()):
     """
     Stored auras: the player's own spells and the buffs the Cooldown Manager tracks (all of them without that
-    list) - and raid buffs, usually cast before the pull (not in its casts): raid_buff() needs them.
+    list) - and raid buffs and the self-buffs up from the pull's start (prepull: up_at_start()), cast before the
+    pull (not in its casts): raid_buff() needs the one, uptime() the other - a form kept up all fight isn't 0%.
     """
-    return not tracked or aura['name'] in cast or aura['id'] in tracked or aura['name'] in RAID_BUFFS.values()
+    return (not tracked or aura['name'] in cast or aura['id'] in tracked or aura['name'] in RAID_BUFFS.values()
+            or (aura['kind'] == 'buff' and aura['name'] in prepull))
+
+
+def kept_buffs(table, start, duration, cast, tracked):
+    """A player's own-buffs table (wcl.get_player_tables()' 'buffs') -> the buffs build_extras() stores."""
+    prepull = up_at_start(table, start)
+    return [a for a in auras(table, start, duration, 'buff', keep=set(RAID_BUFFS.values()))
+            if _worth_keeping(a, cast, tracked, prepull)]
 
 
 def build_extras(fight, roster, names_by_id, extras, per_player, parses, resource_events=(), proc_events=(),
@@ -317,9 +338,9 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
         main = h if p.get('role') == 'healer' else d
         tables = per_player.get(ids_by_name.get(name)) or {}
         cast = cast_counts(tables.get('casts')) if tables.get('casts') else None
-        kept = [a for a in (auras(tables.get('buffs'), start, duration, 'buff', keep=set(RAID_BUFFS.values()))
-                            + boss_debuffs(tables.get('debuffs'), start, duration))
-                if _worth_keeping(a, cast or {}, tracked)]
+        kept = (kept_buffs(tables.get('buffs'), start, duration, cast or {}, tracked)
+                + [a for a in boss_debuffs(tables.get('debuffs'), start, duration)
+                   if _worth_keeping(a, cast or {}, tracked)])
         players[name] = {
             'damage': d.get('total') or 0, 'healing': h.get('total') or 0,
             'active_ms': main.get('activeTime') or d.get('activeTime') or h.get('activeTime'),
@@ -340,8 +361,9 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
     # raid_buffs: stored with the raid buffs kept (_worth_keeping) - older pulls can't tell "missing" from "not kept"
     # healer_parses: healers' parses are their healing parse (older pulls: their damage one, fixed by a backfill)
     # applied_hots: buffs on others under another name than the cast (APPLIES) are in (older pulls: backfilled)
+    # prepull_buffs: self-buffs cast before the pull are in (older pulls: backfilled - Moonkin Form showed 0%)
     return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'healer_parses': True, 'applied_hots': True,
-            'duration': duration,
+            'prepull_buffs': True, 'duration': duration,
             'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 

@@ -51,6 +51,9 @@ def register_routes(app):
     get('/admin/raids/character/{name}', _admin_cached(handle_character))
     get('/admin/raids/character/{realm}/{name}', _admin_cached(handle_character))
     get('/admin/raids/report/{code}/{fight_id}/events', handle_events_dump)  # officers only: raw events, for new checks
+    get('/admin/raids/analytics', handle_analytics)  # event managers: who uses all this (analytics.py)
+    app.router.add_post('/admin/raids/hit', handle_hit)  # a page view (PAGE_JS)
+    app.router.add_post('/raids/hit', _public_hit)
 
     # Read-only public mirror for raiders (linked from the "Full analysis" button in Discord)
     get('/raids', _public(handle_overview))
@@ -132,7 +135,8 @@ def _body_key(request, public):
         path = '/admin' + path
     front = path == '/admin/raids'
     by_team = front or path.startswith('/admin/raids/boss/')  # the pages that follow the chosen team
-    query = tuple(sorted((k, v) for k, v in request.query.items() if k not in ('team', 'pick', 'tab' if front else '')))
+    query = tuple(sorted((k, v) for k, v in request.query.items()
+                         if k not in ('team', 'pick', 'tab' if front else '') + VIEW_MARKS))
     return (path, query, public, _team(request) if by_team else None, _home_tab(request) if front else None,
             _data_key())
 
@@ -453,6 +457,68 @@ def _public(handler):
     return wrapper
 
 
+# ============================================================================
+# Analytics (analytics.py): page views, and the event managers' page
+# ============================================================================
+
+VISITOR_COOKIE = 'raid_visitor'
+VISITOR_RE = re.compile(r'^[A-Za-z0-9_-]{16,40}$')
+VIEW_MARKS = ('src', 'u')  # where a view came from (a Discord link, whose): recorded, not part of the page
+
+
+async def handle_hit(request):
+    """
+    A page view, sent by the page itself (PAGE_JS): {'path', 'src', 'u'}. The browser's anonymous id is a cookie,
+    made here the first time. Officers' views carry their admin login.
+    """
+    import secrets
+    from .. import analytics
+    try:
+        data = await request.json()
+    except Exception:
+        return web.Response(status=400)
+    if not isinstance(data, dict):
+        return web.Response(status=400)
+    admin = None
+    if not request.get('public'):
+        from oauth_server import get_session
+        session = get_session(request)
+        if not session:
+            return web.Response(status=401)
+        admin = session.get('username')
+    visitor = request.cookies.get(VISITOR_COOKIE)
+    fresh = not (visitor and VISITOR_RE.match(visitor))
+    if fresh:
+        visitor = secrets.token_urlsafe(16)
+    try:
+        await asyncio.to_thread(analytics.record_view, visitor, str(data.get('path') or ''), data.get('src'),
+                                str(data.get('u') or '') or None, admin)
+    except Exception:
+        logger.warning('[RAIDS] Page view not recorded', exc_info=True)
+    response = web.Response(status=204)
+    if fresh:
+        response.set_cookie(VISITOR_COOKIE, visitor, max_age=2 * 365 * 24 * 3600, path='/', samesite='Lax',
+                            httponly=True)
+    return response
+
+
+async def _public_hit(request):
+    request['public'] = True
+    return await handle_hit(request)
+
+
+async def handle_analytics(request):
+    """Event managers only: who uses the raid analysis (web/analyticsview.py)."""
+    from .. import analytics
+    from . import analyticsview
+    session = _session(request)
+    if not session.get('is_event_manager'):
+        return web.Response(status=403, text='Analytics are for event managers.')
+    key, days = analyticsview.period_key(request.query.get('days'))
+    data = await asyncio.to_thread(analytics.summary, days)
+    return _page('Analytics', session, analyticsview.page(data, key), active='analytics')
+
+
 def public_base_url():
     """Where the public pages live, for links from Discord (RAID_ANALYSIS_PUBLIC_URL, else the OAuth host)."""
     import os
@@ -464,7 +530,7 @@ def public_base_url():
     return f'{callback.scheme}://{callback.netloc}' if callback.netloc else None
 
 
-def _page(title, session, body, waiting=False):
+def _page(title, session, body, waiting=False, active='raids'):
     from oauth_server import ADMIN_CSS, render_nav
     from .icons import iconize
     body = iconize(body)  # the page's emojis -> our own icons (icons.py), before it's cached or sent
@@ -498,7 +564,7 @@ def _page(title, session, body, waiting=False):
 <body>
     <div class="container">
         {brand.markup('/raids' if session is PUBLIC_SESSION else '/admin/raids')}
-        {render_nav(session, active='raids')}
+        {render_nav(session, active=active)}
         {banner}
         <main id="page">{body}</main>
     </div>
@@ -1248,9 +1314,10 @@ def _selected_boss(request, groups):
 def _night_header(request, report, code, pulls, selected, fight_id=None, view='mechanics', chip_href=None,
                   boss_href=None):
     """
-    Night summary, boss tabs, Overall / pull chips and the Mechanics / Players switch. chip_href(fight id or
+    Night summary, then the bar pinned while scrolling: boss chips, Overall / pull chips and the Mechanics / Players
+    switch. chip_href(fight id or
     None for Overall) -> where a pull chip goes - a player's page keeps the player and tab, changing the pull.
-    boss_href((encounter id, difficulty), its pulls) -> where a boss tab goes instead of the boss's page (None:
+    boss_href((encounter id, difficulty), its pulls) -> where a boss chip goes instead of the boss's page (None:
     there) - a player's page keeps the player and tab, changing the boss.
     """
     players_q = view == 'players'
@@ -1260,7 +1327,7 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
     gaps = [b['start_ms'] - a['end_ms'] for a, b in zip(pulls, pulls[1:])]
     avg_gap = sum(gaps) / len(gaps) if gaps else 0
 
-    tabs = []
+    bosses = []
     for (encounter_id, difficulty), boss_pulls in groups.items():
         kill = any(p['kill'] for p in boss_pulls)
         best = min((p['fight_pct'] or 0 for p in boss_pulls if not p['kill']), default=None)
@@ -1268,14 +1335,17 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
         active = ' active' if (encounter_id, difficulty) == selected else ''
         href = ((boss_href((encounter_id, difficulty), boss_pulls) if boss_href else None)
                 or f'/admin/raids/report/{code}?boss={encounter_id}-{difficulty}{"&view=players" if players_q else ""}')
-        tabs.append(f'<a class="boss-tab{active}" data-swap="page" href="{esc(href)}">{boss_portrait(encounter_id, killed=kill)}'
-                    f'<span><strong>{esc(boss_pulls[0]["encounter_name"])}</strong> {difficulty_pill(difficulty)}'
-                    f'<small>{_plural(len(boss_pulls), "pull")} · {state}</small></span></a>')
+        name, level = boss_pulls[0]['encounter_name'], DIFFICULTY_NAMES.get(difficulty, difficulty)
+        bosses.append(f'<a class="boss-chip{active}" data-swap="page" href="{esc(href)}" '
+                      f'title="{esc(name)} ({esc(level)}) - {_plural(len(boss_pulls), "pull")} · {esc(state)}">'
+                      f'{boss_portrait(encounter_id, killed=kill)}<span><strong>{esc(name)}</strong>'
+                      f'<small>{esc(level)} · {_plural(len(boss_pulls), "pull")}'
+                      f'{" · <b>✔ Kill</b>" if kill else f" · best {best:.0f}%" if best is not None else ""}'
+                      f'</small></span></a>')
 
     boss_pulls = groups[selected]
     overall_href = f'/admin/raids/report/{esc(code)}?boss={selected[0]}-{selected[1]}'
-    chips = ['<span class="chips-label">Pulls</span>',
-             f'<a class="pull-chip overall{" active" if fight_id is None else ""}" data-swap="page" '
+    chips = [f'<a class="pull-chip overall{" active" if fight_id is None else ""}" data-swap="page" '
              f'href="{esc(chip_href(None)) if chip_href else overall_href + ("&view=players" if players_q else "")}">'
              f'Overall ({len(boss_pulls)})</a>']
     for number, pull in enumerate(boss_pulls, 1):
@@ -1320,11 +1390,14 @@ def _night_header(request, report, code, pulls, selected, fight_id=None, view='m
                <button class="btn btn-secondary btn-sm" title="Fetch this report again from WCL">🔄 Re-analyze</button>
                {_full_budget_box()}
            </form></div>
-        <div class="boss-tabs">{''.join(tabs)}</div>
     </div>
-    <div class="night-bar">
-        <div class="pull-chips">{''.join(chips)}</div>
+    <div class="night-bar nb">
+        <span class="nb-label">Bosses</span>
+        <div class="nb-row nb-bosses">{''.join(bosses)}</div>
         <nav class="view-tabs">{views}</nav>
+        <i class="nb-rule"></i>
+        <span class="nb-label">Pulls</span>
+        <div class="nb-row pull-chips">{''.join(chips)}</div>
     </div>"""
 
 

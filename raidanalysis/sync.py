@@ -551,6 +551,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                     await _backfill_zones(session)
                     await _backfill_healer_parses(session)
                     await _backfill_applied_hots(session)
+                    await _backfill_prepull_buffs(session)
                 except wcl.WCLRateLimited as e:
                     errors.append(_rate_limited(e))
                 except Exception as e:
@@ -583,6 +584,11 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                 logger.info(f"[RAIDS] Archived {len(archived)} old raid night(s): {', '.join(archived)}")
         except Exception:
             logger.exception("[RAIDS] Pruning old raid logs failed")
+        try:
+            from .analytics import KEEP_DAYS
+            db.prune_analytics(KEEP_DAYS)
+        except Exception:
+            logger.exception("[RAIDS] Pruning old analytics failed")
         try:
             status['current'] = 'Refreshing the Cooldown Manager spell list…'
             from .gamedata import refresh_if_stale
@@ -649,6 +655,46 @@ async def _backfill_applied_hots(session):
                 if table is not None:
                     players[n]['on_others'] = throughput.on_others(table, duration, players[n].get('casts') or {})
         extras['applied_hots'] = True
+        db.set_pull_extras(code, fight_id, extras)
+
+
+PREPULL_BUFFS_PER_RUN = 6
+
+
+async def _backfill_prepull_buffs(session):
+    """
+    Pulls synced before self-buffs cast before the pull were kept (throughput.up_at_start - a Moonkin Form not
+    recast mid-pull showed 0% uptime): the players' own-buffs tables again, adding what's kept now, a few pulls per
+    run, newest first.
+    """
+    from . import gamedata, throughput
+    tracked = gamedata.tracked_ids()
+    for pull in db.pulls_missing_prepull_buffs(PREPULL_BUFFS_PER_RUN):
+        if not await _budget_ok(session):
+            return
+        code, fight_id, extras = pull['report_code'], pull['fight_id'], pull['extras'] or {}
+        players = extras.get('players') or {}
+        who = [n for n, row in players.items() if row.get('casts') is not None]  # the ones with the detail
+        if who:
+            try:
+                ids = await wcl.get_actor_ids(session, code)
+                tables = await wcl.get_player_tables(session, code, fight_id, [ids[n] for n in who if n in ids])
+            except wcl.WCLRateLimited:
+                raise
+            except wcl.WCLError as e:
+                logger.info(f"[RAIDS] Pre-pull buffs for {code}#{fight_id} not fetched: {e}")
+                continue
+            duration = extras.get('duration') or (pull['end_ms'] - pull['start_ms'])
+            for n in who:
+                table = (tables.get(ids.get(n)) or {}).get('buffs')
+                if table is None:
+                    continue
+                row = players[n]
+                have = {(a['name'], a['kind']) for a in row.get('auras') or []}
+                row['auras'] = (row.get('auras') or []) + [
+                    a for a in throughput.kept_buffs(table, pull['start_ms'], duration, row['casts'], tracked)
+                    if (a['name'], a['kind']) not in have]
+        extras['prepull_buffs'] = True
         db.set_pull_extras(code, fight_id, extras)
 
 
