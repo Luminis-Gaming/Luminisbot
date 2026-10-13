@@ -90,7 +90,7 @@ NO_EVENT, NOT_A_NIGHT = 'no_event', 'not_a_night'
 
 def summary(days=None):
     """
-    {'totals', 'daily', 'teams', 'nights', 'users'} over the last `days` days (None: everything kept) - see
+    {'totals', 'daily', 'teams', 'nights', 'users', 'officers'} over the last `days` days (None: everything kept) - see
     db.analytics_*. nights carry 'team' (teams.of_channel: a team key, OTHER, None without an event); teams:
     [(key - a team key, OTHER, NO_EVENT or NOT_A_NIGHT, row)] - unique visitors are counted per group, not summed.
     """
@@ -103,4 +103,4 @@ def summary(days=None):
         key = {'other': teams.OTHER, 'no_event': NO_EVENT, 'not_a_night': NOT_A_NIGHT}.get(row['bucket'])
         groups.append((key or channels.get(row['channel_id']), row))
     return {'totals': db.analytics_totals(days), 'daily': db.analytics_daily(days), 'teams': groups,
-            'nights': nights, 'users': db.analytics_users(days)}
+            'nights': nights, 'users': db.analytics_users(days), 'officers': db.analytics_officers(days)}

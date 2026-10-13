@@ -516,7 +516,7 @@ async def handle_analytics(request):
         return web.Response(status=403, text='Analytics are for event managers.')
     key, days = analyticsview.period_key(request.query.get('days'))
     data = await asyncio.to_thread(analytics.summary, days)
-    return _page('Analytics', session, analyticsview.page(data, key), active='analytics')
+    return _page('Analytics', session, analyticsview.page(data, key))
 
 
 def public_base_url():
@@ -530,7 +530,7 @@ def public_base_url():
     return f'{callback.scheme}://{callback.netloc}' if callback.netloc else None
 
 
-def _page(title, session, body, waiting=False, active='raids'):
+def _page(title, session, body, waiting=False):
     from oauth_server import ADMIN_CSS, render_nav
     from .icons import iconize
     body = iconize(body)  # the page's emojis -> our own icons (icons.py), before it's cached or sent
@@ -564,7 +564,7 @@ def _page(title, session, body, waiting=False, active='raids'):
 <body>
     <div class="container">
         {brand.markup('/raids' if session is PUBLIC_SESSION else '/admin/raids')}
-        {render_nav(session, active=active)}
+        {render_nav(session, active='raids')}
         {banner}
         <main id="page">{body}</main>
     </div>
@@ -781,9 +781,11 @@ async def handle_overview(request):
             f'<span class="pins-label">📌 Pinned</span><div class="pins-list"></div>'
             f'<script type="application/json" class="pins-colors">{json_for_script(CLASS_COLORS)}</script></div>')
 
+    analytics = ('<a class="btn btn-secondary btn-sm" href="/admin/raids/analytics" title="Who uses the raid analysis - '
+                 'event managers only">📈 Analytics</a>' if not public and session.get('is_event_manager') else '')
     body = f"""
     <div class="card">
-        <h1>⚔️ Raid Analysis</h1>
+        <div class="page-head"><h1>⚔️ Raid Analysis</h1>{analytics}</div>
         {_flash(request) if session is not PUBLIC_SESSION else ''}
         <p class="muted">Every raid pull from the guild's Warcraft Logs and from the logs attached to raid
            events, analyzed for deaths, mechanics, interrupts, dispels and consumables.</p>

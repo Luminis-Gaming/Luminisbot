@@ -88,19 +88,49 @@ def _nights_table(nights):
             f'{"".join(rows) or "<tr><td colspan=6 class=muted>Nothing yet.</td></tr>"}</table></div>')
 
 
+def _last_seen(at):
+    return ts(int(at.timestamp() * 1000)) if at else ''
+
+
+LINKED = ('<span class="good-text" title="Opened a link from their own My performance reply: that browser\'s views '
+          'count as theirs">✔ linked</span>')
+NOT_LINKED = ('<span class="muted" title="Hasn\'t opened a link from their My performance reply yet - their page views '
+              'are counted, just not as theirs">not yet</span>')
+
+
 def _users_table(users):
     rows = ''.join(
         f'<tr><td><strong>{esc(u["name"] or "Unknown")}</strong> <span class="small muted">{u["discord_id"]}</span></td>'
-        f'<td class="num">{_n(u["my_performance"])}</td><td class="num">{_n(u["full_analysis"])}</td>'
+        f'<td class="num">{_n(u["my_performance"])}</td><td>{LINKED if u["linked"] else NOT_LINKED}</td>'
+        f'<td class="num">{_n(u["full_analysis"])}</td>'
         f'<td class="num">{_n(u["own_analysis"])}</td><td class="num">{_n(u["views"])}</td>'
-        f'<td class="num">{_n(u["nights"])}</td><td class="small muted">{ts(int(u["last_seen"].timestamp() * 1000))}</td></tr>'
+        f'<td class="num">{_n(u["nights"])}</td><td class="small muted">{_last_seen(u["last_seen"])}</td></tr>'
         for u in users)
     return (f'<div class="table-wrapper"><table class="compact"><tr><th>Discord user</th>'
-            f'<th class="num">My performance</th><th class="num">Full analysis</th>'
+            f'<th class="num">My performance</th><th>Browser</th><th class="num">Full analysis</th>'
             f'<th class="num" title="Opened their own analysis from the My performance reply">Own analysis</th>'
             f'<th class="num">Page views</th><th class="num">Nights viewed</th><th>Last seen</th></tr>'
-            f'{rows or "<tr><td colspan=7 class=muted>Nobody yet - names show up once someone presses My performance.</td></tr>"}'
+            f'{rows or "<tr><td colspan=8 class=muted>Nobody yet - names show up once someone presses My performance.</td></tr>"}'
             f'</table></div>')
+
+
+def _officers_table(officers):
+    rows = ''.join(f'<tr><td><strong>{esc(o["admin_user"])}</strong></td><td class="num">{_n(o["views"])}</td>'
+                   f'<td class="num">{_n(o["nights"])}</td><td class="small muted">{_last_seen(o["last_seen"])}</td></tr>'
+                   for o in officers)
+    return (f'<div class="table-wrapper"><table class="compact"><tr><th>Admin login</th><th class="num">Page views</th>'
+            f'<th class="num">Nights viewed</th><th>Last seen</th></tr>'
+            f'{rows or "<tr><td colspan=4 class=muted>No officer views yet.</td></tr>"}</table></div>')
+
+
+USERS_SUB = ('Discord only tells the bot who presses <strong>My performance</strong>. Everything else - Full analysis '
+             'clicks, page views - gets a name once that person has opened one of the links in their own My '
+             'performance reply in their browser: from then on, and back in time, that browser\'s views are theirs. '
+             '"not yet" with zeros means they read the reply in Discord without opening its links (or browse '
+             'elsewhere).')
+OFFICERS_SUB = ('Views while logged in to the admin site - by admin login, which isn\'t tied to a Discord user. Open a '
+                'link from your own My performance reply in the same browser and these count under your Discord name '
+                'too.')
 
 
 def page(data, key):
@@ -130,4 +160,6 @@ def page(data, key):
     <div class="card">{section_head('🌗', 'By team', 'Raid nights are split by the event they were linked to: its signup channel says the team. A visitor who looked at both teams counts once in each.')}
         {_teams_table(data['teams'])}</div>
     <div class="card">{section_head('📅', 'By raid night')}{_nights_table(data['nights'])}</div>
-    <div class="card">{section_head('👥', 'Discord users')}{_users_table(data['users'])}</div>"""
+    <div class="card">{section_head('👥', 'Discord users', USERS_SUB)}{_users_table(data['users'])}</div>
+    <div class="card">{section_head('🛡️', 'Officers', OFFICERS_SUB)}
+        {_officers_table(data.get('officers') or [])}</div>"""

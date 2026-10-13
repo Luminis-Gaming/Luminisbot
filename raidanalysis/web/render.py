@@ -545,6 +545,9 @@ tr.muted-row td { opacity: 0.7; }
 .dtable tr.dt-detail > td { background: rgba(0,0,0,0.2); padding: 14px 16px; }
 .dt-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
 .dt-split h5 { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+/* A page's title with a button beside it (the front page's Analytics, for event managers) */
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.page-head h1 { margin-bottom: 0; }
 /* The Analytics page (web/analyticsview.py): unique visitors a day - one hue, thin bars rounded at the top, a 2px
    gap between them; the whole column is the hover target, not just the bar */
 .an-chart { position: relative; display: flex; align-items: stretch; gap: 2px; height: 140px; padding: 14px 0 0 30px;

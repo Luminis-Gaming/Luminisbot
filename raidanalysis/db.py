@@ -1554,9 +1554,20 @@ def analytics_users(days):
                          WHERE c.discord_id = x.who::text LIMIT 1)) AS name,
                {_COUNTS},
                COUNT(DISTINCT report_code) FILTER (WHERE kind = 'view') AS nights,
-               MAX(at) AS last_seen
+               MAX(at) AS last_seen,
+               EXISTS (SELECT 1 FROM raid_visitors v2 WHERE v2.discord_id = x.who) AS linked
         FROM ({_ANALYTICS} WHERE TRUE {where}) x
         WHERE who IS NOT NULL
         GROUP BY who
         ORDER BY COUNT(*) FILTER (WHERE kind = 'my_performance') DESC, COUNT(*) DESC
+    """, params, fetch='all') or []
+
+
+def analytics_officers(days):
+    """Views by officers logged in to the admin site (their admin login - not a Discord user): most first."""
+    where, params = _since(days)
+    return _run(f"""
+        SELECT admin_user, COUNT(*) AS views, COUNT(DISTINCT report_code) AS nights, MAX(at) AS last_seen
+        FROM raid_analytics a WHERE kind = 'view' AND admin_user IS NOT NULL {where}
+        GROUP BY admin_user ORDER BY COUNT(*) DESC
     """, params, fetch='all') or []
