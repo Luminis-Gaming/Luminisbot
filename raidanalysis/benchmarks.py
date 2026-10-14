@@ -48,6 +48,7 @@ TOLERANCE_MIN_MS, TOLERANCE_MAX_MS = 3000, 20000
 NEAR_MS = 60000              # a cast this close to a moment counts toward "usually N s early / late"
 MIN_AGREE = 3
 MIN_PULL_MS = 60000          # shorter pulls say nothing about cooldown usage
+MAX_FAILED_LOADS = 10        # top parses whose log won't load before giving up on a spec (empty, retried tomorrow)
 DIFFICULTIES = (3, 4, 5)
 
 THROUGHPUT, POTION, TRINKET, ROTATIONAL = 'throughput', 'potion', 'trinket', 'rotational'
@@ -179,16 +180,22 @@ def _ranking_fields(r):
 
 
 async def fetch_top_players(session, encounter_id, difficulty, class_name, spec, role):
-    """The top TOP_N parses for a spec with their rare casts: [{'rank', 'name', ..., 'phases', 'casts'}]."""
+    """
+    The top TOP_N parses for a spec with their rare casts: ([{'rank', 'name', ..., 'phases', 'casts'}], why) -
+    why says what happened to WCL's parses when none made it ('WCL listed no parses', '40 failed to load: ...'),
+    so an empty benchmark can tell "nobody's ranked" from "we dropped them all".
+    """
     from . import wcl
     rankings = await wcl.get_character_rankings(session, encounter_id, difficulty, class_name, spec,
                                                 metric_for(role))
     players, wrong_spec = [], 0
+    dropped, first_error = Counter(), None
     for ranking in rankings:
         if len(players) >= TOP_N:
             break
         r = _ranking_fields(ranking)
         if r['hidden'] or not r['code'] or not r['fight_id'] or not r['name']:
+            dropped['hidden or without a log'] += 1
             continue
         # Only ever compare a spec with itself: WCL has answered a filter for a brand-new spec
         # (Devourer) with the whole class's rankings. Ranking entries name their spec (v2).
@@ -201,6 +208,10 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
             raise
         except wcl.WCLError as e:
             logger.info(f"[RAIDS] Skipping top parse {r['code']}#{r['fight_id']}: {e}")
+            dropped['failed to load'] += 1
+            first_error = first_error or str(e)
+            if not players and dropped['failed to load'] >= MAX_FAILED_LOADS:
+                break  # WCL won't hand these logs over: don't spend the hour's budget on the whole page
             continue
         if fight.get('spec') and _slug(fight['spec']) != _slug(spec):  # second check: the fight itself
             wrong_spec += 1
@@ -210,6 +221,7 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
         casts = [[e['timestamp'] - fight['start'], analyzer._event_ability(e)] for e in events
                  if counts[analyzer._event_ability(e)] <= TOP_RARE_LIMIT]
         if not casts:
+            dropped['no casts'] += 1
             continue
         duration = fight['end'] - fight['start']
         auras, cast_names, resources, procs, on_others, targets = await _top_auras(session, r, fight, duration, role,
@@ -222,7 +234,14 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
     if wrong_spec:
         logger.warning(f"[RAIDS] Top {spec} {class_name} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
                        f"parse(s) of another spec")
-    return players
+        dropped['another spec'] += wrong_spec
+    why = None
+    if not players:
+        why = (f"WCL listed {len(rankings)} parse(s): "
+               + ', '.join(f'{n} {reason}' for reason, n in dropped.most_common())
+               + (f' ({first_error})' if first_error else '')) if rankings else 'WCL listed no parses'
+        logger.warning(f"[RAIDS] No top {spec} {class_name} on {encounter_id}/{difficulty}: {why}")
+    return players, why
 
 
 async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
@@ -263,17 +282,21 @@ def _slug(name):
     return (name or '').replace(' ', '').lower()
 
 
-async def refresh(session, budget_ok, limit=SPECS_PER_RUN):
-    """Fetch benchmarks for the specs we played lately that have none (or a stale one). Returns how many."""
+async def refresh(session, budget_ok, limit=SPECS_PER_RUN, combos=None, progress=None):
+    """
+    Fetch benchmarks for the specs we played lately that have none (or a stale one) - or for exactly
+    `combos` (db.boss_benchmarks rows: one boss's re-fetch), fresh or not. progress(done) after each.
+    Returns how many.
+    """
     from . import db
     done = 0
-    for combo in db.benchmarks_needed(limit, REFRESH_DAYS, DIFFICULTIES):
+    for combo in db.benchmarks_needed(limit, REFRESH_DAYS, DIFFICULTIES) if combos is None else combos:
         if not await budget_ok(session):
             break
         key = (combo['encounter_id'], combo['difficulty'], combo['class'], combo['spec'])
         try:
-            players = await fetch_top_players(session, *key, combo['role'])
-            db.save_benchmark(*key, metric_for(combo['role']), players, 'ok' if players else 'empty')
+            players, why = await fetch_top_players(session, *key, combo['role'])
+            db.save_benchmark(*key, metric_for(combo['role']), players, 'ok' if players else 'empty', why)
             # Which of their spells are major cooldowns comes from Wowhead's text: look it up now, not
             # whenever the general backlog gets there (a spell without it silently drops out).
             await ensure_spells({sid for p in players for _, sid in p['casts']})
@@ -284,6 +307,8 @@ async def refresh(session, budget_ok, limit=SPECS_PER_RUN):
             logger.warning(f"[RAIDS] Top players for {key} failed: {e}")
             db.save_benchmark(*key, metric_for(combo['role']), [], 'error', str(e)[:300])
         done += 1
+        if progress:
+            progress(done)
     return done
 
 

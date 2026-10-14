@@ -1066,9 +1066,36 @@ class TestTopPlayersSameSpec(unittest.TestCase):
 
         with mock.patch.object(wcl, 'get_character_rankings', get_rankings), \
                 mock.patch.object(wcl, 'get_player_fight', get_fight):
-            top = asyncio.run(benchmarks.fetch_top_players(None, 1, 4, 'DemonHunter', 'Devourer', 'dps'))
+            top, why = asyncio.run(benchmarks.fetch_top_players(None, 1, 4, 'DemonHunter', 'Devourer', 'dps'))
         self.assertEqual([(p['name'], p['spec']) for p in top], [('Devo1', 'Devourer'), ('Devo2', 'Devourer')])
         self.assertEqual([p['rank'] for p in top], [1, 2])
+        self.assertIsNone(why)
+
+    def test_empty_says_why(self):
+        """No top players: whether WCL ranked nobody or we dropped every parse (and stop after a run of failures)."""
+        import asyncio
+        from unittest import mock
+        from raidanalysis import benchmarks, wcl
+        rankings, loads = [], []
+
+        async def get_rankings(session, *args, **kwargs):
+            return rankings
+
+        async def get_fight(session, code, fight_id, name):
+            loads.append(code)
+            raise wcl.WCLError('You do not have permission to view this report')
+
+        with mock.patch.object(wcl, 'get_character_rankings', get_rankings), \
+                mock.patch.object(wcl, 'get_player_fight', get_fight):
+            self.assertEqual(asyncio.run(benchmarks.fetch_top_players(None, 1, 5, 'Warrior', 'Arms', 'dps')),
+                             ([], 'WCL listed no parses'))
+            rankings += [{'name': f'P{i}', 'spec': 'Arms', 'report': {'code': f'C{i}', 'fightID': 1}} for i in range(100)]
+            rankings[0]['spec'] = 'Fury'
+            top, why = asyncio.run(benchmarks.fetch_top_players(None, 1, 5, 'Warrior', 'Arms', 'dps'))
+        self.assertEqual(top, [])
+        self.assertEqual(len(loads), benchmarks.MAX_FAILED_LOADS)  # not the whole page
+        self.assertEqual(why, 'WCL listed 100 parse(s): 10 failed to load, 1 another spec '
+                              '(You do not have permission to view this report)')
 
     def test_spec_from_fight_details(self):
         from raidanalysis import wcl
@@ -1115,6 +1142,62 @@ class TestFullBudget(unittest.TestCase):
             asyncio.run(sync.sync_guild(limit=1, full_budget=True))
             self.assertEqual(reached, ['reports'])
             self.assertEqual(sync._share, sync.WCL_BUDGET_SHARE)  # back to normal after the run
+
+
+class TestBossBenchmarks(unittest.TestCase):
+    """The boss page's re-fetch: every spec played there, however fresh, with the full WCL budget (needs psycopg2)."""
+
+    ROWS = [{'encounter_id': 3379, 'difficulty': 5, 'class': 'Warrior', 'spec': 'Arms', 'role': 'dps',
+             'status': 'empty', 'error': 'WCL listed no parses', 'fetched_at': None, 'top': 0},
+            {'encounter_id': 3379, 'difficulty': 5, 'class': 'DeathKnight', 'spec': 'Blood', 'role': 'tank',
+             'status': 'ok', 'error': None, 'fetched_at': None, 'top': 5}]
+
+    def test_refetches_every_spec_with_full_budget(self):
+        import asyncio
+        from unittest import mock
+        try:
+            from raidanalysis import db, sync
+        except ImportError as e:
+            self.skipTest(f'sync needs {e.name}')
+        seen = {}
+
+        async def refresh(session, budget_ok, limit=None, combos=None, progress=None):
+            seen.update(combos=combos, share=sync._share)
+            progress(len(combos))
+            return len(combos)
+
+        async def ok(session):
+            return True
+
+        async def nothing(*a, **k):
+            return 0
+
+        with mock.patch.object(db, 'boss_benchmarks', lambda e, d: self.ROWS), \
+                mock.patch.object(sync, '_budget_ok', ok), \
+                mock.patch.object(sync, '_note_data_version', lambda: None), \
+                mock.patch('raidanalysis.benchmarks.refresh', refresh), \
+                mock.patch('raidanalysis.spells.fill_missing', nothing):
+            done = asyncio.run(sync.fetch_all_benchmarks(full_budget=True, boss=(3379, 5, 'Nymrissa Wavecaller')))
+        self.assertEqual(done, 2)
+        self.assertEqual(seen['combos'], self.ROWS)  # the fresh one too
+        self.assertEqual(seen['share'], sync.FULL_BUDGET_SHARE)
+        self.assertEqual(sync.status['last_result'][:58], 'Top players on Nymrissa Wavecaller fetched for 2 of 2 spec')
+        self.assertFalse(sync.status['running'])
+
+    def test_card_is_officers_only(self):
+        from unittest import mock
+        try:
+            from raidanalysis import db
+            from raidanalysis.web import routes
+        except ImportError as e:
+            self.skipTest(f'routes need {e.name}')
+        with mock.patch.object(db, 'boss_benchmarks', lambda e, d: self.ROWS):
+            card = routes._benchmarks_card(3379, 5, '/admin/raids/boss/3379/5')
+            self.assertEqual(routes._benchmarks_card(3379, 1, '/admin/raids/boss/3379/1'), '')  # LFR: never fetched
+        self.assertIn('2 specs played here: 1 with top players · 1 without', card)
+        self.assertIn('Arms Warrior — WCL listed no parses', card)
+        self.assertIn('action="/admin/raids/boss/3379/5/benchmarks"', card)
+        self.assertEqual(routes._publicize(f'<p>a</p>{card}<p>b</p>'), '<p>a</p>\n    <p>b</p>')
 
 
 class TestSpecSwap(unittest.TestCase):

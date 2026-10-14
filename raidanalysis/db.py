@@ -1319,9 +1319,10 @@ def benchmarks_needed(limit, refresh_days, difficulties):
               AND b.class = c.class AND b.spec = c.spec
               AND (
                   -- failed lately: wait a day, whatever top players it kept (otherwise a failing combo
-                  -- with old-format players would top this list again right away, every batch)
-                  (b.status = 'error' AND b.fetched_at > NOW() - INTERVAL '1 day')
-                  OR (b.status <> 'error' AND b.fetched_at > NOW() - make_interval(days => %s)
+                  -- with old-format players would top this list again right away, every batch). Empty
+                  -- too: a new boss (or difficulty) gets ranked parses within a day, not a week.
+                  (b.status IN ('error', 'empty') AND b.fetched_at > NOW() - INTERVAL '1 day')
+                  OR (b.status NOT IN ('error', 'empty') AND b.fetched_at > NOW() - make_interval(days => %s)
                       -- fetched before every top parse's spec was checked, or before their auras and
                       -- casts were kept (uptime / casts per minute): fetch again
                       AND (jsonb_array_length(b.players) = 0
@@ -1330,6 +1331,27 @@ def benchmarks_needed(limit, refresh_days, difficulties):
         ORDER BY c.last_played DESC
         LIMIT %s
     """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, list(difficulties), refresh_days, limit), fetch='all')
+
+
+def boss_benchmarks(encounter_id, difficulty):
+    """
+    Every spec we ever played on one boss + difficulty (any team, any night) with its benchmark's state,
+    whatever its age: [{'encounter_id', 'difficulty', 'class', 'spec', 'role', 'status', 'error', 'fetched_at',
+    'top'}] - status None when never fetched. The boss page's re-fetch button.
+    """
+    return _run("""
+        SELECT c.*, b.status, b.error, b.fetched_at, jsonb_array_length(COALESCE(b.players, '[]'::jsonb)) AS top
+        FROM (
+            SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec, MAX(x->>'role') AS role
+            FROM raid_pulls p, jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
+            WHERE p.encounter_id = %s AND p.difficulty = %s
+              AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
+            GROUP BY 1, 2, 3, 4
+        ) c
+        LEFT JOIN raid_benchmarks b ON b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
+                                    AND b.class = c.class AND b.spec = c.spec
+        ORDER BY c.class, c.spec
+    """, (encounter_id, difficulty), fetch='all')
 
 
 def save_benchmark(encounter_id, difficulty, class_name, spec, metric, players, status, error=None):

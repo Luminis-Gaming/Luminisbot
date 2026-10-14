@@ -734,12 +734,13 @@ async def _backfill_zones(session):
             db.save_zone(zone_id, ids)
 
 
-async def fetch_all_benchmarks(full_budget=False):
+async def fetch_all_benchmarks(full_budget=False, boss=None):
     """
     Admin "Fetch all top players" button: benchmarks for every spec / boss we played lately that has
     none (or a stale one), instead of a few per sync - then the Wowhead text for their spells. Stops
     at the WCL budget share like a sync; what's left is picked up by the next syncs (or another click).
-    Returns how many spec / boss combos it fetched, or None if a sync was already running.
+    boss=(encounter id, difficulty, name): the boss page's button - every spec ever played there, fetched
+    again however fresh. Returns how many spec / boss combos it fetched, or None if a sync was already running.
     """
     from . import benchmarks
     from .spells import fill_missing
@@ -751,16 +752,27 @@ async def fetch_all_benchmarks(full_budget=False):
         status.update(running=True, last_error=None, current='Fetching top players…')
         started = time.time()
         done, error, points = 0, None, None
-        total = len(db.benchmarks_needed(10000, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES))
+        if boss:
+            combos = [c for c in db.boss_benchmarks(*boss[:2]) if c['difficulty'] in benchmarks.DIFFICULTIES]
+            total = len(combos)
+        else:
+            total = len(db.benchmarks_needed(10000, benchmarks.REFRESH_DAYS, benchmarks.DIFFICULTIES))
+        what = f' on {boss[2]}' if boss else ''
         try:
             async with aiohttp.ClientSession() as session:
                 spent_before = status['wcl']['spent'] if await _budget_ok(session) and status.get('wcl') else None
-                while True:
-                    status['current'] = f'Fetching top players… {done}/{total} specs'
-                    fetched = await benchmarks.refresh(session, _budget_ok, limit=BENCHMARK_BATCH)
-                    done += fetched
-                    if fetched < BENCHMARK_BATCH:  # nothing left, or the WCL budget said stop
-                        break
+                def progress(n):
+                    status['current'] = f'Fetching top players{what}… {n}/{total} specs'
+                if boss:
+                    progress(0)
+                    done = await benchmarks.refresh(session, _budget_ok, combos=combos, progress=progress)
+                else:
+                    while True:
+                        progress(done)
+                        fetched = await benchmarks.refresh(session, _budget_ok, limit=BENCHMARK_BATCH)
+                        done += fetched
+                        if fetched < BENCHMARK_BATCH:  # nothing left, or the WCL budget said stop
+                            break
                 if done < total and not await _budget_ok(session):
                     error = _budget_message()
                 if spent_before is not None and status.get('wcl'):
@@ -780,8 +792,9 @@ async def fetch_all_benchmarks(full_budget=False):
                     if points is not None else '')
             _note_data_version()
             status.update(running=False, current=None, last_finished=time.time(), last_new=0,
-                          last_result=f"Top players fetched for {done} spec/boss combo(s) in "
+                          last_result=f"Top players{what} fetched for {done} "
+                                      f"{f'of {total} spec(s)' if boss else 'spec/boss combo(s)'} in "
                                       f"{time.time() - started:.0f}s{cost}"
-                                      + (f" - {left} left for later syncs" if left else ''),
+                                      + (f" - {left} left for later syncs" if left and not boss else ''),
                           last_error=error)
         return done

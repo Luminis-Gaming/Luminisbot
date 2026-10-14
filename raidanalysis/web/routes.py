@@ -74,6 +74,7 @@ def register_routes(app):
     get('/raids/character/{name}', _public(handle_character))
     get('/raids/character/{realm}/{name}', _public(handle_character))
     app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/guides', _changes(handle_rescan_guides))
+    app.router.add_post('/admin/raids/boss/{encounter_id}/{difficulty}/benchmarks', _changes(handle_boss_benchmarks))
     sync.after_new_data.append(warm_pages)  # a sync that brought something: the busiest pages built right away
     try:  # ...and once after starting (a deploy starts with nothing kept)
         app.on_startup.append(_warm_after_start)
@@ -365,6 +366,7 @@ _PUBLIC_STRIP = [
     re.compile(r'<td>\s*<form[^>]*class="tag-form".*?</form>\s*</td>', re.S),   # tag buttons (table cells)
     re.compile(r'<form[^>]*class="tag-form".*?</form>', re.S),
     re.compile(r'<form[^>]*action="[^"]*/(sync|guides|benchmarks)".*?</form>', re.S),  # sync / re-analyze / rescan
+    re.compile(r'<div class="card" id="benchmarks">.*?<!--/benchmarks-->', re.S),   # boss page: top-player fetch state
     re.compile(r'<th>Tag</th>'),
     re.compile(r'<span class="admin-only">.*?</span>', re.S),                   # officer-only hints
 ]
@@ -2160,7 +2162,8 @@ def _benchmark_status(data):
         return (f"The top {esc(data['label'])} on this boss haven't been fetched yet - the sync fetches a few "
                 f"specs per run and the rest overnight, so check back tomorrow.")
     if bench['status'] == 'empty':
-        return f"Warcraft Logs has no public top parses for {esc(data['label'])} on this boss yet."
+        why = f" ({esc(bench['error'])} - tried again daily)" if bench.get('error') else ''
+        return f"Warcraft Logs has no public top parses for {esc(data['label'])} on this boss yet{why}."
     if bench['status'] == 'error' and not bench['players']:
         return f"Fetching the top {esc(data['label'])} failed ({esc(bench['error'] or '')}) - it's retried tomorrow."
     return ''
@@ -2472,6 +2475,7 @@ async def handle_boss(request):
         {subsection('Scores', scoreboard_table(analyzer.scoreboard(analyses, tags), show_avoidable=_has_avoidable(tags)))}
     </div>
     {_guides_card(encounter_id, difficulty, base)}
+    {_benchmarks_card(encounter_id, difficulty, base)}
     <div class="card" id="mechanics">
         {section_head('🎯', 'Mechanics', "Every enemy ability that hit the raid on this boss, and how it's tagged.")}
         <p class="muted small"> Tags marked <em>auto</em> come
@@ -2526,6 +2530,60 @@ def _guides_card(encounter_id, difficulty, here):
         {rescan}
         {table}
     </div>"""
+
+
+def _benchmarks_card(encounter_id, difficulty, base):
+    """Officers only (stripped from the public page): this boss's top-player benchmarks per spec, and a re-fetch."""
+    if difficulty not in benchmarks.DIFFICULTIES:
+        return ''
+    rows = db.boss_benchmarks(encounter_id, difficulty)
+    if not rows:
+        return ''
+    label = lambda r: f"{benchmarks.readable(r['spec'])} {benchmarks.readable(r['class'])}"  # noqa: E731
+    have = sum(1 for r in rows if r['top'])
+    never = sum(1 for r in rows if r['status'] is None)
+    problems = [r for r in rows if not r['top'] and r['status'] in ('empty', 'error')]
+    counts = [f'{have} with top players'] + ([f'{len(problems)} without'] if problems else []) \
+        + ([f'{never} not fetched yet'] if never else [])
+    fetched = [r['fetched_at'] for r in rows if r['fetched_at']]
+    oldest = f" · oldest fetched {ts(min(fetched).timestamp() * 1000, 'date')}" if fetched else ''
+    items = ''.join(f"<li>{esc(label(r))} — {'failed: ' if r['status'] == 'error' else ''}"
+                    f"{esc(r['error'] or 'no reason recorded (fetched before reasons were kept)')}</li>"
+                    for r in problems)
+    return f"""
+    <div class="card" id="benchmarks">
+        {section_head('⚔️', 'Top-player benchmarks', 'The top 5 parses per spec on Warcraft Logs, for the Cooldowns '
+                      'and Rotation tabs.')}
+        <p class="muted small">{len(rows)} spec{'s' if len(rows) != 1 else ''} played here: {' · '.join(counts)}{oldest}.</p>
+        {f'<ul class="small muted">{items}</ul>' if items else ''}
+        <form method="post" action="{base}/benchmarks" class="inline-form">
+            <button class="btn btn-secondary btn-sm"
+                    title="Fetches every spec again, however fresh - about {1 + benchmarks.TOP_N} WCL requests each, with up to 98% of the hour's WCL points">
+                ⚔️ Re-fetch top players</button>
+        </form>
+    </div><!--/benchmarks-->"""
+
+
+async def handle_boss_benchmarks(request):
+    """POST .../boss/{id}/{difficulty}/benchmarks - this boss's top players again, every spec, full WCL budget."""
+    _session(request)
+    try:
+        encounter_id, difficulty = int(request.match_info['encounter_id']), int(request.match_info['difficulty'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    back = f'/admin/raids/boss/{encounter_id}/{difficulty}'
+    if sync.status['running']:
+        raise web.HTTPFound(back + '?error=' + quote('A sync is already running - try again when it is done.'))
+    if sync._paused():
+        raise web.HTTPFound(back + '?error=' + quote(sync._pause_message()))
+    pulls = db.get_boss_pulls(encounter_id, difficulty)
+    if not pulls:
+        raise web.HTTPNotFound()
+    sync.status.update(running=True, current='Fetching top players…')
+    asyncio.create_task(sync.fetch_all_benchmarks(full_budget=True, boss=(encounter_id, difficulty,
+                                                                          pulls[-1]['encounter_name'])))
+    raise web.HTTPFound(back + '?msg=' + quote('Re-fetching the top players for every spec on this boss in the '
+                                               'background - progress shows at the top of the page.'))
 
 
 async def handle_rescan_guides(request):
