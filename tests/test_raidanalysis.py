@@ -385,6 +385,21 @@ class TestProgstats(unittest.TestCase):
         self.assertEqual(progstats.share_needing_more(stats['bins'], 125), 0.75)
         self.assertIsNone(progstats.parse({'data': {'encounterStatSummaryV2': {'killCount': 0}}}))
 
+    def test_fractional_bins_become_whole_pulls(self):
+        """progstats' first bin runs from -0.9 to 2.1 pulls: that's '1-2 pulls', not '-1-2'."""
+        from raidanalysis import progstats
+        from raidanalysis.web.render import pull_histogram
+        payload = {'data': {
+            'encounterStatSummaryV2': {'killCount': 60},
+            'encounterStatOverviewV2': {'metricType': ['PULL_COUNT'] * 3, 'binStart': [-0.9, 2.1, 5.1],
+                                        'binEnd': [2.1, 5.1, 8.1], 'count': [39, 20, 1]}}}
+        bins = progstats.parse(payload)['bins']
+        self.assertEqual(bins, [(1, 3, 39), (3, 6, 20), (6, 9, 1)])
+        chart = pull_histogram(bins, 4)
+        self.assertIn('<title>1–2 pulls: 39 guilds</title>', chart)
+        self.assertIn('<title>3–5 pulls: 20 guilds</title>', chart)
+        self.assertNotIn('-1', chart.split('<title>', 1)[1].split('</title>')[0])
+
 
 class TestConsumableUses(unittest.TestCase):
     def test_potions_prepots_and_healthstones(self):

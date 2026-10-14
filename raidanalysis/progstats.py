@@ -7,6 +7,7 @@ GraphQL endpoint its own site uses, cache each boss for a day (so roughly one
 request per boss per day) and credit it wherever the numbers are shown.
 """
 import logging
+import math
 import time
 
 import aiohttp
@@ -66,8 +67,11 @@ def parse(payload):
     for metric, start, end, count in zip(overview.get('metricType') or [], overview.get('binStart') or [],
                                          overview.get('binEnd') or [], overview.get('count') or []):
         if metric == 'PULL_COUNT':  # one row per bin per day - fold the days together
-            key = (round(start, 3), round(end, 3))
-            grouped[key] = grouped.get(key, 0) + (count or 0)
+            # Its bins have fractional edges (-0.9 to 2.1): snapped to the whole pulls they hold, [start, end),
+            # and nobody kills a boss in under one pull
+            key = (max(1, math.ceil(start)), math.ceil(end))
+            if key[1] > key[0]:
+                grouped[key] = grouped.get(key, 0) + (count or 0)
     bins = [(start, end, count) for (start, end), count in sorted(grouped.items())]
     if not summary.get('killCount') or not bins:
         return None

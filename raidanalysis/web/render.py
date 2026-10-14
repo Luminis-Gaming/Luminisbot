@@ -3125,7 +3125,8 @@ def sparkline(values, low=0, high=100):
 def pull_histogram(bins, our_pulls=None, killed=False):
     """
     How many pulls the guilds that killed a boss needed (single series), with a labelled
-    marker for where we are. bins: [(start, end, count)]. Hovering a bar names its range under it.
+    marker for where we are. bins: [(start, end, count)] in whole pulls, end exclusive (progstats.parse).
+    Hovering a bar names its range under it.
     """
     if not bins:
         return ''
@@ -3140,7 +3141,7 @@ def pull_histogram(bins, our_pulls=None, killed=False):
     parts = [f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top + inner_h}" y2="{top + inner_h}"/>']
     for i, (start, end, count) in enumerate(bins):
         h = inner_h * count / peak
-        span = f'{start:.0f}–{end:.0f}'
+        span = f'{start:.0f}' if end - start <= 1 else f'{start:.0f}–{end - 1:.0f}'
         parts.append(f'<g data-at="b{i}"><title>{span} pulls: {count} guild{"s" if count != 1 else ""}</title>'
                      f'<rect class="hit" x="{x(start):.1f}" y="{top}" width="{x(end) - x(start):.1f}" height="{inner_h}"/>'
                      f'<rect class="col" x="{x(start) + 1:.1f}" y="{top + inner_h - h:.1f}" '
