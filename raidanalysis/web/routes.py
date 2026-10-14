@@ -2379,11 +2379,13 @@ async def handle_boss(request):
         progress = analyzer.phase_progress(
             [{'phases': p.get('phases'), 'duration': p['end_ms'] - p['start_ms']} for p in nd['pulls']], phase_meta)
         phase_ids |= {ph['id'] for ph in progress}
-        heat_nights.append((esc(nd['label']), {ph['id']: ph['reached'] for ph in progress}, len(nd['pulls'])))
+        heat_nights.append((esc(nd['label']), {ph['id']: ph['reached'] for ph in progress}, len(nd['pulls']),
+                            sum(1 for p in nd['pulls'] if p['kill'])))
     phase_order = [(pid, (phase_meta.get(str(pid)) or {}).get('name') or f'Phase {pid}') for pid in sorted(phase_ids)]
     heat_html = ('<div class="card">' + section_head(
         '🧭', 'How far we got, night by night',
-        "Pulls that reached each phase; darker = more of the night's pulls got there.")
+        "How many of each night's pulls made it to each phase - the deeper the phase, the rarer its colour. "
+        "The lit cell is as far as that night got.")
         + f'{phase_heatmap(list(reversed(heat_nights)), phase_order)}</div>' if len(phase_order) > 1 else '')
     trends_html = _player_trends(night_data, encounter_id, difficulty, team, public=session is PUBLIC_SESSION)
     comparison_html = await _progstats_card(encounter_id, pulls) if difficulty == progstats.MYTHIC else ''

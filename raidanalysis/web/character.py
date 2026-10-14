@@ -18,8 +18,8 @@ from urllib.parse import quote
 from .. import armory
 from .performance import WIPE_PARSE_NOTE, parse_html
 from .players import _band, _class_label
-from .render import (CLASS_COLORS, DIFFICULTY_NAMES, ROLE_ICONS, boss_portrait, difficulty_pill, esc, section_head,
-                     sparkline)
+from .render import (CLASS_COLORS, DIFFICULTY_NAMES, ROLE_ICONS, boss_portrait, chart_svg, difficulty_pill, esc,
+                     section_head, sparkline, x_ticks)
 
 LOGS_SHOWN = 15          # raid logs listed before "Show all"
 RECENT_NIGHTS = 3        # "lately" = the last this many nights, against the ones before
@@ -88,16 +88,8 @@ def _entry_point(entry, name):
 # ============================================================================
 
 def _x_labels(points, x, y_text):
-    step = max(1, -(-len(points) // 12))  # at most ~12 dates along the bottom
-    shown = [i for i in range(len(points)) if i % step == 0]
-    last = len(points) - 1
-    if shown[-1] != last:  # the last night always - in place of the one before when they'd overlap
-        if last - shown[-1] < max(2, step * 0.7) and len(shown) > 1:
-            shown[-1] = last
-        else:
-            shown.append(last)
-    return ''.join(f'<text x="{x(i):.1f}" y="{y_text}" text-anchor="middle">{_date(points[i]["date"])}</text>'
-                   for i in shown)
+    """A date under every night; the page shows as many as fit (render.x_ticks) and the hovered night's."""
+    return x_ticks([(x(i), _date(p['date']), None, i) for i, p in enumerate(points)], y_text)
 
 
 def _segments(points, key, x, y):
@@ -132,8 +124,7 @@ def trend_chart(points, first_kills=()):
     def y(v):
         return top + inner_h * (1 - max(0.0, min(100.0, v)) / 100)
 
-    parts = [f'<svg class="chart ch-chart" viewBox="0 0 {width} {height}" role="img" '
-             f'aria-label="Execution score and parse per raid night">']
+    parts = []
     for v in (0, 25, 50, 75, 100):
         parts.append(f'<line class="grid" x1="{left}" x2="{width - right}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>'
                      f'<text class="axis-label" x="{left - 8}" y="{y(v) + 4:.1f}" text-anchor="end">{v}</text>')
@@ -160,10 +151,9 @@ def trend_chart(points, first_kills=()):
                     f'fill="{color}"')
             dots += (f'<rect class="mark" x="{x(i) - 4.5:.1f}" y="{y(p["parse"]) - 4.5:.1f}" width="9" height="9" '
                      f'transform="rotate(45 {x(i):.1f} {y(p["parse"]):.1f})" {fill}/>')
-        parts.append(f'<a href="{esc(p["href"])}"><title>{esc(chr(10).join(tip))}</title>{dots}</a>')
+        parts.append(f'<a data-at="{i}" href="{esc(p["href"])}"><title>{esc(chr(10).join(tip))}</title>{dots}</a>')
     parts.append(_x_labels(points, x, height - 6))
-    parts.append('</svg>')
-    return ''.join(parts)
+    return chart_svg(width, height, 'Execution score and parse per raid night', ''.join(parts), 'ch-chart')
 
 
 def mistakes_chart(points):
@@ -180,9 +170,7 @@ def mistakes_chart(points):
     def y(v):
         return top + inner_h * (1 - v / peak)
 
-    parts = [f'<svg class="chart ch-chart small" viewBox="0 0 {width} {height}" role="img" '
-             f'aria-label="Early deaths and avoidable hits per pull, per raid night">',
-             f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top + inner_h}" y2="{top + inner_h}"/>',
+    parts = [f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top + inner_h}" y2="{top + inner_h}"/>',
              f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top:.1f}" y2="{top:.1f}"/>',
              f'<text class="axis-label" x="{left - 8}" y="{top + 4:.1f}" text-anchor="end">{peak:.1f}</text>',
              f'<text class="axis-label" x="{left - 8}" y="{top + inner_h + 4:.1f}" text-anchor="end">0</text>']
@@ -195,11 +183,11 @@ def mistakes_chart(points):
             h = inner_h * p[key] / peak
             bars += (f'<rect x="{cx - bar - 1 + k * (bar + 2):.1f}" y="{top + inner_h - h:.1f}" width="{bar:.1f}" '
                      f'height="{max(h, 0):.1f}" rx="2" fill="{color}"/>')
-        parts.append(f'<a href="{esc(p["href"])}"><title>{esc(tip)}</title>'
+        parts.append(f'<a data-at="{i}" href="{esc(p["href"])}"><title>{esc(tip)}</title>'
                      f'<rect class="ch-hit" x="{cx - slot / 2:.1f}" y="{top}" width="{slot:.1f}" height="{inner_h}"/>{bars}</a>')
     parts.append(_x_labels(points, lambda i: left + slot * (i + 0.5), height - 5))
-    parts.append('</svg>')
-    return ''.join(parts)
+    return chart_svg(width, height, 'Early deaths and avoidable hits per pull, per raid night', ''.join(parts),
+                     'ch-chart small')
 
 
 def _lately(points, key, label, higher_better=True):

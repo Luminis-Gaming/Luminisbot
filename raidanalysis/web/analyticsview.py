@@ -37,9 +37,13 @@ def _daily_chart(daily):
         tip = f"{day:%a %d %b}: {d['visitors']} unique visitor{'s' if d['visitors'] != 1 else ''} · {d['views']} views"
         bars.append(f'<div class="an-day has-tip" data-tip="{esc(tip)}" title="{esc(tip)}">'
                     + (f'<i style="height:{100 * d["visitors"] / top:.1f}%"></i>' if d['visitors'] else '') + '</div>')
+    # a date under ~every sixth of the period (each under its own day), the first and last always
+    every = max(1, round(len(days) / 6))
+    marks = sorted({0, len(days) - 1} | set(range(0, len(days) - every // 2, every)))
+    axis = ''.join(f'<span style="left:{100 * (i + 0.5) / len(days):.2f}%">{days[i]:%d %b}</span>' for i in marks)
     return (f'<div class="an-chart" role="img" aria-label="Unique visitors per day, at most {top}">'
             f'<span class="an-top">{top}</span>{"".join(bars)}</div>'
-            f'<div class="an-axis"><span>{first:%d %b}</span><span>{last:%d %b}</span></div>')
+            f'<div class="an-axis"><div>{axis}</div></div>')
 
 
 def _counts_cells(row):

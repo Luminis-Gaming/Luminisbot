@@ -6,8 +6,8 @@ with the pull-by-pull breakdown. Numbers come from analyzer.player_report.
 import re
 from urllib.parse import quote
 
-from .render import (CLASS_COLORS, ICON_BASE, ROLE_ICONS, SERIES_PULL, esc, fmt_amount, fmt_duration, guide_button,
-                     per_pull_columns, player_name, safe_icon, sparkline)
+from .render import (CLASS_COLORS, ICON_BASE, ROLE_ICONS, SERIES_PULL, chart_svg, esc, fmt_amount, fmt_duration,
+                     guide_button, per_pull_columns, player_name, safe_icon, sparkline, x_ticks)
 
 SPEC_ICON = 'https://assets.rpglogs.com/img/warcraft/icons/large/{cls}-{spec}.jpg'  # WCL's, as logs name specs
 
@@ -544,7 +544,7 @@ def trends_card(night_data, trend_href, owners=None, show_discord=True):
 
 
 def trend_chart(points):
-    """Score per night (single series, 0-100) with each value printed beside its point."""
+    """Score per night (single series, 0-100) with each value printed beside its point while they fit."""
     if len(points) < 2:
         return ''
     width, height, left, right, top, bottom = 900, 220, 40, 20, 20, 30
@@ -554,7 +554,7 @@ def trend_chart(points):
     def y(v):
         return top + inner_h * (1 - v / 100)
 
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Score per night">']
+    parts = []
     for v in (0, 50, 70, 85, 100):
         parts.append(f'<line class="grid" x1="{left}" x2="{width - right}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>'
                      f'<text x="{left - 8}" y="{y(v) + 4:.1f}" text-anchor="end">{v}</text>')
@@ -563,12 +563,15 @@ def trend_chart(points):
                  f'stroke-linejoin="round"/>')
     for i, (label, v) in enumerate(points):
         cx = left + i * step
-        parts.append(f'<circle cx="{cx:.1f}" cy="{y(v):.1f}" r="5" fill="{SERIES_PULL}" stroke="#161a2c" '
-                     f'stroke-width="2"><title>{esc(label)}: {v}</title></circle>'
-                     f'<text x="{cx:.1f}" y="{y(v) - 10:.1f}" text-anchor="middle">{v}</text>'
-                     f'<text x="{cx:.1f}" y="{height - 8}" text-anchor="middle">{esc(label)}</text>')
-    parts.append('</svg>')
-    return ''.join(parts)
+        x0, x1 = max(left, cx - step / 2), min(width - right, cx + step / 2)
+        parts.append(f'<g data-at="{i}"><title>{esc(label)}: {v}</title>'
+                     f'<rect class="hit" x="{x0:.1f}" y="{top}" width="{x1 - x0:.1f}" height="{inner_h}"/>'
+                     f'<circle class="mark" cx="{cx:.1f}" cy="{y(v):.1f}" r="5" fill="{SERIES_PULL}" stroke="#161a2c" '
+                     f'stroke-width="2"/></g>')
+        if len(points) <= 16:
+            parts.append(f'<text x="{cx:.1f}" y="{y(v) - 10:.1f}" text-anchor="middle">{v}</text>')
+    parts.append(x_ticks([(left + i * step, label, None, i) for i, (label, _) in enumerate(points)], height - 8))
+    return chart_svg(width, height, 'Score per night', ''.join(parts))
 
 
 def _subscore_cells(row):

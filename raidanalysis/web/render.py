@@ -111,11 +111,20 @@ th[data-sort]:hover { color: var(--text); }
 .table-wrapper { overflow-x: auto; }
 
 /* Charts */
-.chart { width: 100%; height: auto; display: block; margin: 10px 0 18px; }
-.chart text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+/* Every chart (chart_svg) sits in a box that scrolls sideways on a phone rather than shrinking its text away; the
+   page script keeps the text ~11px at any width (--k: viewBox units per screen pixel) and thins the labels along the
+   bottom (x_ticks) to what fits. A hovered column shows its own label (.on) over the ones it would collide with. */
+.chart-wrap { overflow-x: auto; overflow-y: hidden; contain: inline-size; }  /* never widens a grid or flex cell */
+.chart { width: 100%; min-width: 640px; height: auto; display: block; margin: 10px 0 18px; }
+.chart text { fill: var(--muted); font-size: calc(11px * var(--k, 1)); font-family: inherit; }
 .chart .grid { stroke: rgba(255,255,255,0.06); }
 .chart .axis-label { fill: var(--faint); }
-.chart a:hover circle.mark { stroke: #fff; stroke-width: 2; }
+.chart a:hover circle.mark, .chart [data-at]:hover circle.mark { stroke: #fff; stroke-width: 2; }
+.chart .hit { fill: transparent; }
+.chart [data-at]:hover > .hit, .chart [data-at]:hover > a > .hit { fill: rgba(255,255,255,0.045); }
+.chart [data-at]:hover .col { filter: brightness(1.18); }
+.chart .x-tick.extra, .chart .x-tick.off, .chart .x-tick.cover, .chart .x-hover { visibility: hidden; }
+.chart .x-tick.on, .chart .x-hover.on { visibility: visible; fill: var(--text); font-weight: 600; }
 /* Sections: every card opens with a header (sec-head, or a plain h2 styled alike); parts inside a
    card are sub-sections with their own divider + label - nothing runs into the next thing. */
 .card { margin-bottom: 20px; }
@@ -548,17 +557,22 @@ tr.muted-row td { opacity: 0.7; }
 /* A page's title with a button beside it (the front page's Analytics, for event managers) */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .page-head h1 { margin-bottom: 0; }
-/* The Analytics page (web/analyticsview.py): unique visitors a day - one hue, thin bars rounded at the top, a 2px
-   gap between them; the whole column is the hover target, not just the bar */
-.an-chart { position: relative; display: flex; align-items: stretch; gap: 2px; height: 140px; padding: 14px 0 0 30px;
+/* The Analytics page (web/analyticsview.py): unique visitors a day - one hue, thin bars rounded at the top, each 70%
+   of its day's column so a long period's bars thin out rather than vanish behind fixed gaps; the whole column is the
+   hover target, not just the bar */
+.an-chart { position: relative; display: flex; align-items: stretch; height: 140px; padding: 14px 0 0 30px;
     border-bottom: 1px solid var(--border); }
 .an-top { position: absolute; left: 0; top: 0; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .an-chart::before { content: ''; position: absolute; left: 30px; right: 0; top: 14px; border-top: 1px dashed var(--border); }
 .an-day { flex: 1 1 0; min-width: 0; display: flex; align-items: flex-end; cursor: default; }
-.an-day i { display: block; width: 100%; max-width: 22px; margin: 0 auto; min-height: 2px; border-radius: 4px 4px 0 0;
+.an-day i { display: block; width: 70%; max-width: 22px; margin: 0 auto; min-height: 2px; border-radius: 4px 4px 0 0;
     background: var(--accent); }
 .an-day:hover i { background: color-mix(in srgb, var(--accent) 70%, #fff); }
-.an-axis { display: flex; justify-content: space-between; padding: 4px 0 0 30px; font-size: 11px; color: var(--faint); }
+.an-axis { padding: 4px 0 0 30px; font-size: 11px; color: var(--faint); }
+.an-axis > div { position: relative; height: 1.4em; }
+.an-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.an-axis span:first-child { transform: none; }
+.an-axis span:last-child { transform: translateX(-100%); }
 /* The night's bosses, pull chips + Mechanics / Players: pinned to the top while scrolling a long page */
 .night-bar { position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
     margin: -8px 0 20px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius);
@@ -1330,6 +1344,37 @@ table.bars td.bar-cell { width: 55%; }
 /* Phase heatmap + wipe reasons + trends */
 table.heatmap td.heat { background: rgba(116,132,236,var(--a)); color: var(--text); font-weight: 600; }
 table.heatmap td.heat small { color: var(--muted); font-weight: 400; }
+/* How far we got (phase_heatmap): a column per phase in WoW item-quality colours - the deeper the phase, the rarer
+   (common grey, uncommon, rare, epic, legendary orange for the last) - and a gold Kill column at the end. Each cell:
+   how many of the night's pulls got there, its share, and a glowing bar as long as that share. The cell furthest into
+   the fight each night (.front) is lit in its colour - read down that edge to see the raid push deeper. */
+.reach-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 14px; padding: 12px 16px;
+    border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--c) 35%, var(--border));
+    background: linear-gradient(100deg, color-mix(in srgb, var(--c) 16%, transparent), transparent 70%); }
+.reach-head .rh-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); }
+.reach-head strong { color: var(--c); font-size: 17px; text-shadow: 0 0 18px color-mix(in srgb, var(--c) 45%, transparent); }
+.reach-head .rh-more { color: var(--muted); font-size: 13px; }
+table.reach-map th.ph { color: var(--c); white-space: nowrap; }
+table.reach-map th.ph::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 7px;
+    border-radius: 2px; background: var(--c); box-shadow: 0 0 8px var(--c); vertical-align: 1px; }
+table.reach-map td.rc { min-width: 104px; padding: 8px 12px; border-left: 2px solid transparent; }
+table.reach-map td.rc.front { background: linear-gradient(90deg, color-mix(in srgb, var(--c) 16%, transparent),
+    color-mix(in srgb, var(--c) 4%, transparent)); border-left-color: var(--c); }
+.rc-num { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px;
+    font-variant-numeric: tabular-nums; }
+.rc-num b { font-size: 14px; color: var(--text); }
+.rc .rc-num b { color: color-mix(in srgb, var(--c) 35%, var(--text)); }
+.rc-num span { font-size: 11.5px; color: var(--faint); }
+.rc-bar { height: 6px; border-radius: 99px; background: rgba(255,255,255,0.06); overflow: hidden; }
+.rc-bar i { display: block; height: 100%; width: var(--w); border-radius: inherit;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--c) 45%, transparent), var(--c));
+    box-shadow: 0 0 10px color-mix(in srgb, var(--c) 55%, transparent); }
+td.rc.none .rc-num b { color: var(--faint); font-weight: 400; }
+table.reach-map tr.rc-total td { border-top: 1px solid var(--border); background: rgba(255,255,255,0.025); }
+table.reach-map tr.rc-total td:first-child { font-weight: 700; }
+.q-common { --c: #b8bfd3; } .q-uncommon { --c: #3fd46b; } .q-rare { --c: #3d96ff; } .q-epic { --c: #b36dff; }
+.q-legendary { --c: #ff9330; } .q-kill { --c: #f1cf6b; }
 .reason { font-weight: 600; }
 .reason-detail { display: block; font-size: 12px; color: var(--muted); }
 .trend-up { color: var(--good); font-weight: 600; }
@@ -1778,6 +1823,64 @@ onEach('.tl', tl => {
   });
   inner.addEventListener('pointerleave', () => { head.hidden = true; });
   new ResizeObserver(drawAxis).observe(scroll);
+});
+// Charts (chart_svg): the text kept ~11px at any width - --k scales it against the viewBox, within limits - and the
+// labels along the bottom (x_ticks) thinned to the smallest 1/2/5 step whose labels don't touch at this width
+// (numbered ticks by value, others by position), then the first and the last where there's room - the last in place
+// of the one before it on a dated axis. Hovering a column (anything with data-at) shows its own label (.x-tick or
+// .x-hover with the same data-at), hiding the shown ones it would run into.
+const CHART_STEPS = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000];
+const fitChart = svg => {
+  const view = svg.viewBox.baseVal, width = svg.clientWidth;
+  if (!width || !view || !view.width) return;  // not on screen yet (a closed tab or row) - the observer comes back
+  const k = Math.min(1.25, Math.max(0.55, view.width / width)).toFixed(3);
+  if (svg.dataset.k === k) return;  // labels only collide differently when the text size does
+  svg.dataset.k = k;
+  svg.style.setProperty('--k', k);
+  const ticks = [...svg.querySelectorAll('.x-tick')];
+  if (!ticks.length) return;
+  ticks.forEach(t => t.classList.remove('extra', 'off'));
+  const box = ticks.map(t => { const b = t.getBBox(); return [b.x, b.x + b.width]; });
+  const numbered = ticks.every(t => t.dataset.v !== undefined);
+  const pos = i => numbered ? +ticks[i].dataset.v : i;
+  const gap = 6 * k;
+  const clear = (a, b) => box[a][1] + gap <= box[b][0];
+  const fits = keep => keep.every((i, j) => !j || clear(keep[j - 1], i));
+  let keep = [0];
+  for (const step of CHART_STEPS) {
+    const pick = ticks.map((_, i) => i).filter(i => pos(i) % step === 0);
+    if (pick.length && fits(pick)) { keep = pick; break; }
+  }
+  // an extra first / last number only a good way from its neighbour ("1 2 4 6" reads as a typo)
+  const spacing = keep.length > 1 ? box[keep[1]][0] - box[keep[0]][1] : 0;  // the room between two shown labels
+  const roomy = (a, b) => clear(a, b) && (!numbered || box[b][0] - box[a][1] >= spacing * 0.6);
+  const last = ticks.length - 1;
+  if (keep[0] !== 0 && roomy(0, keep[0])) keep.unshift(0);
+  if (keep[keep.length - 1] !== last) {
+    if (roomy(keep[keep.length - 1], last)) keep.push(last);
+    else if (!numbered && keep.length > 1) keep[keep.length - 1] = last;
+  }
+  const shown = new Set(keep);
+  ticks.forEach((t, i) => t.classList.toggle('off', !shown.has(i)));
+};
+const chartHover = (svg, key) => {
+  svg.querySelectorAll('.x-tick.on, .x-tick.cover, .x-hover.on').forEach(t => t.classList.remove('on', 'cover'));
+  const label = key == null ? null : svg.querySelector(`.x-tick[data-at="${CSS.escape(key)}"], .x-hover[data-at="${CSS.escape(key)}"]`);
+  if (!label) return;
+  label.classList.add('on');
+  const b = label.getBBox(), gap = 4;
+  svg.querySelectorAll('.x-tick:not(.off):not(.extra):not(.on)').forEach(t => {
+    const o = t.getBBox();
+    if (o.x < b.x + b.width + gap && o.x + o.width + gap > b.x) t.classList.add('cover');
+  });
+};
+onEach('svg.chart', svg => {
+  new ResizeObserver(() => fitChart(svg)).observe(svg);
+  svg.addEventListener('pointerover', e => {
+    const column = e.target.closest('[data-at]:not(.x-tick):not(.x-hover)');
+    chartHover(svg, column && column.dataset.at);
+  });
+  svg.addEventListener('pointerleave', () => chartHover(svg, null));
 });
 // Rich tooltips for timeline marks: what/when from data-tip, plus the spell's name, icon, cooldown and
 // Wowhead description from the timeline's spell-data JSON.
@@ -2523,6 +2626,52 @@ def result_pill(pull):
 # Charts
 # ============================================================================
 
+def chart_svg(width, height, label, body, cls=''):
+    """A chart's SVG (the page script sizes its text and fits its x_ticks) in a box that scrolls on a phone."""
+    return (f'<div class="chart-wrap"><svg class="chart{" " + cls if cls else ""}" viewBox="0 0 {width} {height}" '
+            f'role="img" aria-label="{esc(label)}">{body}</svg></div>')
+
+
+def nice_step(span, most=8):
+    """The smallest 1 / 2 / 5 x 10^n step that puts at most `most` ticks on a span."""
+    magnitude = 1
+    while True:
+        for m in (1, 2, 5):
+            if span / (m * magnitude) <= most:
+                return m * magnitude
+        magnitude *= 10
+
+
+def x_ticks(ticks, y, most=12):
+    """
+    Labels along a chart's bottom. ticks: [(x, text, value, key)] in x order - value a number (a pull number,
+    a pull count) or None (a date: thinned by position); key ties it to the column with that data-at, which shows
+    the label on hover. Every label is in the page: the script shows as many as fit the chart's real width,
+    and the 1/2/5 step picked here is what shows before it runs.
+    """
+    if not ticks:
+        return ''
+    numbered = all(value is not None for _, _, value, _ in ticks)
+    pos = [value if numbered else i for i, (_, _, value, _) in enumerate(ticks)]
+    step = nice_step(pos[-1] - pos[0], most)
+    shown = [i for i, p in enumerate(pos) if p % step == 0] or [0]
+    if shown[0] != 0 and pos[shown[0]] - pos[0] >= step * 0.7:
+        shown.insert(0, 0)
+    last = len(ticks) - 1
+    if shown[-1] != last:
+        if pos[last] - pos[shown[-1]] >= step * 0.7:
+            shown.append(last)
+        elif not numbered and len(shown) > 1:  # a dated axis always ends on its last date
+            shown[-1] = last
+    shown = set(shown)
+    out = []
+    for i, (x, text, value, key) in enumerate(ticks):
+        attrs = (f' data-v="{value}"' if numbered else '') + (f' data-at="{esc(key)}"' if key is not None else '')
+        out.append(f'<text class="x-tick{"" if i in shown else " extra"}"{attrs} x="{x:.1f}" y="{y}" '
+                   f'text-anchor="middle">{esc(text)}</text>')
+    return ''.join(out)
+
+
 def progress_chart(points, separators=()):
     """
     Boss % remaining per pull (0 = kill) with a best-so-far step line.
@@ -2543,8 +2692,7 @@ def progress_chart(points, separators=()):
     def y(pct):
         return top + inner_h * (1 - max(0.0, min(100.0, pct)) / 100)
 
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" '
-             f'aria-label="Boss health remaining per pull">']
+    parts = []
     for pct in (0, 25, 50, 75, 100):
         parts.append(f'<line class="grid" x1="{left}" x2="{width - right}" y1="{y(pct):.1f}" y2="{y(pct):.1f}"/>'
                      f'<text x="{left - 8}" y="{y(pct) + 4:.1f}" text-anchor="end">{pct}%</text>')
@@ -2567,25 +2715,25 @@ def progress_chart(points, separators=()):
     parts.append(f'<polyline points="{" ".join(step)}" fill="none" stroke="{SERIES_BEST}" '
                  f'stroke-width="2" stroke-linejoin="round"/>')
 
+    slot = inner_w / (n - 1)
     for i, (point, v) in enumerate(zip(points, pcts)):
         color = STATUS_GOOD if point['kill'] else SERIES_PULL
-        mark = (f'<circle class="mark" cx="{x(i):.1f}" cy="{y(v):.1f}" r="5" fill="{color}" '
+        x0, x1 = max(left, x(i) - slot / 2), min(left + inner_w, x(i) + slot / 2)
+        mark = (f'<rect class="hit" x="{x0:.1f}" y="{top}" width="{x1 - x0:.1f}" height="{inner_h}"/>'
+                f'<circle class="mark" cx="{x(i):.1f}" cy="{y(v):.1f}" r="5" fill="{color}" '
                 f'stroke="#161a2c" stroke-width="2"/>'
-                f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="12" fill="transparent"/>'
                 f'<title>{esc(point["tip"])}</title>')
         if point['kill']:
             mark += f'<text x="{x(i):.1f}" y="{y(v) - 10:.1f}" text-anchor="middle" fill="{STATUS_GOOD}">Kill</text>'
         if point.get('href'):
             mark = f'<a href="{esc(point["href"])}">{mark}</a>'
-        parts.append(mark)
-        if n <= 40 or i % max(1, n // 20) == 0:
-            parts.append(f'<text x="{x(i):.1f}" y="{height - 8}" text-anchor="middle">{i + 1}</text>')
-    parts.append('</svg>')
+        parts.append(f'<g data-at="{i}">{mark}</g>')
+    parts.append(x_ticks([(x(i), i + 1, i + 1, i) for i in range(n)], height - 8, most=20))
 
     legend = (f'<div class="legend" title="WCL fight %: how much of the encounter was left, accounting for '
               f'phases (0% = kill)"><span style="--c:{SERIES_PULL}">Fight % remaining (each pull)</span>'
               f'<span style="--c:{SERIES_BEST}">Best so far</span></div>')
-    return legend + ''.join(parts)
+    return legend + chart_svg(width, height, 'Boss health remaining per pull', ''.join(parts))
 
 
 def pull_timeline(pull, analysis, phase_names):
@@ -2597,7 +2745,7 @@ def pull_timeline(pull, analysis, phase_names):
     def x(t):
         return left + inner_w * max(0, min(t, duration)) / duration
 
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Pull timeline">']
+    parts = []
     phases = pull.get('phases') or []
     names = (phase_names or {}).get(str(pull['encounter_id']), {})
     for i, phase in enumerate(phases):
@@ -2605,7 +2753,7 @@ def pull_timeline(pull, analysis, phase_names):
         shade = 0.10 if i % 2 == 0 else 0.05
         label = (names.get(str(phase['id'])) or {}).get('name') or f"Phase {phase['id']}"
         band = max(1, x(end) - x(phase['start']))
-        fits = int((band - 12) / 6.2)  # ~6.2px per char at 11px
+        fits = int((band - 12) / 7.5)  # ~6.2 units per char at 11px, the text up to 1.25x on a narrow screen
         short = label if len(label) <= fits else (label[:fits - 1] + '…' if fits >= 6 else '')
         parts.append(f'<rect x="{x(phase["start"]):.1f}" y="4" width="{band:.1f}" '
                      f'height="26" fill="rgba(255,255,255,{shade})"><title>{esc(label)} '
@@ -2633,8 +2781,8 @@ def pull_timeline(pull, analysis, phase_names):
         parts.append(f'<line x1="{wx:.1f}" x2="{wx:.1f}" y1="2" y2="58" stroke="#ffd43b" stroke-width="2" '
                      f'stroke-dasharray="4 3"/><text x="{min(wx, width - right):.1f}" y="68" text-anchor="end" '
                      f'fill="#ffd43b">{wipe_text}</text>')
-    parts.append(f'<text x="{left}" y="68">0:00</text>{end_label}</svg>')
-    return ''.join(parts)
+    parts.append(f'<text x="{left}" y="68">0:00</text>{end_label}')
+    return chart_svg(width, height, 'Pull timeline', ''.join(parts))
 
 
 # ============================================================================
@@ -2839,7 +2987,7 @@ def hit_timeline(rows, duration, phases=()):
     def x(t):
         return left + inner_w * max(0, min(t, duration)) / duration
 
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="Hit timeline">']
+    parts = []
     for start in phases:
         parts.append(f'<line class="grid" x1="{x(start):.1f}" x2="{x(start):.1f}" y1="{top}" y2="{height - 18}" '
                      f'stroke-dasharray="3 3"/>')
@@ -2851,8 +2999,8 @@ def hit_timeline(rows, duration, phases=()):
             parts.append(f'<circle cx="{x(t):.1f}" cy="{y:.1f}" r="4.5" fill="{SERIES_PULL}" stroke="#161a2c" '
                          f'stroke-width="1.5"><title>{esc(name)} — {fmt_duration(t)}</title></circle>')
     parts.append(f'<text x="{left}" y="{height - 4}">0:00</text>'
-                 f'<text x="{width - right}" y="{height - 4}" text-anchor="end">{fmt_duration(duration)}</text></svg>')
-    return ''.join(parts)
+                 f'<text x="{width - right}" y="{height - 4}" text-anchor="end">{fmt_duration(duration)}</text>')
+    return chart_svg(width, height, 'Hit timeline', ''.join(parts))
 
 
 def per_pull_columns(values, label='per pull'):
@@ -2863,18 +3011,20 @@ def per_pull_columns(values, label='per pull'):
     top_value = max(v for _, v in values) or 1
     step = (width - left - 10) / len(values)
     bar_w = max(4, min(28, step - 2))
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="{esc(label)}">',
-             f'<line class="grid" x1="{left}" x2="{width - 10}" y1="{height - bottom}" y2="{height - bottom}"/>']
+    parts = [f'<line class="grid" x1="{left}" x2="{width - 10}" y1="{height - bottom}" y2="{height - bottom}"/>']
+    ticks = []
     for i, (number, value) in enumerate(values):
         h = (height - bottom - top) * value / top_value
         cx = left + step * i + step / 2
-        parts.append(f'<rect x="{cx - bar_w / 2:.1f}" y="{height - bottom - h:.1f}" width="{bar_w:.1f}" '
-                     f'height="{max(h, 0.5):.1f}" rx="3" fill="{SERIES_PULL}"><title>Pull {number}: {value}</title></rect>'
-                     f'<text x="{cx:.1f}" y="{height - 5}" text-anchor="middle">{number}</text>')
+        parts.append(f'<g data-at="{number}"><title>Pull {number}: {value}</title>'
+                     f'<rect class="hit" x="{cx - step / 2:.1f}" y="{top}" width="{step:.1f}" height="{height - bottom - top}"/>'
+                     f'<rect class="col" x="{cx - bar_w / 2:.1f}" y="{height - bottom - h:.1f}" width="{bar_w:.1f}" '
+                     f'height="{max(h, 0.5):.1f}" rx="3" fill="{SERIES_PULL}"/></g>')
+        ticks.append((cx, number, number, number))
         if value and (len(values) <= 24 or value == top_value):
             parts.append(f'<text x="{cx:.1f}" y="{height - bottom - h - 4:.1f}" text-anchor="middle">{value}</text>')
-    parts.append('</svg>')
-    return ''.join(parts)
+    parts.append(x_ticks(ticks, height - 5, most=20))
+    return chart_svg(width, height, label, ''.join(parts))
 
 
 def phase_funnel(phases, total):
@@ -2896,26 +3046,62 @@ def phase_funnel(phases, total):
             f'{"".join(rows)}</table></div>')
 
 
+QUALITY = ('common', 'uncommon', 'rare', 'epic', 'legendary')
+
+
+def _reach_cell(n, total, quality, front=False):
+    share = n / total if total else 0
+    cls = f'rc q-{quality}' + (' front' if front else '') + ('' if n else ' none')
+    return (f'<td class="{cls}" title="{n} of {total} pulls ({share:.0%})"><div class="rc-num"><b>{n if n else "–"}</b>'
+            f'<span>{f"{share:.0%}" if n else ""}</span></div>'
+            f'<div class="rc-bar"><i style="--w:{100 * share:.1f}%"></i></div></td>')
+
+
 def phase_heatmap(nights, phase_order):
     """
-    Nights x phases: share of each night's pulls that reached each phase.
-    Single-hue sequential shading (darker = more pulls got there); the number is printed in every cell.
-    nights: [(label_html, {phase_id: reached}, total_pulls)]; phase_order: [(phase_id, name)].
+    How far each night got: nights x phases (+ Kill), each cell the pulls that reached it - its count, share and a bar
+    that long. Phases wear WoW item quality, rarer the deeper into the fight (the last one legendary), the Kill gold;
+    each night's furthest cell is lit, and a headline names the furthest anyone has got.
+    nights: [(label_html, {phase_id: reached}, total_pulls, kills)], newest first; phase_order: [(phase_id, name)].
     """
     if not nights or not phase_order:
         return ''
-    head = ''.join(f'<th class="num" title="{esc(name)}">{esc(name.split(":")[0])}</th>' for _, name in phase_order)
+    last = len(phase_order) - 1
+    quality = [QUALITY[round(i * (len(QUALITY) - 1) / last)] if last else QUALITY[0] for i in range(len(phase_order))]
+    columns = [(pid, name, q) for (pid, name), q in zip(phase_order, quality)] + [('kill', 'Kill', 'kill')]
+
+    def reached(row, pid):
+        return row[3] if pid == 'kill' else row[1].get(pid, 0)
+
+    head = ''.join(f'<th class="ph q-{q}" title="{esc(name)}">{esc(name.split(":")[0])}</th>' for _, name, q in columns)
     rows = []
-    for label, reached, total in nights:
-        cells = []
-        for phase_id, _ in phase_order:
-            n = reached.get(phase_id, 0)
-            share = n / total if total else 0
-            cells.append(f'<td class="num heat" style="--a:{0.08 + 0.72 * share:.2f}" '
-                         f'title="{n} of {total} pulls">{n}<small>/{total}</small></td>')
-        rows.append(f'<tr><td>{label}</td>{"".join(cells)}</tr>')
-    return (f'<div class="table-wrapper"><table class="compact heatmap"><tr><th>Night</th>{head}</tr>'
-            f'{"".join(rows)}</table></div>')
+    for row in nights:
+        label, _, total, _ = row
+        counts = [reached(row, pid) for pid, _, _ in columns]
+        front = max((i for i, n in enumerate(counts) if n), default=None)
+        cells = ''.join(_reach_cell(n, total, q, i == front) for i, (n, (_, _, q)) in enumerate(zip(counts, columns)))
+        rows.append(f'<tr><td>{label}</td><td class="num muted">{total}</td>{cells}</tr>')
+    all_pulls = sum(row[2] for row in nights)
+    totals = [sum(reached(row, pid) for row in nights) for pid, _, _ in columns]
+    if len(nights) > 1:
+        rows.append(f'<tr class="rc-total"><td>All nights</td><td class="num">{all_pulls}</td>'
+                    + ''.join(_reach_cell(n, all_pulls, q) for n, (_, _, q) in zip(totals, columns)) + '</tr>')
+
+    # the headline: the kill, or the deepest phase reached and the night it was first reached
+    deepest = max((i for i, n in enumerate(totals) if n), default=None)
+    if deepest is None:
+        return ''
+    _, name, q = columns[deepest]
+    first = next(row[0] for row in reversed(nights) if reached(row, columns[deepest][0]))
+    if columns[deepest][0] == 'kill':
+        what, more = 'Killed', f'first on {first} · {totals[deepest]} kill{"s" if totals[deepest] != 1 else ""} in {all_pulls} pulls'
+    else:
+        what = esc(name.split(':')[0])
+        more = f'reached on {totals[deepest]} of {all_pulls} pulls ({totals[deepest] / all_pulls:.0%}) · first on {first}'
+    headline = (f'<div class="reach-head q-{q}"><span class="rh-label">Furthest so far</span><strong>{what}</strong>'
+                f'<span class="rh-more">{more}</span></div>')
+    return (f'{headline}<div class="table-wrapper"><table class="compact reach-map"><tr><th>Night</th>'
+            f'<th class="num">Pulls</th>{head}</tr>{"".join(rows)}</table></div>')
 
 
 def sparkline(values, low=0, high=100):
@@ -2939,7 +3125,7 @@ def sparkline(values, low=0, high=100):
 def pull_histogram(bins, our_pulls=None, killed=False):
     """
     How many pulls the guilds that killed a boss needed (single series), with a labelled
-    marker for where we are. bins: [(start, end, count)].
+    marker for where we are. bins: [(start, end, count)]. Hovering a bar names its range under it.
     """
     if not bins:
         return ''
@@ -2951,20 +3137,21 @@ def pull_histogram(bins, our_pulls=None, killed=False):
     def x(v):
         return left + inner_w * (v - lo) / ((hi - lo) or 1)
 
-    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" '
-             f'aria-label="Pulls needed by guilds that killed this boss">',
-             f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top + inner_h}" y2="{top + inner_h}"/>']
-    for start, end, count in bins:
+    parts = [f'<line class="grid" x1="{left}" x2="{width - right}" y1="{top + inner_h}" y2="{top + inner_h}"/>']
+    for i, (start, end, count) in enumerate(bins):
         h = inner_h * count / peak
-        parts.append(f'<rect x="{x(start) + 1:.1f}" y="{top + inner_h - h:.1f}" width="{max(1, x(end) - x(start) - 2):.1f}" '
-                     f'height="{max(h, 0.5):.1f}" rx="3" fill="{SERIES_PULL}"><title>{start:.0f}–{end:.0f} pulls: '
-                     f'{count} guild{"s" if count != 1 else ""}</title></rect>')
-    step = max(1, int((hi - lo) / 8 / 10) * 10) or 10
-    tick = int(lo // step * step)
-    while tick <= hi:
-        if tick >= lo:
-            parts.append(f'<text x="{x(tick):.1f}" y="{height - 8}" text-anchor="middle">{tick}</text>')
-        tick += step
+        span = f'{start:.0f}–{end:.0f}'
+        parts.append(f'<g data-at="b{i}"><title>{span} pulls: {count} guild{"s" if count != 1 else ""}</title>'
+                     f'<rect class="hit" x="{x(start):.1f}" y="{top}" width="{x(end) - x(start):.1f}" height="{inner_h}"/>'
+                     f'<rect class="col" x="{x(start) + 1:.1f}" y="{top + inner_h - h:.1f}" '
+                     f'width="{max(1, x(end) - x(start) - 2):.1f}" height="{max(h, 0.5):.1f}" rx="3" '
+                     f'fill="{SERIES_PULL}"/></g>'
+                     f'<text class="x-hover" data-at="b{i}" x="{x((start + end) / 2):.1f}" y="{height - 8}" '
+                     f'text-anchor="middle">{span}</text>')
+    # every pull count on a fine grid (at most ~100 labels); x_ticks and the page pick the ones that fit
+    grid = nice_step(hi - lo, 100)
+    first = -(-int(lo) // grid) * grid or grid
+    parts.append(x_ticks([(x(v), v, v, None) for v in range(first, int(hi) + 1, grid)], height - 8, most=10))
     if our_pulls:
         ox = x(our_pulls)
         label = f'You: {our_pulls} pull{"s" if our_pulls != 1 else ""}{" (kill)" if killed else " so far"}'
@@ -2972,5 +3159,4 @@ def pull_histogram(bins, our_pulls=None, killed=False):
         parts.append(f'<line x1="{ox:.1f}" x2="{ox:.1f}" y1="{top - 6}" y2="{top + inner_h}" stroke="{SERIES_BEST}" '
                      f'stroke-width="2.5"/><text x="{ox + (-6 if anchor == "end" else 6):.1f}" y="{top - 10}" '
                      f'text-anchor="{anchor}" fill="var(--text)" font-weight="600">{esc(label)}</text>')
-    parts.append('</svg>')
-    return ''.join(parts)
+    return chart_svg(width, height, 'Pulls needed by guilds that killed this boss', ''.join(parts))
