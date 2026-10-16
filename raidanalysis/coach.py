@@ -168,10 +168,10 @@ def rotation_insights(numbered, name, role, data, tracked=frozenset(), spell_nam
     if mine is not None and raid is not None:
         if raid - mine >= 0.06:
             out.append(_insight('bad', 250 * (raid - mine), 'active',
-                                f"Active {_pct(mine)} of the fight - the raid's {_role_word(role)} {_pct(raid)}. "
+                                f"Active {_pct(mine)} of the time alive - the raid's {_role_word(role)} {_pct(raid)}. "
                                 f"Keep casting while you move."))
         elif mine >= 0.97:
-            out.append(_insight('good', 10, 'active', f"Active {_pct(mine)} of the fight"))
+            out.append(_insight('good', 10, 'active', f"Active {_pct(mine)} of the time alive"))
     return out
 
 

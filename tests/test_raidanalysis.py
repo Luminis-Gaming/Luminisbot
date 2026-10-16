@@ -1159,6 +1159,77 @@ class TestFullBudget(unittest.TestCase):
             self.assertEqual(sync._share, sync.WCL_BUDGET_SHARE)  # back to normal after the run
 
 
+class TestActiveWhileAlive(unittest.TestCase):
+    """Time spent dead isn't idle time: a death stops the clock, a battle res starts it again."""
+
+    @staticmethod
+    def pull(deaths=(), resses=(), soulstone_at=None):
+        cds = [{'t': t, 'name': 'Druid', 'ability': 'Rebirth', 'target': 'Boops'} for t in resses]
+        if soulstone_at is not None:  # put on a living player beforehand: not a res
+            cds.append({'t': soulstone_at, 'name': 'Lock', 'ability': 'Soulstone', 'target': 'Boops'})
+        return {'analysis': {'deaths': [{'t': t, 'name': 'Boops'} for t in deaths] + [{'t': 5000, 'name': 'Other'}],
+                             'cooldowns': cds}}
+
+    def test_alive_stretches(self):
+        from raidanalysis.throughput import alive_ms
+        self.assertEqual(alive_ms(self.pull(), 'Boops', 300000), 300000)                     # never died
+        self.assertEqual(alive_ms(self.pull([60000]), 'Boops', 300000, 50000), 60000)        # died, stayed dead
+        # died at 1:00, res'd at 1:30, died again at 3:20: up 1:00 + 1:50
+        self.assertEqual(alive_ms(self.pull([60000, 200000], [90000]), 'Boops', 300000, 100000), 170000)
+        # res'd and died again the same moment: nothing added
+        self.assertEqual(alive_ms(self.pull([60000, 90000], [90000]), 'Boops', 300000, 50000), 60000)
+        # res'd and up until the end
+        self.assertEqual(alive_ms(self.pull([60000], [90000]), 'Boops', 300000, 200000), 270000)
+        # a Soulstone placed beforehand isn't a res - but whatever got them up again, they were up while active
+        self.assertEqual(alive_ms(self.pull([60000], soulstone_at=10000), 'Boops', 300000, 50000), 60000)
+        self.assertEqual(alive_ms(self.pull([60000], soulstone_at=10000), 'Boops', 300000, 150000), 150000)
+
+    def test_doing_something_after_dying_means_up_again(self):
+        """A Soulstone res isn't logged, but their next cast / cooldown / potion is - and they can die again."""
+        from raidanalysis.throughput import alive_ms
+
+        def pull(deaths, casts=(), cooldowns=(), spec='Fire', cls='Mage'):
+            return {'analysis': {'players': [{'name': 'Boops', 'class': cls, 'spec': spec}],
+                                 'deaths': [{'t': t, 'name': 'Boops'} for t in deaths],
+                                 'casts': {'Boops': [[t, 1] for t in casts], 'Other': [[100000, 1]]},
+                                 'cooldowns': [{'t': t, 'name': 'Boops', 'ability': 'Combustion', 'target': None}
+                                               for t in cooldowns],
+                                 'consumables': [{'t': 0, 'name': 'Boops', 'ability': 'Potion'}]}}
+        # died 1:00, Soulstoned and casting again at 1:10, died for good at 4:00: up 1:00 + 2:50
+        self.assertEqual(alive_ms(pull([60000, 240000], casts=[30000, 70000]), 'Boops', 300000), 230000)
+        self.assertEqual(alive_ms(pull([60000, 240000], cooldowns=[70000]), 'Boops', 300000), 230000)  # a cooldown too
+        # a cast that lands in the moment of dying isn't a sign of life
+        self.assertEqual(alive_ms(pull([60000], casts=[60500]), 'Boops', 300000), 60000)
+        # someone else's casts say nothing about them
+        self.assertEqual(alive_ms(pull([60000]), 'Boops', 300000), 60000)
+        # a Holy Priest's angel heals for 15 s after dying: not back up...
+        priest = pull([60000], casts=[65000, 74000], spec='Holy', cls='Priest')
+        self.assertEqual(alive_ms(priest, 'Boops', 300000), 60000)
+        # ...but casting after that is
+        self.assertEqual(alive_ms(pull([60000], casts=[65000, 90000], spec='Holy', cls='Priest'), 'Boops', 300000),
+                         270000)
+        # a battle res doesn't wait for that: it lands when it's cast
+        res = pull([60000], spec='Holy', cls='Priest')
+        res['analysis']['cooldowns'].append({'t': 62000, 'name': 'Druid', 'ability': 'Rebirth', 'target': 'Boops'})
+        self.assertEqual(alive_ms(res, 'Boops', 300000), 298000)
+
+    def test_dead_half_the_fight_is_not_coached_as_idle(self):
+        from raidanalysis import coach, throughput
+
+        def numbered(boops_deaths):
+            players = [{'name': n, 'role': 'dps'} for n in ('Boops', 'A', 'B')]
+            extras = {'duration': 300000, 'players': {'Boops': {'active_ms': 142500, 'damage': 1},
+                                                      'A': {'active_ms': 285000, 'damage': 1},
+                                                      'B': {'active_ms': 282000, 'damage': 1}}}
+            return [(1, {'fight_id': 1, 'analysis': {'players': players, 'extras': extras,
+                                                     'deaths': [{'t': t, 'name': 'Boops'} for t in boops_deaths]}})]
+        mine, raid = throughput.active_time(numbered([150000]), 'Boops', 'dps')
+        self.assertAlmostEqual(mine, 0.95)  # active 95% of the 2:30 they were alive
+        self.assertAlmostEqual(raid, 0.95)  # median of A (95%) and B (94%)
+        self.assertAlmostEqual(throughput.active_time(numbered([]), 'Boops', 'dps')[0], 0.475)  # alive throughout
+        self.assertEqual(throughput.per_pull(numbered([150000]), 'Boops', 'dps')[0]['active'], 0.95)
+
+
 class TestBossBenchmarks(unittest.TestCase):
     """The boss page's re-fetch: every spec played there, however fresh, with the full WCL budget (needs psycopg2)."""
 

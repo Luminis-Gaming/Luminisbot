@@ -491,9 +491,10 @@ def per_pull(numbered, name, role):
                       reverse=True)
         mine = amount(me, role, duration)
         parse = me.get('parse') or {}
+        up = alive_ms(pull, name, duration, me.get('active_ms'))
         rows.append({'number': number, 'kill': pull.get('kill'), 'fight_id': pull['fight_id'],
                      'parse': parse.get('rank'), 'bracket': parse.get('bracket'), 'amount': mine,
-                     'active': (me['active_ms'] / duration) if me.get('active_ms') and duration else None,
+                     'active': (me['active_ms'] / up) if me.get('active_ms') and up else None,
                      'raid_rank': same.index(mine) + 1 if mine in same else None, 'raid_size': len(same),
                      'duration': duration})
     return rows
@@ -878,15 +879,54 @@ def cpm(numbered, name, top, items=frozenset()):
             'abilities': abilities}
 
 
+BATTLE_RES = {'Rebirth', 'Raise Ally', 'Intercession'}  # cast on the dead player (cooldowns.py tracks them)
+# Doing something after dying means they're up again - a Soulstone (or any res we don't see) - except for what
+# lands in the moment of the death itself, and a Holy Priest's Spirit of Redemption: an angel healing for 15 s.
+DEATH_GRACE_MS = 1000
+SPIRIT_OF_REDEMPTION_MS = 15000
+
+
+def alive_ms(pull, name, duration, active_ms=None):
+    """
+    How long a player was up in a pull - lying dead isn't standing idle: each death stops the clock, a battle
+    res on them starts it again (and the next death stops it again). A res we can't see (a Soulstone used on
+    yourself) shows as the first thing they do after dying: a cast, a cooldown, a potion. We only keep the
+    rarer casts, so that can be a little late - and whatever happened, they're never counted as up for less
+    than they were active.
+    """
+    analysis = pull.get('analysis') or {}
+    me = next((p for p in analysis.get('players') or [] if p.get('name') == name), {})
+    grace = SPIRIT_OF_REDEMPTION_MS if (me.get('class'), me.get('spec')) == ('Priest', 'Holy') else DEATH_GRACE_MS
+    acts = ([t for t, _ in (analysis.get('casts') or {}).get(name) or []]
+            + [c['t'] for c in (analysis.get('cooldowns') or []) + (analysis.get('consumables') or [])
+               if c.get('name') == name])
+    # (t, kind): at the same moment a res comes first - res'd and dead again at once
+    res, act, death = 0, 1, 2
+    events = sorted([(d['t'], death) for d in analysis.get('deaths') or [] if d.get('name') == name]
+                    + [(c['t'], res) for c in analysis.get('cooldowns') or []
+                       if c.get('target') == name and c.get('ability') in BATTLE_RES]
+                    + [(t, act) for t in acts])
+    up, since, died = 0, 0, None  # since: when the current stretch alive began, None while dead
+    for t, kind in events:
+        if kind == death and since is not None:
+            up, since, died = up + max(0, t - since), None, t
+        elif since is None and (kind == res or t - died > grace):
+            since = t
+    if since is not None:
+        up += max(0, duration - since)
+    return min(duration, max(up, active_ms or 0))
+
+
 def active_time(numbered, name, role):
-    """(your active time, the raid's median for your role) as shares of the fight, None when unknown."""
+    """(your active time, the raid's median for your role) as shares of the time alive, None when unknown."""
     mine, others = [], {}
     for _, pull, me, extras in player_pulls(numbered, name):
         duration = extras.get('duration') or 0
         roles = {p['name']: p.get('role') for p in (pull.get('analysis') or {}).get('players') or []}
         for n, r in extras['players'].items():
             if roles.get(n) == role and r.get('active_ms') and duration:
-                (mine if n == name else others.setdefault(n, [])).append((r['active_ms'], duration))
+                (mine if n == name else others.setdefault(n, [])).append(
+                    (r['active_ms'], alive_ms(pull, n, duration, r['active_ms'])))
     if not mine:
         return None, None
     share = sum(a for a, _ in mine) / sum(d for _, d in mine)
