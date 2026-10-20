@@ -8,7 +8,8 @@ the player's coaching (coach.py) and the sync only deal in that contract:
     guide                      (spell id, name) of its Mythic Trap entry - its clip goes with the lines and tips
     fetches()                  [(name, WCL event data type, filter expression, positions?)] for one pull (both
                                hostilities; positions: the events carry x / y - in yards × 100)
-    collect(events, ...)       {fetch name: its events} -> what's stored for the pull (any JSON)
+    collect(events, ...)       {fetch name: its events} -> what's stored for the pull (any JSON); fight_end:
+                               the pull's end (absolute ms, like fight_start)
     failures(data, analysis)   -> [{'t' (ms), 'players', 'detail' (what happened, after their names)}]
     notes(data, analysis)      the same shape: worth showing, but not on anyone (never counted as failing)
     uses(data, name)           how often a player did it right (for a "going well")
@@ -49,7 +50,7 @@ class Mechanic:
     def fetches(self):
         return []
 
-    def collect(self, events, fight_start, names_by_id, roster):
+    def collect(self, events, fight_start, names_by_id, roster, fight_end=None):
         return None
 
     def failures(self, data, analysis):
@@ -97,7 +98,7 @@ class MushroomBounce(Mechanic):
     def fetches(self):
         return [('bounce', 'All', 'ability.name = "Bounce"', False)]
 
-    def collect(self, events, fight_start, names_by_id, roster):
+    def collect(self, events, fight_start, names_by_id, roster, fight_end=None):
         out, seen = [], set()
         for e in sorted(events.get('bounce') or [], key=lambda e: e.get('timestamp') or 0):
             if e.get('type') in self.ENDS:
@@ -174,7 +175,7 @@ class ProtovenomCollision(Mechanic):
                  False),
                 ('eruptions', 'All', 'ability.name = "Protovenom Eruption" and type = "damage"', True)]
 
-    def collect(self, events, fight_start, names_by_id, roster):
+    def collect(self, events, fight_start, names_by_id, roster, fight_end=None):
         rings, seen = [], set()
         for e in sorted(events.get('rings') or [], key=lambda e: e.get('timestamp') or 0):
             name = _player(e, names_by_id, roster, 'target')
@@ -280,7 +281,7 @@ class HelicalToxins(Mechanic):
         return [('toxins', 'All', 'ability.name = "Helical Toxins" and '
                                   'type in ("applydebuff", "applydebuffstack", "removedebuff")', False)]
 
-    def collect(self, events, fight_start, names_by_id, roster):
+    def collect(self, events, fight_start, names_by_id, roster, fight_end=None):
         toxins, current, seen = [], {}, set()
         for e in sorted(events.get('toxins') or [], key=lambda e: e.get('timestamp') or 0):
             name = _player(e, names_by_id, roster, 'target')
@@ -366,9 +367,169 @@ class HelicalToxins(Mechanic):
         return f'Helical Toxins: matched right every time ({count}×)'
 
 
+class BloodAndAcid(Mechanic):
+    """
+    Entombed Sentinels' Mark of Blood (the Blood of Ula'tek) and Mark of Acid (the Breath of Ula'tek): every 5 s
+    each boss marks everyone within 40 yards - a stack more, each stack ticking for 40 s. The bosses are kept apart
+    and everyone stays on their own boss's side: in range of both, both stack on you at once.
+
+    Having both is normal: a mark keeps ticking for 40 s after you leave its boss, so moving from one side to the
+    other carries a few stacks across (median: about 5 of the other one at worst). Being in range of both is what
+    goes wrong - each boss's mark landing on you at the same tick. On four nights of our pulls (786 player-pulls)
+    nobody was for most pulls, one tick at the 90th percentile: crossing the middle. Staying there - BAD_RUN ticks in
+    a row, 10 s+ - is failing it (7% of player-pulls; one-off crossings are only on the chart).
+    Ticks where RAID_WIDE+ of the raid were in range of both at once aren't on anyone: the bosses were too close
+    together (the tanks), or the pull was falling apart - mostly its last seconds, also left out (END_MS).
+
+    In the log: applydebuff / applydebuffstack / refreshdebuff each mean that boss's tick landed on you (in range),
+    removedebuff the mark running out. Stored: {'end': ms, 'players': {name: {'b': [[ms, stacks], ...], 'a': [...]}}}
+    - Mark of Blood ('b') and Mark of Acid ('a'), stacks 0 when it ran out.
+    """
+    key, icon, title = 'marks', '🩸', 'Mark of Blood & Acid'
+    guide = (1284506, 'Mark of Blood')
+    fail_title, ok_title = 'Stood in range of both Sentinels (Mark of Blood + Mark of Acid)', \
+        'Mark of Blood & Acid: everyone kept to one side'
+    MARKS = (('b', 'Mark of Blood'), ('a', 'Mark of Acid'))
+    TICK_MS = 5000
+    SAME_TICK_MS = 2500     # the two bosses' ticks this close: the same tick (seen: 0-100 ms apart)
+    RAID_WIDE = 6           # this many in range of both at the same tick: the bosses' spot, not anyone's
+    BAD_RUN = 2             # own ticks in a row in range of both (standing in the middle, 10 s+): failing it
+    BAD_STACKS = 8          # carrying this many of both at once: the chart's "bad" (worst 10%; normal: about 5)
+    END_MS = 15000          # the pull's last seconds: everyone running anywhere, not counted
+
+    def fetches(self):
+        return [(k, 'Debuffs', f'ability.name = "{name}" and type in '
+                               f'("applydebuff", "applydebuffstack", "refreshdebuff", "removedebuff")', False)
+                for k, name in self.MARKS]
+
+    def collect(self, events, fight_start, names_by_id, roster, fight_end=None):
+        players = {}
+        for k, _ in self.MARKS:
+            for e in sorted(events.get(k) or [], key=lambda e: e.get('timestamp') or 0):
+                name = _player(e, names_by_id, roster, 'target')
+                if not name:
+                    continue
+                t, kind = e['timestamp'] - fight_start, e.get('type')
+                rows = players.setdefault(name, {'b': [], 'a': []})[k]
+                last = rows[-1][1] if rows else 0
+                stacks = (0 if kind == 'removedebuff' else 1 if kind == 'applydebuff'
+                          else e.get('stack') or last if kind == 'applydebuffstack' else last or 1)
+                if rows and abs(rows[-1][0] - t) <= 50 and (stacks == 0) == (rows[-1][1] == 0):
+                    rows[-1][1] = max(rows[-1][1], stacks) if stacks else 0  # a stack and its refresh: one tick
+                else:
+                    rows.append([t, stacks])
+        return {'end': fight_end - fight_start if fight_end else None, 'players': players}
+
+    def both_ticks(self, data):
+        """{name: [ms]}: the ticks each player was in range of both bosses (both marks landing on them)."""
+        out = {}
+        for name, marks in ((data or {}).get('players') or {}).items():
+            acid = [t for t, s in marks['a'] if s]
+            hits = [t for t, s in marks['b'] if s and any(abs(t - u) <= self.SAME_TICK_MS for u in acid)]
+            if hits:
+                out[name] = hits
+        return out
+
+    def crowded(self, data):
+        """Ticks (ms) RAID_WIDE+ players were in range of both at once - the bosses' spot, nobody's fault."""
+        times = sorted(t for hits in self.both_ticks(data).values() for t in hits)
+        return sorted({t for t in times if sum(1 for u in times if abs(u - t) <= 1000) >= self.RAID_WIDE})
+
+    def own_ticks(self, data, analysis, name=None):
+        """
+        {name: [ms]}: in range of both on their own - not a crowded tick, not the pull's end, not a lost pull
+        (analysis None: not checked).
+        """
+        end = (data or {}).get('end')
+        crowd = self.crowded(data)
+        out = {}
+        for who, hits in self.both_ticks(data).items():
+            if name and who != name:
+                continue
+            mine = [t for t in hits if not any(abs(t - c) <= 1000 for c in crowd)
+                    and (end is None or t < end - self.END_MS)
+                    and (analysis is None or alive_at(analysis, t) >= MIN_ALIVE)]
+            if mine:
+                out[who] = mine
+        return out
+
+    @staticmethod
+    def stacks_at(marks, t):
+        """(Blood, Acid) stacks on a player at ms t."""
+        def one(rows):
+            now = 0
+            for at, s in rows:
+                if at > t:
+                    break
+                now = s
+            return now
+        return one(marks['b']), one(marks['a'])
+
+    def failures(self, data, analysis):
+        out = []
+        for name, ticks in self.own_ticks(data, analysis).items():
+            stays = [t for run in _runs(ticks, self.TICK_MS) if len(run) >= self.BAD_RUN for t in run]
+            if not stays:
+                continue
+            marks = data['players'][name]
+            blood, acid = max((self.stacks_at(marks, t) for t in stays), key=lambda ba: min(ba))
+            out.append({'t': stays[0], 'players': [name], 'ticks': len(stays),
+                        'detail': f'stood in range of both bosses for {len(stays) * self.TICK_MS // 1000} s '
+                                  f'({_spans(stays, self.TICK_MS)}) - up to {blood} Mark of Blood and {acid} Mark of '
+                                  f'Acid stacking at once'})
+        return sorted(out, key=lambda f: f['t'])
+
+    def notes(self, data, analysis):
+        """The bosses too close together: most of the raid in range of both at once - on nobody."""
+        end = (data or {}).get('end')
+        crowd = [t for t in self.crowded(data) if (end is None or t < end - self.END_MS)
+                 and alive_at(analysis, t) >= MIN_ALIVE]
+        out = []
+        for group in _runs(crowd, self.TICK_MS):
+            most = max(sum(1 for hits in self.both_ticks(data).values() if any(abs(u - t) <= 1000 for u in hits))
+                       for t in group)
+            out.append({'t': group[0], 'players': [],
+                        'detail': f'{most} of you were in range of both bosses at once '
+                                  f'({len(group) * self.TICK_MS // 1000} s) - the bosses were too close together, '
+                                  f'not counted on anyone'})
+        return out
+
+    def uses(self, data, name):
+        """1 for a pull they had the marks in and kept to one side (crossing the middle at most)."""
+        if not data or name not in (data.get('players') or {}):
+            return 0
+        runs = _runs(self.own_ticks(data, None, name).get(name) or [], self.TICK_MS)
+        return int(all(len(run) < self.BAD_RUN for run in runs))
+
+    def you_failed(self, name, fails):
+        pulls = len({n for n, _ in fails})
+        return (f"You stood in range of both Sentinels in {_plural(pulls, 'pull')} ({when(fails)}) - Mark of Blood "
+                f"and Mark of Acid stacked on you at once. Stay on your own boss's side, more than 40 yards from "
+                f"the other one; cross the middle quickly")
+
+    def you_ok(self, count):
+        return f'Mark of Blood & Acid: kept to one side in every pull ({count}×)'
+
+
+def _runs(times, step):
+    """Sorted ms -> runs of consecutive ticks ([[ms, ...]]): a gap over 1.5 ticks starts a new one."""
+    out = []
+    for t in times:
+        if out and t - out[-1][-1] <= step * 1.5:
+            out[-1].append(t)
+        else:
+            out.append([t])
+    return out
+
+
+def _spans(times, step):
+    """'1:20-1:35, 2:05' for tick times: each run from its first tick to its last."""
+    return ', '.join(clock(r[0]) if len(r) == 1 else f'{clock(r[0])}-{clock(r[-1])}' for r in _runs(times, step))
+
+
 MECHANICS = {
-    3497: [MushroomBounce()],                          # The Lost Explorers
-    3445: [ProtovenomCollision(), HelicalToxins()],    # Entombed Sentinels
+    3497: [MushroomBounce()],                                          # The Lost Explorers
+    3445: [ProtovenomCollision(), HelicalToxins(), BloodAndAcid()],    # Entombed Sentinels
 }
 
 

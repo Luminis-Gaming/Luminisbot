@@ -3512,3 +3512,93 @@ class TestLustAndFightEnds(unittest.TestCase):
         old = compare.timeline({'top': [{k: v for k, v in top[0].items() if k != 'lust'}], 'rows': [row], 'spells': {}},
                                pull)
         self.assertIn('fetched again', old)                                                  # stored before lust was
+
+
+class TestBloodAndAcid(unittest.TestCase):
+    """Entombed Sentinels' Mark of Blood & Acid: in range of both bosses is on you, unless most of the raid was."""
+
+    NAMES = {i: f'P{i}' for i in range(1, 11)}
+    ROSTER = set(NAMES.values())
+
+    @staticmethod
+    def ticks(target, times, kind_first='applydebuff'):
+        """A mark landing every tick at these ms: applied, then a stack (and its refresh) each tick."""
+        out = []
+        for i, t in enumerate(times):
+            if i == 0:
+                out.append({'timestamp': t, 'type': kind_first, 'targetID': target})
+            else:
+                out.append({'timestamp': t, 'type': 'applydebuffstack', 'targetID': target, 'stack': i + 1})
+                out.append({'timestamp': t, 'type': 'refreshdebuff', 'targetID': target})
+        return out
+
+    def data(self):
+        from raidanalysis import bossmech
+        steps = list(range(5000, 300001, 5000))
+        blood = self.ticks(1, steps)                                 # P1: on Blood's side all pull
+        acid = self.ticks(2, steps)                                  # P2: on Acid's side...
+        blood += self.ticks(2, [60000, 65000, 70000])                # ...stood in both for 3 ticks
+        acid += self.ticks(3, steps)                                 # P3: Acid's side, crossed once
+        blood += self.ticks(3, [100000])
+        for p in range(4, 10):                                       # 6 in both at once: the bosses' spot
+            blood += self.ticks(p, [150000])
+            acid += self.ticks(p, [150000])
+        blood += self.ticks(10, [290000, 295000])                    # P10: both in the last 15 s
+        acid += self.ticks(10, [290000, 295000])
+        blood.append({'timestamp': 140000, 'type': 'removedebuff', 'targetID': 2})
+        mech = bossmech.BloodAndAcid()
+        return mech, mech.collect({'b': blood, 'a': acid}, 0, self.NAMES, self.ROSTER, fight_end=300000)
+
+    def analysis(self):
+        return {'players': [{'name': n} for n in self.ROSTER], 'deaths': []}
+
+    def test_collect_keeps_one_row_per_tick(self):
+        mech, data = self.data()
+        self.assertEqual(data['end'], 300000)
+        self.assertEqual(data['players']['P2']['b'], [[60000, 1], [65000, 2], [70000, 3], [140000, 0]])  # refresh merged
+        self.assertEqual(mech.stacks_at(data['players']['P2'], 67000), (2, 13))
+        self.assertEqual(mech.stacks_at(data['players']['P2'], 145000), (0, 29))
+
+    def test_standing_in_both_fails_a_crossing_doesnt(self):
+        mech, data = self.data()
+        fails = mech.failures(data, self.analysis())
+        self.assertEqual([f['players'] for f in fails], [['P2']])
+        self.assertIn('for 15 s (1:00-1:10)', fails[0]['detail'])
+        self.assertIn('3 Mark of Blood and 14 Mark of Acid', fails[0]['detail'])
+        self.assertEqual(mech.uses(data, 'P3'), 1)                   # crossed once: kept to one side
+        self.assertEqual(mech.uses(data, 'P2'), 0)
+        self.assertEqual(mech.uses(data, 'Nobody'), 0)
+
+    def test_most_of_the_raid_in_both_is_on_nobody(self):
+        mech, data = self.data()
+        self.assertEqual(mech.crowded(data), [150000])
+        notes = mech.notes(data, self.analysis())
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]['players'], [])
+        self.assertIn('6 of you were in range of both bosses at once', notes[0]['detail'])
+        self.assertNotIn('P10', mech.own_ticks(data, self.analysis()))  # the pull's last seconds don't count
+        lost = dict(self.analysis(), deaths=[{'name': f'P{i}', 't': 1000} for i in range(1, 4)])
+        self.assertEqual(mech.failures(data, lost), [])              # 7 alive: the pull was already lost
+
+    def test_registered_for_the_sentinels(self):
+        from raidanalysis import bossmech
+        self.assertIn('marks', [m.key for m in bossmech.for_encounter(3445)])
+
+    def test_cards(self):
+        from raidanalysis.web import marks
+        mech, data = self.data()
+        pull = {'fight_id': 7, 'kill': False, 'fight_pct': 40.0, 'start_ms': 0, 'end_ms': 300000,
+                'analysis': dict(self.analysis(), boss_mechanics={'marks': data})}
+        html = marks.card([(1, pull)], 0, lambda fid: f'?mk={fid}', lambda n: n)
+        self.assertIn('id="marks"', html)
+        self.assertLess(html.index('>P2<'), html.index('>P1<'))     # worst first
+        self.assertIn('15 s in both', html)
+        self.assertIn('crossed 1×', html)
+        self.assertIn('mk-band own', html)
+        self.assertIn('mk-band crowd', html)
+        self.assertIn('6 in range of both: P4, P5, P6, P7, P8, P9', html)
+        self.assertIn('Mark of Blood 3 · Mark of Acid 14 · 3 of both at once', html)
+        mine = marks.player_card([(1, pull), (2, dict(pull, fight_id=8))], 'P2', lambda n, p: f'#{n}')
+        self.assertEqual(mine.count('class="mk-track"'), 2)          # a row per pull
+        self.assertIsNone(marks.player_card([(1, pull)], 'Nobody', lambda n, p: ''))
+        self.assertIsNone(marks.card([(1, dict(pull, analysis={}))], 0, str, str))

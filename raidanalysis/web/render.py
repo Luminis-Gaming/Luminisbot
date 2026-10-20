@@ -362,6 +362,37 @@ tr.muted-row td { opacity: 0.7; }
 .cons-tl .tl-lab.c-add .npc-icon { width: 18px; height: 18px; }
 .cons-tl .tl-row.c-add .fspawn { top: 6px; bottom: 6px; }
 .tl .tl-phase.fspawnline { border-left: 2px dashed var(--c); opacity: 0.85; z-index: 1; }
+/* Mark of Blood & Acid (web/marks.py): a row per player / pull - Blood's stacks up from the line, Acid's down,
+   amber behind where they were in range of both, grey where most of the raid was (not on them) */
+.mk-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin: 4px 0 6px; }
+.mk-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.mk-legend i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.mk-legend i.own, .mk-band.own { background: color-mix(in srgb, var(--both, #fab219) 26%, transparent);
+    box-shadow: inset 0 -2px var(--both, #fab219); }
+.mk-legend i.crowd, .mk-band.crowd, .mk-col.crowd { background: repeating-linear-gradient(135deg,
+    rgba(255,255,255,0.14) 0 3px, rgba(255,255,255,0.04) 3px 6px); box-shadow: none; }
+.mk-chart { display: grid; grid-template-columns: 150px minmax(0, 1fr) 118px; column-gap: 10px; margin-top: 10px; }
+.mk-lab { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; min-width: 0;
+    font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mk-lab small { font-size: 10px; color: var(--faint); }
+.mk-track { position: relative; height: 34px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.mk-track::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid rgba(255,255,255,0.18); }
+.mk-band, .mk-seg, .mk-col, .mk-after { position: absolute; top: 0; bottom: 0; }
+.mk-seg b { position: absolute; left: 0; right: 0; }
+.mk-seg .mk-b { bottom: 50%; background: var(--blood); border-radius: 1px 1px 0 0; }
+.mk-seg .mk-a { top: 50%; background: var(--acid); border-radius: 0 0 1px 1px; }
+.mk-seg:hover b { filter: brightness(1.35); }
+.mk-after { right: 0; background: repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 3px, transparent 3px 7px); }
+.mk-raid { height: 30px; border-bottom: 1px solid rgba(255,255,255,0.12); margin-bottom: 4px; }
+.mk-raid::before { display: none; }
+.mk-col { top: auto; bottom: 0; width: 6px; margin-left: -3px; border-radius: 2px 2px 0 0; background: var(--both); }
+.mk-stat { display: flex; flex-direction: column; justify-content: center; font-size: 12px; line-height: 1.3; white-space: nowrap; }
+.mk-stat small { font-size: 11px; }
+.mk-ruler { position: relative; height: 18px; font-size: 11px; color: var(--muted); }
+.mk-ruler span { position: absolute; top: 3px; transform: translateX(-50%); }
+.mk-ruler span:first-child { transform: none; }
+@media (max-width: 600px) { .mk-chart { grid-template-columns: 84px minmax(0, 1fr) 0; column-gap: 6px; }
+    .mk-stat { visibility: hidden; overflow: hidden; } }  /* kept in the grid: each row is three cells */
 /* Bloodlust (consumables.timeline): its own lane, and a faint band behind everyone's rows - drawn under their
    marks, so a potion pressed into lust shows inside it instead of one hiding the other */
 .cons-tl .tl-lab.c-lust { color: var(--text); font-weight: 600; }

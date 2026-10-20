@@ -16,7 +16,7 @@ from urllib.parse import quote
 from aiohttp import web
 
 from .. import BENCHMARK_NIGHT_HOURS, SYNC_INTERVAL_MINUTES, SYNC_REPORT_LIMIT, analyzer, benchmarks, db, guides, progstats, spells, sync, teams
-from . import brand, compare, consumables, insights, performance, players
+from . import brand, compare, consumables, insights, marks, performance, players
 from .render import (CLIP_MODAL, DIFFICULTY_NAMES, PAGE_CSS, PAGE_JS, ability, boss_portrait, deaths_strip,
                      section_head, stat_tiles, subsection,
                      hit_timeline,
@@ -1523,6 +1523,18 @@ def _roster_names(analysis):
     return pname
 
 
+def _marks_card(request, code, numbered, selected, base, pname, single=False):
+    """Entombed Sentinels' Mark of Blood & Acid chart (web/marks.py) - '' on other bosses, or before it was stored."""
+    try:
+        wanted = int(request.query.get('mk') or 0)
+    except ValueError:
+        wanted = 0
+
+    def label(name):
+        return f'<a href="{esc(players.player_url(code, name, selected))}">{pname(name)}</a>'
+    return marks.card(numbered, wanted, lambda fid: f'{base}&mk={fid}#marks', label, single) or ''
+
+
 def _consumables_card(code, insight_pulls, roster, boss=None, phase_names=None):
     """
     The raid timeline: the boss's phases, adds and casts on top; every player's potions, healthstones,
@@ -1686,6 +1698,7 @@ async def handle_night(request):
                       'interrupts &amp; dispels and consumables. Open any line for the details.')}
         {insights.build(insight_pulls, tags, guide_for, code)}
     </div>
+    {_marks_card(request, code, numbered, selected, here, _roster_names(merged))}
     {_consumables_card(code, insight_pulls, merged['players'], (encounter_id, difficulty), phase_names)}
     <div class="card">
         {section_head('💀', 'Deaths in every pull', 'One row per pull, along its own length: red ticks are early '
@@ -1780,6 +1793,7 @@ async def handle_pull(request):
                       'interrupts &amp; dispels and consumables. Open any line for the details.')}
         {insights.build(pull_insights, tags, guide_for, code)}
     </div>
+    {_marks_card(request, code, [(number, pull)], (encounter_id, difficulty), here + '?', pname, single=True)}
     {_consumables_card(code, pull_insights, analysis.get('players') or [], (encounter_id, difficulty), phase_names)}
     <div class="card">
         {section_head('💀', 'Deaths', 'In order. Only early deaths by mistake count against anyone.')}
@@ -1887,6 +1901,10 @@ async def handle_player(request):
                                   _raid_tiles(numbered, player, report_rows, guide_for)))
     if tab == 'execution':
         body += players.player_page(player, guide_for, pull_href)
+        def pull_label(n, p):
+            result = '✔' if p.get('kill') else f"{p.get('fight_pct') or 0:.0f}%"
+            return f'<a href="{esc(pull_href(n))}">#{n} {result}</a>'
+        body += marks.player_card(numbered, name, pull_label) or ''
     elif tab == 'damage':
         section, pull_focus = await _focus_section(request, code, numbered, whole_night, name, tab_href('damage'))
         if isinstance(section, web.Response):  # ?focus_load=1: the cast bar's request
