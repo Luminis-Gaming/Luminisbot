@@ -69,8 +69,9 @@ def spec_id(cls, spec):
 
 
 _IDS = re.compile(r'^\d{1,7}(:\d{1,7}){0,39}$')
-_KEYS = ('bonus', 'ilvl', 'ench', 'gems', 'pcs', 'spec')
-_WOWHEAD_KEYS = ('bonus', 'ilvl', 'ench', 'gems')  # what Wowhead's tooltip takes; pcs and spec are ours
+# crafted-stats: the two random secondary stats newer gear keeps outside its bonus ids (the auction house pages)
+_KEYS = ('bonus', 'ilvl', 'ench', 'gems', 'pcs', 'spec', 'crafted-stats')
+_WOWHEAD_KEYS = ('bonus', 'ilvl', 'ench', 'gems', 'crafted-stats')  # what Wowhead's tooltip takes; pcs and spec are ours
 
 
 def query(bonus=(), ilvl=None, ench=None, gems=(), pcs=(), spec=None):

@@ -673,6 +673,15 @@ def run_migrations():
 
         logger.info("[MIGRATIONS] ✓ raid analysis tables ready")
 
+        # ============================================================================
+        # AUCTION HOUSE (schema lives in auctionhouse/db.py)
+        # ============================================================================
+
+        from auctionhouse.db import ensure_schema as ensure_auction_house_schema
+        ensure_auction_house_schema(cursor)
+
+        logger.info("[MIGRATIONS] ✓ auction house tables ready")
+
         conn.commit()
         cursor.close()
         conn.close()

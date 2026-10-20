@@ -993,7 +993,8 @@ async def security_middleware(request, handler):
     
     # Only allow specific routes
     allowed_prefixes = ('/authorize', '/callback', '/health', '/unlink', '/api/v1/', '/admin', '/characters',
-                        '/raids')  # read-only raid analysis for raiders (raidanalysis.web)
+                        '/raids',  # read-only raid analysis for raiders (raidanalysis.web)
+                        '/ah')     # the public auction house browser (auctionhouse.web)
     if not any(path.startswith(prefix) for prefix in allowed_prefixes):
         logger.warning(f"[SECURITY] Invalid path from {request.remote}: {request.path}")
         return web.Response(text="Not Found", status=404)
@@ -5635,6 +5636,10 @@ def create_app(bot=None):
     # Raid analysis pages (routes live in the raidanalysis package)
     from raidanalysis.web import register_routes as register_raid_routes
     register_raid_routes(app)
+
+    # Auction house browser (routes live in the auctionhouse package)
+    from auctionhouse.web import register_routes as register_ah_routes
+    register_ah_routes(app)
 
     # Legacy redirect (old /characters URL)
     app.router.add_get('/characters', handle_characters_redirect)

@@ -46,6 +46,29 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # Auction house collector for the /ah pages: downloads every EU auction house about once an hour.
+  # Same image as the bot, its own container, so the work never slows the bot or the web pages.
+  ah-worker:
+    image: ghcr.io/luminis-gaming/luminisbot:latest
+    container_name: luminisbot_ah_worker
+    restart: unless-stopped
+    command: ["python", "-m", "auctionhouse.worker"]
+    environment:
+      BLIZZARD_CLIENT_ID: ${BLIZZARD_CLIENT_ID}
+      BLIZZARD_CLIENT_SECRET: ${BLIZZARD_CLIENT_SECRET}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: luminisbot
+      DB_USER: luminisbot
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - luminisbot-network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
   postgres:
     image: postgres:15-alpine
     container_name: luminisbot_db
