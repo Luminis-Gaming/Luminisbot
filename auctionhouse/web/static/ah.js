@@ -56,9 +56,14 @@ const gold = c => {
 };
 const pct = x => (x > 0 ? '+' : '') + Math.round(x * 100) + '%';
 const realmLabel = cr => `${esc(groupName(cr))}${groupMore(cr) ? ` <small>+${groupMore(cr)}</small>` : ''}`;
-const icon = (it, cls = '', tt = '') => `<span class="item-icon ${cls} q-${qkey(it.q)}" ${tt ? `data-tt="${esc(tt)}" tabindex="0"` : ''}>${it.icon
+const icon = (it, cls = '', tt = '', focusable = true) => `<span class="item-icon ${cls} q-${qkey(it.q)}" ${tt ? `data-tt="${esc(tt)}"${focusable ? ' tabindex="0"' : ''}` : ''}>${it.icon
   ? `<img src="${esc(it.icon)}" alt="" width="56" height="56" loading="lazy">` : `<span class="fallback">${esc((it.name || '?')[0])}</span>`}</span>`;
 const ttAttr = (tt, note = '') => `data-tt="${esc(tt)}"${note ? ` data-tt-note="${esc(note)}"` : ''}`;
+// A small icon that shows the tooltip of one roll: the only thing on a row you hover for it. Inside a button
+// (the roll picker) it can't take focus itself; everywhere else the keyboard can reach it too.
+const tipIcon = (it, tt, note = '', focusable = true) => `<span class="item-icon sm q-${qkey(it.q)}" ${ttAttr(tt, note)}${
+  focusable ? ` tabindex="0" aria-label="${esc(it.name)} tooltip"` : ''}>${it.icon
+  ? `<img src="${esc(it.icon)}" alt="" width="24" height="24" loading="lazy">` : `<span class="fallback">${esc((it.name || '?')[0])}</span>`}</span>`;
 
 // ---------- chart tooltip ----------
 const tip = $('#tip');
@@ -71,8 +76,9 @@ function showTip(html, x, y) {
 const hideTip = () => { tip.hidden = true; };
 
 // ---------- item tooltip ----------
-// Hover (or keyboard focus) on anything with data-tt="itemId|query" shows the game's tooltip for exactly that roll,
-// fetched the first time and then kept. Touch: the first tap shows it, a second tap does what the element does.
+// Hovering an item icon (data-tt="itemId|query"), or reaching it with the keyboard, shows the game's tooltip for
+// exactly that roll, fetched the first time and then kept. It goes as soon as the pointer is off the icon. Touch: the
+// first tap shows it, a second tap does what the icon's row does.
 const itemtip = $('#itemtip');
 const tips = new Map();
 let ttEl = null, ttX = 0, ttY = 0;
@@ -114,20 +120,22 @@ function showItemTip(el) {
 function hideItemTip() { itemtip.hidden = true; ttEl = null; }
 let touchTap = false;
 document.addEventListener('pointerdown', e => { touchTap = e.pointerType === 'touch'; });
-document.addEventListener('pointerover', e => {
+document.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') return;
-  const el = e.target.closest && e.target.closest('[data-tt]');
   ttX = e.clientX; ttY = e.clientY;
-  if (el) { if (el !== ttEl) showItemTip(el); } else if (ttEl) hideItemTip();
+  const el = e.target.closest && e.target.closest('[data-tt]');
+  if (el) { if (el !== ttEl) showItemTip(el); else if (!itemtip.hidden) placeItemTip(); }
+  else if (ttEl) hideItemTip();
 });
-document.addEventListener('pointermove', e => { ttX = e.clientX; ttY = e.clientY; if (!itemtip.hidden) placeItemTip(); });
+document.documentElement.addEventListener('pointerleave', () => hideItemTip());
+window.addEventListener('blur', () => hideItemTip());
 document.addEventListener('focusin', e => {
   const el = e.target.closest && e.target.closest('[data-tt]');
-  if (!el) return;
+  if (!el || !el.matches(':focus-visible')) return;  // keyboard focus only: a click mustn't leave a tooltip behind
   const r = el.getBoundingClientRect(); ttX = r.right; ttY = r.top;
   showItemTip(el);
 });
-document.addEventListener('focusout', () => hideItemTip());
+document.addEventListener('focusout', e => { if (ttEl && ttEl.contains(e.target)) hideItemTip(); });
 document.addEventListener('click', e => {
   if (!touchTap) return;
   const el = e.target.closest && e.target.closest('[data-tt]');
@@ -240,7 +248,7 @@ function initSearch() {
     const opps = D.opps || [];
     $('#opps-section').hidden = !opps.length;
     $('#opps').innerHTML = opps.map(o => `<a class="opp" href="/ah/item/${o.item.id}${o.roll ? '?' + rollQuery(o.roll) : ''}">
-      ${icon(o.item, '', `${o.item.id}|${o.roll ? o.roll.tooltip : ''}`)}<span class="opp-name qtext q-${qkey(o.item.q)}">${esc(o.item.name)}</span>
+      ${icon(o.item, '', `${o.item.id}|${o.roll ? o.roll.tooltip : ''}`, false)}<span class="opp-name qtext q-${qkey(o.item.q)}">${esc(o.item.name)}</span>
       <span class="item-sub">${o.roll && rollText(o.roll) ? esc(rollText(o.roll)) + ' · ilvl ' + o.roll.ilvl : esc(o.item.sub)} · ${o.realms} realms</span>
       <span class="opp-route"><span>Buy on ${esc(groupName(o.buy_cr))}</span> ${coins(o.buy)}
         <span class="arrow" aria-hidden="true">→</span><span>sell on ${esc(groupName(o.sell_cr))}</span> ${coins(o.sell)}
@@ -283,7 +291,7 @@ function initSearch() {
     const cell = (r, k) => {
       const spread = r.hi / Math.max(r.lo, 1);
       switch (k) {
-        case 'name': return `<td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}${extra ? '?' + extra : ''}" class="qtext q-${qkey(r.q)}" data-tt="${r.id}|">${esc(r.name)}</a>
+        case 'name': return `<td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}${extra ? '?' + extra : ''}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>
           ${r.rolls > 1 ? `<span class="rolls-badge">${r.rolls} rolls</span>` : ''}
           <div class="item-sub">${esc(r.sub)}${r.slot ? ' · ' + esc(r.slot) : ''}</div></div></div></td>`;
         case 'ilvl': return `<td class="r num">${r.ilvl_min === r.ilvl_max ? r.ilvl_max : `${r.ilvl_min}–${r.ilvl_max}`}</td>`;
@@ -452,8 +460,9 @@ function initItem() {
   const pairsOf = () => PAIRS.filter(p => it.variants.some(v => v.sec === p)).concat(it.variants.some(v => !v.sec) ? [''] : []);
 
   function rankList(rows, color, scaleMax) {
-    return `<ol class="rank">${rows.map((r, i) => `<li class="${r.cr === myRealm ? 'you' : ''}" ${ttAttr(r.v.tt, `<b>${esc(groupName(r.cr))}</b> · cheapest here: ${gold(r.lo)}`)}>
+    return `<ol class="rank">${rows.map((r, i) => `<li class="${r.cr === myRealm ? 'you' : ''}">
       <span class="pos">${i + 1}</span>
+      ${tipIcon(it, r.v.tt, `<b>${esc(groupName(r.cr))}</b> · cheapest here: ${gold(r.lo)}`)}
       <span class="name">${realmLabel(r.cr)}${r.cr === myRealm ? '<span class="you-tag">YOU</span>' : ''}${rollLabel(r.v)}</span>
       <span class="bar-track"><span class="bar" style="--bar:${color};width:${Math.max(1, r.lo / scaleMax * 100)}%"></span></span>
       <span class="price">${coins(r.lo)}<small>${r.n} listing${r.n === 1 ? '' : 's'}</small></span></li>`).join('')}</ol>`;
@@ -489,8 +498,9 @@ function initItem() {
       ['no', `No socket · ${priced({sock: 'no'})}`]], f.sock) : '';
     const row = (p, name, sub, s, best, tag) => {
       const note = best ? `${p ? esc(pairLabel(p)) : 'Cheapest roll'} · cheapest on <b>${esc(groupName(best.cr))}</b>` : '';
-      return `<button type="button" class="roll-row ${p ? '' : 'all'}" role="radio" aria-checked="${f.sec === p}" data-sec="${esc(p)}" ${best ? ttAttr(best.v.tt, note) : ''}>
+      return `<button type="button" class="roll-row ${p ? '' : 'all'}" role="radio" aria-checked="${f.sec === p}" data-sec="${esc(p)}">
         <span class="radio" aria-hidden="true"></span>
+        ${best ? tipIcon(it, best.v.tt, note, false) : '<span></span>'}
         <span class="roll-name">${name}${tag}<small>${sub}</small></span>
         <span class="roll-price">${best ? `${coins(best.lo)}<span class="roll-track"><span class="roll-bar" style="width:${Math.max(2, best.lo / max * 100).toFixed(1)}%"></span></span>`
           : '<span class="faint small">Only bot listings</span>'}</span>
@@ -508,13 +518,13 @@ function initItem() {
         <div class="roll-tools">${levelControl}${terMenu}${sockMenu}</div>
       </div>
       <div class="roll-list" role="radiogroup" aria-label="Secondary stats">
-        <div class="roll-row head" aria-hidden="true"><span></span><span>Secondary stats</span><span>Cheapest in EU</span><span class="r">Realms</span><span class="r">EU median</span></div>
+        <div class="roll-row head" aria-hidden="true"><span></span><span></span><span>Secondary stats</span><span>Cheapest in EU</span><span class="r">Realms</span><span class="r">EU median</span></div>
         ${all ? row('', 'Any roll', allBest ? `${it.variants.filter(v => matches(v, base)).length} rolls listed` : 'Only bot listings', all, allBest, '') : ''}
         ${listed.map(r => row(r.p, esc(r.p ? r.p.replace('/', ' / ') : 'No secondary stats'), sub(r.best), r.s, r.best,
           r.p === cheapest ? '<span class="cheap-tag">Cheapest</span>' : '')).join('')}
         ${walled.map(r => row(r.p, esc(r.p ? r.p.replace('/', ' / ') : 'No secondary stats'), 'Only bot listings', r.s, null, '')).join('')}
       </div>
-      <div class="roll-foot"><span>Bars compare each roll's cheapest real listing. Bot price walls are left out. Hover a roll for its tooltip.</span>
+      <div class="roll-foot"><span>Bars compare each roll's cheapest real listing. Bot price walls are left out. Hover an icon for the roll's tooltip.</span>
         ${active ? '<button type="button" class="link-btn" id="roll-clear">Show every roll</button>' : ''}</div>
     </section>`;
   }
@@ -536,8 +546,8 @@ function initItem() {
       const others = vs ? vs.sane.filter(r => r.cr !== cr) : [];
       const tag = !vs ? '' : others.length && l.price > Math.max(...others.map(r => r.lo)) ? '<span class="flag-tag hi">Priciest in EU</span>'
         : others.length && l.price < Math.min(...others.map(r => r.lo)) ? '<span class="flag-tag lo">Cheapest in EU</span>' : '';
-      return `<tr ${ttAttr(l.v.tt, `<b>${esc(groupName(cr))}</b> · ${gold(l.price)}`)}>
-        <td>${it.hasVariants ? rollLabel(l.v) : `<span class="roll">Item level ${l.v.ilvl}</span>`}</td>
+      return `<tr>
+        <td><span class="with-icon">${tipIcon(it, l.v.tt, `<b>${esc(groupName(cr))}</b> · ${gold(l.price)}`)}${it.hasVariants ? rollLabel(l.v) : `<span class="roll">Item level ${l.v.ilvl}</span>`}</span></td>
         <td class="r">${coins(l.price)}${tag}</td>
         <td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${vs ? `${pct(d)}<span class="realm-tag">median ${gold(vs.med)} · ${vs.n} realms</span>` : '–'}</td>
         <td class="muted">${TIME_LEFT[l.tl] || ''}</td></tr>`;
@@ -570,7 +580,7 @@ function initItem() {
         ${icon(it, 'lg', heroTip)}
         <div style="min-width:0">
           <div class="eyebrow">${esc(it.cls)} · ${esc(it.sub)}</div>
-          <h2 data-tt="${esc(heroTip)}" tabindex="0">${esc(it.name)}</h2>
+          <h2>${esc(it.name)}</h2>
           <ul class="meta">
             <li class="qtext">${QNAME[it.q] || ''}</li>
             ${it.slot ? `<li>${esc(it.slot)}</li>` : ''}
@@ -600,18 +610,18 @@ function initItem() {
       ? `<p class="sell-hint"><b>Selling one?</b> This list mixes ${!f.sec ? 'stat rolls' : 'item levels'}. Pick your item's ${!f.sec ? 'secondary stats' : ''}${!f.sec && ilv.length > 1 && f.ilvl == null ? ' and ' : ''}${ilv.length > 1 && f.ilvl == null ? 'item level' : ''} under Stat rolls to compare the exact same item.</p>` : '';
     $('#item-view').innerHTML = head + `
       <div class="kpis">
-        <div class="kpi" ${ttAttr(S.lo.v.tt)}><div class="eyebrow">Cheapest in EU</div><div class="val">${coins(S.lo.lo)}</div><div class="sub">${esc(groupName(S.lo.cr))}</div></div>
+        <div class="kpi"><div class="eyebrow">Cheapest in EU</div><div class="val">${coins(S.lo.lo)}</div><div class="sub">${esc(groupName(S.lo.cr))}</div></div>
         <div class="kpi"><div class="eyebrow">EU median</div><div class="val">${coins(S.med)}</div><div class="sub">Middle of every realm's lowest price</div></div>
-        <div class="kpi" ${ttAttr(S.hi.v.tt)}><div class="eyebrow">Highest in EU</div><div class="val">${coins(S.hi.lo)}</div><div class="sub">${esc(groupName(S.hi.cr))}${S.flagged ? ` · ${S.flagged} outlier${S.flagged === 1 ? '' : 's'} ignored` : ''}</div></div>
+        <div class="kpi"><div class="eyebrow">Highest in EU</div><div class="val">${coins(S.hi.lo)}</div><div class="sub">${esc(groupName(S.hi.cr))}${S.flagged ? ` · ${S.flagged} outlier${S.flagged === 1 ? '' : 's'} ignored` : ''}</div></div>
         ${mine
-          ? `<div class="kpi accent" ${ttAttr(mine.v.tt)}><div class="eyebrow">On ${esc(groupName(myRealm))}</div><div class="val">${coins(mine.lo)}</div>
+          ? `<div class="kpi accent"><div class="eyebrow">On ${esc(groupName(myRealm))}</div><div class="val">${coins(mine.lo)}</div>
                <div class="sub">${myRank ? `#${myRank} of ${S.sane.length} for selling · ` : ''}${pct(mine.lo / S.med - 1)} vs median</div></div>`
           : `<div class="kpi ${myRealm ? 'accent' : ''}"><div class="eyebrow">Realms listing it</div><div class="val num">${S.n} <span class="faint" style="font-size:15px">of ${D.snapshot.groups}</span></div>
                <div class="sub">${myRealm ? 'Not listed on your realm: you would be the only seller' : `${S.rows.reduce((a, r) => a + r.n, 0)} listings in total`}</div></div>`}
       </div>
 
-      ${flip && flip.s.gain > 0 ? `<div class="flip" role="note" ${ttAttr(flip.v.tt)}>
-        ${it.hasVariants ? `<span>${rollLabel(flip.v)}</span>` : ''}
+      ${flip && flip.s.gain > 0 ? `<div class="flip" role="note">
+        <span class="with-icon">${tipIcon(it, flip.v.tt)}${it.hasVariants ? rollLabel(flip.v) : ''}</span>
         <span>Buy on <b>${esc(groupName(flip.s.lo.cr))}</b> for ${coins(flip.s.lo.lo)}</span><span class="faint" aria-hidden="true">→</span>
         <span>sell on <b>${esc(groupName(flip.s.target.cr))}</b> at ${coins(flip.s.target.lo)}</span>
         <span class="gain">≈ +${gold(flip.s.gain)}</span>
@@ -642,7 +652,7 @@ function initItem() {
             ${myRealm ? '<span><i style="--c:var(--gold-mark)"></i>Your realm</span>' : ''}</div>
           <div class="chart-box" id="history"></div></section>
 
-        <section class="card"><div class="card-head"><div><h3>All ${S.n} realm groups</h3><p>Connected realms share one auction house, so they share a row.${it.hasVariants ? ' Hover a price to see the exact roll.' : ''}</p></div></div>
+        <section class="card"><div class="card-head"><div><h3>All ${S.n} realm groups</h3><p>Connected realms share one auction house, so they share a row.${it.hasVariants ? " Hover a roll's icon for its tooltip." : ''}</p></div></div>
           <div class="table-tools"><input class="input" id="realm-filter" type="search" placeholder="Filter realms" aria-label="Filter realms">
             <span class="small faint" id="realm-count"></span></div>
           <div class="table-wrap"><table id="realm-table"><thead></thead><tbody></tbody></table></div></section>
@@ -724,8 +734,8 @@ function initItem() {
         ${g.names.length > 1 ? `<span class="realm-tag">${esc(groupOthers(r.cr).join(', '))}</span>` : ''}</td>
         <td><span class="lang" title="${esc(LANG[g.locale] || g.locale)}">${esc((g.locale || '').toUpperCase())}</span></td>
         <td class="muted">${esc(POP[g.pop] || g.pop || '–')}</td>
-        ${it.hasVariants ? `<td ${ttAttr(r.v.tt, `<b>${esc(groupName(r.cr))}</b> · ${gold(r.lo)}`)}>${rollLabel(r.v)}</td>` : ''}
-        <td class="r" ${ttAttr(r.v.tt, `<b>${esc(groupName(r.cr))}</b> · ${gold(r.lo)}`)}>${coins(r.lo)}</td><td class="r num">${r.n}</td>
+        ${it.hasVariants ? `<td><span class="with-icon">${tipIcon(it, r.v.tt, `<b>${esc(groupName(r.cr))}</b> · ${gold(r.lo)}`)}${rollLabel(r.v)}</span></td>` : ''}
+        <td class="r">${coins(r.lo)}</td><td class="r num">${r.n}</td>
         <td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${pct(d)}</td></tr>`;
     }).join('') || `<tr><td colspan="${cols.length}"><div class="empty">No realm group matches “${esc(f)}”.</div></td></tr>`;
     $('#realm-count').textContent = `${rows.length} of ${S.n} shown`;

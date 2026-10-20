@@ -217,7 +217,7 @@ def realm_groups():
 
 def snapshot():
     """What the pages say about the data: when it was last updated, how many realms, listings and items."""
-    row = fetch_one("""SELECT max(swept_at) AS swept_at, count(*) FILTER (WHERE swept_at IS NOT NULL) AS groups,
+    row = fetch_one("""SELECT max(swept_at) AS swept_at, count(*) AS groups,
                               coalesce(sum(listings), 0) AS listings,
                               (SELECT count(*) FROM ah_item_summary) AS items,
                               (SELECT min(ts) FROM ah_item_history) AS history_since
