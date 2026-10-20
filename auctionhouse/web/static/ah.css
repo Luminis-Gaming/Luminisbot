@@ -17,6 +17,8 @@
   --radius: 14px; --radius-sm: 9px;
 }
 * { box-sizing: border-box; }
+/* hidden means hidden, even on elements that set their own display (the tooltip is display: flex) */
+[hidden] { display: none !important; }
 body { margin: 0; background: radial-gradient(1100px 520px at 85% -8%, rgba(240,199,94,0.07), transparent 60%),
     radial-gradient(1000px 600px at 5% -10%, rgba(111,130,242,0.10), transparent 60%), var(--bg);
   color: var(--text); font: 15px/1.5 var(--font-body); -webkit-font-smoothing: antialiased; }
@@ -154,6 +156,16 @@ tbody tr.flagged td:not(:first-child) { opacity: 0.6; }
 .coin .g, .coin .s, .coin .c { color: var(--text); }
 .coin .g i { color: var(--coin-g); } .coin .s i { color: var(--coin-s); } .coin .c i { color: var(--coin-c); }
 .realm-tag { display: block; font-size: 12px; color: var(--faint); font-weight: 400; white-space: nowrap; }
+.realm-name { white-space: nowrap; }
+/* "?" / "+5" beside a realm group: the realms that share its auction house, on hover */
+.realms-q { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px;
+  border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--muted);
+  font: 700 11px/1 var(--font-body); cursor: help; vertical-align: 1px; }
+.realms-q:hover, .realms-q:focus-visible { color: var(--text); border-color: var(--muted); }
+.realms-q.more { margin-left: 4px; padding: 0 4px; border-color: transparent; background: none; font-weight: 500;
+  font-size: 12px; color: var(--faint); }
+.realms-q.more:hover, .realms-q.more:focus-visible { color: var(--text); background: var(--surface-2); }
+#tip .realm-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; color: var(--muted); }
 .delta-up { color: var(--good); } .delta-down { color: var(--bad); }
 .spread { display: inline-block; min-width: 46px; padding: 1px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
   background: var(--surface-2); color: var(--muted); text-align: center; }
@@ -262,7 +274,6 @@ tbody tr.flagged td:not(:first-child) { opacity: 0.6; }
 .rank li.you { background: var(--gold-soft); box-shadow: inset 0 0 0 1px rgba(240,199,94,0.45); }
 .rank .pos { font-size: 12px; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
 .rank .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.rank .name small { color: var(--faint); font-weight: 400; margin-left: 4px; }
 .rank .name .roll { display: block; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
 .bar { display: block; height: 10px; border-radius: 0 4px 4px 0; background: var(--bar, var(--arcane-mark)); min-width: 3px; }
 .bar-track { background: var(--surface-2); border-radius: 0 4px 4px 0; }
@@ -331,4 +342,3 @@ a.opp { color: inherit; text-decoration: none; }
 a.back { text-decoration: none; }
 #results.loading tbody { opacity: 0.5; transition: opacity .15s; }
 .more { display: flex; justify-content: center; padding: 14px; }
-.more [hidden] { display: none; }

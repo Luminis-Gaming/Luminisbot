@@ -55,7 +55,10 @@ const gold = c => {
   return 'under 1 g';
 };
 const pct = x => (x > 0 ? '+' : '') + Math.round(x * 100) + '%';
-const realmLabel = cr => `${esc(groupName(cr))}${groupMore(cr) ? ` <small>+${groupMore(cr)}</small>` : ''}`;
+// "?" (or "+5") beside a realm group: hover, focus or tap it for the realms that share its auction house
+const realmsHint = (cr, text = '?') => groupMore(cr)
+  ? `<button type="button" class="realms-q${text === '?' ? '' : ' more'}" data-realms="${cr}" aria-label="${esc(`Connected realms: ${groupOthers(cr).join(', ')}`)}">${text}</button>` : '';
+const realmLabel = cr => `${esc(groupName(cr))}${realmsHint(cr, `+${groupMore(cr)}`)}`;
 const icon = (it, cls = '', tt = '', focusable = true) => `<span class="item-icon ${cls} q-${qkey(it.q)}" ${tt ? `data-tt="${esc(tt)}"${focusable ? ' tabindex="0"' : ''}` : ''}>${it.icon
   ? `<img src="${esc(it.icon)}" alt="" width="56" height="56" loading="lazy">` : `<span class="fallback">${esc((it.name || '?')[0])}</span>`}</span>`;
 const ttAttr = (tt, note = '') => `data-tt="${esc(tt)}"${note ? ` data-tt-note="${esc(note)}"` : ''}`;
@@ -74,6 +77,37 @@ function showTip(html, x, y) {
   tip.style.top = (y - r.height - 12 < 8 ? y + 16 : y - r.height - 12) + 'px';
 }
 const hideTip = () => { tip.hidden = true; };
+
+// ---------- connected realms ----------
+let realmTipFor = null;
+function showRealms(el, x, y) {
+  const cr = el.dataset.realms;
+  realmTipFor = el;
+  showTip(`<b>${esc(groupName(cr))} shares its auction house with</b>
+    <ul class="realm-list">${groupOthers(cr).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`, x, y);
+}
+function hideRealms() { if (realmTipFor) { realmTipFor = null; hideTip(); } }
+document.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') return;
+  const el = e.target.closest && e.target.closest('[data-realms]');
+  if (el) { if (el !== realmTipFor) showRealms(el, e.clientX, e.clientY); }
+  else hideRealms();
+});
+document.addEventListener('focusin', e => {
+  const el = e.target.closest && e.target.closest('[data-realms]');
+  if (el && el.matches(':focus-visible')) { const r = el.getBoundingClientRect(); showRealms(el, r.right, r.top); }
+});
+document.addEventListener('focusout', e => { if (realmTipFor && realmTipFor.contains(e.target)) hideRealms(); });
+document.addEventListener('click', e => {  // a tap (or click) toggles it
+  const el = e.target.closest && e.target.closest('[data-realms]');
+  if (!el) return;
+  e.preventDefault();
+  const r = el.getBoundingClientRect();
+  if (realmTipFor === el) hideRealms(); else showRealms(el, r.right, r.top);
+});
+document.addEventListener('scroll', hideRealms, true);
+document.documentElement.addEventListener('pointerleave', hideRealms);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideRealms(); });
 
 // ---------- item tooltip ----------
 // Hovering an item icon (data-tt="itemId|query"), or reaching it with the keyboard, shows the game's tooltip for
@@ -188,7 +222,9 @@ function initSearch() {
     sock: $('#f-sock'), below: $('#below-vendor'), oos: $('#out-of-stock'), medCol: $('#median-col')};
   els.realm.innerHTML = '<option value="">All EU realms</option>' + realmList.map(r => `<option value="${r.cr}|${esc(r.name)}">${esc(r.name)}</option>`).join('');
   const qOpts = QNAME.slice(0, 6).map((q, i) => `<option value="${i}">${q}</option>`).join('');
-  els.qMin.innerHTML = qOpts; els.qMax.innerHTML = qOpts; els.qMax.value = '5';
+  els.qMin.innerHTML = qOpts; els.qMax.innerHTML = qOpts;
+  els.qMax.options[5].defaultSelected = true;  // Legendary: what "Clear filters" (a form reset) goes back to
+  els.qMax.value = '5';
   els.exp.innerHTML = '<option value="">All expansions</option>' + (D.expansions || []).map((n, i) => `<option value="${i}">${esc(n)}</option>`).reverse().join('');
   els.sec.innerHTML = '<option value="">Any</option>' + PAIRS.map(p => `<option value="${p}">${p.replace('/', ' / ')}</option>`).join('');
   els.ter.innerHTML = '<option value="">Any</option><option value="any">Any tertiary stat</option><option value="none">None</option>'
@@ -365,7 +401,7 @@ function initItem() {
   const url = new URLSearchParams(location.search);
   let rollFilter = {sec: url.get('sec') || '', ter: url.get('ter') || '', sock: url.get('sock') || '', ilvl: url.get('ilvl') ? +url.get('ilvl') : null};
   let tableSort = {key: 'lo', dir: -1};
-  let listRealm = null;
+  let listRealm = null, listRealmName = null;  // the "Listings on" menu: a realm group, and the realm picked in it
 
   const pairLabel = sec => sec ? sec.split('/').map(s => SHORT[s] || s).join(' / ') : '';
   const rollLabel = v => {
@@ -531,9 +567,11 @@ function initItem() {
 
   // Every listing on one realm group (yours by default), each compared with the same roll across EU
   function listingsCard(f, S) {
-    if (!listings.length) return '';
-    const groups = [...new Set(listings.map(l => l[0]))];
-    const cr = groups.includes(listRealm) ? listRealm : groups.includes(myRealm) ? myRealm : S.lo.cr;
+    // every realm by its own name: pick Frostwhisper and see its auction house (the one it shares with Bladefist...)
+    const cr = realmGroups[listRealm] ? listRealm : myRealm || S.lo.cr;
+    const names = (realmGroups[cr] || {}).names || [];
+    const name = names.includes(listRealmName) ? listRealmName : groupName(cr);
+    const shared = names.filter(n => n !== name);
     const here = listings.filter(l => l[0] === cr).map(([, vi, price, tl]) => ({v: it.variants[vi], price, tl}))
       .filter(l => l.v).sort((a, b) => a.price - b.price);
     const shown = here.filter(l => matches(l.v, f));
@@ -547,19 +585,20 @@ function initItem() {
       const tag = !vs ? '' : others.length && l.price > Math.max(...others.map(r => r.lo)) ? '<span class="flag-tag hi">Priciest in EU</span>'
         : others.length && l.price < Math.min(...others.map(r => r.lo)) ? '<span class="flag-tag lo">Cheapest in EU</span>' : '';
       return `<tr>
-        <td><span class="with-icon">${tipIcon(it, l.v.tt, `<b>${esc(groupName(cr))}</b> · ${gold(l.price)}`)}${it.hasVariants ? rollLabel(l.v) : `<span class="roll">Item level ${l.v.ilvl}</span>`}</span></td>
+        <td><span class="with-icon">${tipIcon(it, l.v.tt, `<b>${esc(name)}</b> · ${gold(l.price)}`)}${it.hasVariants ? rollLabel(l.v) : `<span class="roll">Item level ${l.v.ilvl}</span>`}</span></td>
         <td class="r">${coins(l.price)}${tag}</td>
         <td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${vs ? `${pct(d)}<span class="realm-tag">median ${gold(vs.med)} · ${vs.n} realms</span>` : '–'}</td>
         <td class="muted">${TIME_LEFT[l.tl] || ''}</td></tr>`;
     }).join('');
-    const options = groups.sort((a, b) => groupName(a).localeCompare(groupName(b)))
-      .map(g => `<option value="${g}" ${g === cr ? 'selected' : ''}>${esc(groupName(g))}${groupMore(g) ? ` +${groupMore(g)}` : ''}${g === myRealm ? ' (your realm)' : ''}</option>`).join('');
+    const options = realmList.map(r => `<option value="${r.cr}|${esc(r.name)}" ${r.cr === cr && r.name === name ? 'selected' : ''}>${esc(r.name)}${
+      r.cr === myRealm && r.name === myRealmName() ? ' (your realm)' : ''}</option>`).join('');
     return `<section class="card listings" aria-labelledby="list-title">
-      <div class="card-head"><div><h3 id="list-title">Listings on ${esc(groupName(cr))}</h3>
-        <p>Every ${esc(it.name)} on this auction house${groupMore(cr) ? ` (shared with ${esc(groupOthers(cr).join(', '))})` : ''}, cheapest first. Each price is compared with the same ${it.hasVariants ? 'roll and item level' : 'item'} across EU.</p></div>
+      <div class="card-head"><div><h3 id="list-title">Listings on ${esc(name)}</h3>
+        <p>Every ${esc(it.name)} on ${esc(name)}'s auction house${shared.length ? ` (shared with ${esc(shared.join(', '))})` : ''}, cheapest first. Each price is compared with the same ${it.hasVariants ? 'roll and item level' : 'item'} across EU.</p></div>
         <label class="inline-field"><span>Realm</span><select class="select" id="list-realm">${options}</select></label></div>
       ${shown.length ? `<div class="table-wrap"><table><thead><tr><th class="plain">${it.hasVariants ? 'Roll' : 'Item'}</th><th class="plain r">Price</th><th class="plain r">vs ${it.hasVariants ? 'same roll' : 'the rest of'} EU</th><th class="plain">Time left</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : '<div class="empty">No listings here match the roll you picked.</div>'}
+        <tbody>${rows}</tbody></table></div>` : `<div class="empty">${here.length ? 'No listings here match the roll you picked.'
+          : `Nobody on ${esc(name)} has ${esc(it.name)} listed right now.`}</div>`}
       ${hidden ? `<div class="roll-foot"><span>${hidden} more listing${hidden === 1 ? '' : 's'} here with other rolls.</span>
         <button type="button" class="link-btn" id="list-all">Show every roll</button></div>` : ''}
     </section>`;
@@ -702,7 +741,7 @@ function initItem() {
       };
     }
     const lr = $('#list-realm');
-    if (lr) lr.onchange = () => { listRealm = +lr.value; rerender('#list-realm'); };
+    if (lr) lr.onchange = () => { const [cr, name] = lr.value.split('|'); listRealm = +cr; listRealmName = name; rerender('#list-realm'); };
     const la = $('#list-all');
     if (la) la.onclick = e => { rollFilter = {sec: '', ter: '', sock: '', ilvl: null}; rerender(e.detail === 0 ? '#list-realm' : null); };
     const clear2 = $('#roll-clear2');
@@ -729,9 +768,11 @@ function initItem() {
       <button type="button" class="sort" data-sort="${k}">${l}</button></th>`).join('') + '</tr>';
     $('#realm-table tbody').innerHTML = rows.map(r => {
       const g = realmGroups[r.cr] || {names: [], locale: '', pop: ''}, d = r.lo / S.med - 1;
-      return `<tr class="${r.cr === myRealm ? 'you' : ''} ${r.flag ? 'flagged' : ''}"><td><b style="font-weight:600">${esc(groupName(r.cr))}</b>${r.cr === myRealm ? '<span class="you-tag">YOU</span>' : ''}
-        ${r.flag ? `<span class="flag-tag" title="${esc(flagText(r))}">${r.flag === 'wall' ? 'Price wall' : 'Far above'}</span>` : ''}
-        ${g.names.length > 1 ? `<span class="realm-tag">${esc(groupOthers(r.cr).join(', '))}</span>` : ''}</td>
+      // filtering by a realm that isn't the group's name: say which one matched ("incl. Frostwhisper")
+      const matched = f && !groupName(r.cr).toLowerCase().includes(f) ? g.names.filter(n => n.toLowerCase().includes(f)) : [];
+      return `<tr class="${r.cr === myRealm ? 'you' : ''} ${r.flag ? 'flagged' : ''}"><td><span class="realm-name"><b>${esc(groupName(r.cr))}</b>${realmsHint(r.cr)}${r.cr === myRealm ? '<span class="you-tag">YOU</span>' : ''}
+        ${r.flag ? `<span class="flag-tag" title="${esc(flagText(r))}">${r.flag === 'wall' ? 'Price wall' : 'Far above'}</span>` : ''}</span>
+        ${matched.length ? `<span class="realm-tag">incl. ${esc(matched.join(', '))}</span>` : ''}</td>
         <td><span class="lang" title="${esc(LANG[g.locale] || g.locale)}">${esc((g.locale || '').toUpperCase())}</span></td>
         <td class="muted">${esc(POP[g.pop] || g.pop || '–')}</td>
         ${it.hasVariants ? `<td><span class="with-icon">${tipIcon(it, r.v.tt, `<b>${esc(groupName(r.cr))}</b> · ${gold(r.lo)}`)}${rollLabel(r.v)}</span></td>` : ''}
