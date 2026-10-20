@@ -164,7 +164,7 @@ async def _buffs_given(session, code, fight, actors, analysis):
         ability = (e.get('ability') or {}).get('name')
         if not ability:  # v2 events carry only the id
             if not abilities:
-                abilities = await wcl.get_report_abilities(session, code)
+                abilities = await wcl.get_report_abilities(session, code, need={x.get('abilityGameID') for x in events})
             ability = (abilities.get(e.get('abilityGameID')) or ('',))[0]
         out.append([e['timestamp'] - fight['startTime'], src, tgt, ability])
     return out
@@ -232,7 +232,8 @@ async def _mechanic_events(session, code, fight, tables):
         names = ', '.join('"' + n.replace('"', '') + '"' for n in status)
         debuffs = await wcl.get_events(session, code, fight['id'], 'Debuffs',
                                        f'type = "applydebuff" and ability.name in ({names})')
-        abilities = await wcl.get_report_abilities(session, code) if debuffs else {}
+        abilities = await wcl.get_report_abilities(
+            session, code, need={e.get('abilityGameID') for e in debuffs}) if debuffs else {}
         for e in debuffs:  # events carry only the spell id: the name ties it to its mechanic
             e['abilityName'] = (abilities.get(e.get('abilityGameID')) or ('',))[0]
     return events, complete, debuffs

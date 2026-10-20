@@ -262,10 +262,11 @@ async def get_player_fight(session, code, fight_id, name):
     start, end = fight['start_time'], fight['end_time']
     safe = name.replace('"', '')
     casts = await _events(session, code, start, end, 'casts', f'source.name = "{safe}"', PAGE_SIZE)
+    lust = await _events(session, code, start, end, 'buffs', wcl.lust_filter(name), PAGE_SIZE)
     details = (await _table(session, code, 'summary', start, end)).get('playerDetails') or {}
     entry = wcl._details_entry({'playerDetails': details}, name) or {}
     return {'start': start, 'end': end,
             'phases': [{'id': p['id'], 'start': p['startTime'] - start} for p in fight.get('phases') or []],
-            'casts': casts, 'spec': wcl._spec_in_details({'playerDetails': details}, name),
+            'casts': casts, 'lust': lust, 'spec': wcl._spec_in_details({'playerDetails': details}, name),
             'actor_id': entry.get('id'),
             'boss_ids': wcl.boss_ids(await _table(session, code, 'damage-taken', start, end, hostility=1))}

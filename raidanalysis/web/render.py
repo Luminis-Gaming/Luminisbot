@@ -251,6 +251,18 @@ tr.muted-row td { opacity: 0.7; }
 .weak-line { margin: 3px 0 0 24px; font-size: 12px; color: #ffb4a8; }
 .cmp-tl .ph { position: absolute; top: 2px; bottom: 2px; border-left: 1px dashed rgba(255,255,255,0.35); }
 .cmp-tl.real .al, .cmp-tl:not(.real) .rl, .cmp-tl.real .win { display: none; }
+/* Where each lane's fight ended (a skull: the boss died; ✕: your wipe), hatched after it - a faster kill is why
+   someone has no casts left there - and, with the Bloodlust chip, when their raid lusted */
+.cmp-tl .tl-lab .fin-t { flex-shrink: 0; font-size: 10px; font-weight: 400; color: var(--faint); cursor: help; }
+.cmp-tl .m.fin { z-index: 2; font-size: 11px; font-weight: 700; line-height: 1; font-style: normal;
+    color: var(--muted); cursor: help; }
+.cmp-tl .m.fin img { display: block; width: 14px; height: 14px; }
+.cmp-tl .m.after { top: 0; bottom: 0; right: 0; transform: none; pointer-events: none;
+    background: repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 3px, transparent 3px 7px); }
+.cmp-tl .m.lust { top: 3px; bottom: 3px; transform: none; border-radius: 3px; cursor: help;
+    background: color-mix(in srgb, var(--lust) 22%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lust) 60%, transparent); }
+.cmp-tl:not(.lust-on) .m.lust { display: none; }
 .tl-chip .chip-icon { width: 16px; height: 16px; border-radius: 3px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-right: auto; }
 .seg button { border: 0; border-radius: 0; padding: 4px 10px; background: transparent; color: var(--muted);
@@ -350,6 +362,14 @@ tr.muted-row td { opacity: 0.7; }
 .cons-tl .tl-lab.c-add .npc-icon { width: 18px; height: 18px; }
 .cons-tl .tl-row.c-add .fspawn { top: 6px; bottom: 6px; }
 .tl .tl-phase.fspawnline { border-left: 2px dashed var(--c); opacity: 0.85; z-index: 1; }
+/* Bloodlust (consumables.timeline): its own lane, and a faint band behind everyone's rows - drawn under their
+   marks, so a potion pressed into lust shows inside it instead of one hiding the other */
+.cons-tl .tl-lab.c-lust { color: var(--text); font-weight: 600; }
+.m.k-lust { background: color-mix(in srgb, var(--lust) 75%, transparent); }
+.m.bar.k-lust > b { --kc: var(--lust); }
+.tl-lust { position: absolute; top: 0; bottom: 20px; pointer-events: none;
+    background: color-mix(in srgb, var(--lust) 10%, transparent);
+    box-shadow: inset 1px 0 color-mix(in srgb, var(--lust) 55%, transparent); }
 /* Potion bars start with the potion's icon; a healing potion is a dot (a healthstone a diamond) */
 .m.bar > b { position: absolute; left: 0; top: 50%; width: 16px; height: 16px; transform: translate(-50%, -50%);
     border-radius: 4px; background-size: cover; background-color: var(--surface);
@@ -1717,6 +1737,11 @@ onEach('.cmp-tl', tl => {
     tl.classList.toggle('real', real);
     tl.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'));
     tl.querySelectorAll('.m[data-a]').forEach(m => { m.style.left = real ? m.dataset.r : m.dataset.a; });
+  }));
+  tl.querySelectorAll('.tl-chip[data-lust]').forEach(chip => chip.addEventListener('click', () => {
+    const on = chip.getAttribute('aria-pressed') !== 'true';
+    chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+    tl.classList.toggle('lust-on', on);
   }));
 });
 // Timelines remember the viewer's filters (in this browser, per kind of timeline - raid, cooldowns, focus), so

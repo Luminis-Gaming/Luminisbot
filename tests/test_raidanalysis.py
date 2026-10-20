@@ -898,7 +898,7 @@ class TestSameNameMechanics(unittest.TestCase):
             calls.append((kind, flt))
             return [{}] * (max_events if '5' in flt else 1)                            # the small request: capped
 
-        async def abilities(session, code):
+        async def abilities(session, code, need=()):
             return {}
         with mock.patch('raidanalysis.guides.effective_tags', return_value=({1: 'avoidable', 2: 'avoidable'}, {})), \
                 mock.patch('raidanalysis.wcl.get_events', events), \
@@ -3420,3 +3420,95 @@ class TestMeleeIsNotASpell(unittest.TestCase):
         from raidanalysis.web import render
         self.assertIn('const NOT_SPELLS = new Set([1]);', render.PAGE_JS)
         self.assertIn('!NOT_SPELLS.has(+id)', render.PAGE_JS)
+
+
+class TestLiveReportCaches(unittest.TestCase):
+    """A report still being logged when we first asked: later pulls' enemies and buffs are fetched again."""
+
+    def test_actors_fetched_again_for_an_unknown_id(self):
+        import asyncio
+        from unittest import mock
+        from raidanalysis import wcl
+        answers = [[{'id': 16, 'name': 'Tallgrogu', 'type': 'Player'}],
+                   [{'id': 16, 'name': 'Tallgrogu', 'type': 'Player'}, {'id': 242, 'name': "Ula'tek", 'type': 'NPC'}]]
+        calls = []
+
+        async def query(session, gql, variables=None):
+            calls.append(gql)
+            return {'reportData': {'report': {'masterData': {'actors': answers[min(len(calls), 2) - 1]}}}}
+        wcl._all_actors.pop('live', None)
+        with mock.patch('raidanalysis.wcl.query', query):
+            asyncio.run(wcl.get_report_actors(None, 'live'))
+            self.assertEqual(len(asyncio.run(wcl.get_report_actors(None, 'live', need={16}))), 1)  # known: cached
+            self.assertEqual(len(calls), 1)
+            asyncio.run(wcl.get_report_actors(None, 'live', need={242}))
+            self.assertEqual(len(calls), 1)                          # fetched under REFETCH_S ago: not again yet
+            wcl._all_actors['live'] = (0, wcl._all_actors['live'][1])
+            actors = asyncio.run(wcl.get_report_actors(None, 'live', need={242}))
+            self.assertEqual(len(calls), 2)
+            self.assertIn("Ula'tek", {a['name'] for a in actors})
+            wcl._all_actors['live'] = (0, wcl._all_actors['live'][1])
+            asyncio.run(wcl.get_report_actors(None, 'live', need={"Ula'tek"}))   # by name too
+            self.assertEqual(len(calls), 2)
+
+    def test_stored_buffs_without_a_name_get_wowhead_s(self):
+        from unittest import mock
+        from raidanalysis.web import focusview
+        auras = [{'id': 410089, 'name': 'Spell 410089', 'icon': '', 'mine': False, 'from': ['Fujurmix'], 'bands': [[0, 1]]},
+                 {'id': 10060, 'name': 'Power Infusion', 'icon': 'pi.jpg', 'mine': False, 'from': ['P'], 'bands': [[0, 1]]}]
+        with mock.patch('raidanalysis.spells.lookup', lambda ids: {410089: {'name': 'Prescience', 'icon': 'prescience'}}):
+            named = focusview._named(auras)
+        self.assertEqual([a['name'] for a in named], ['Prescience', 'Power Infusion'])
+        self.assertIn('prescience', named[0]['icon'])
+
+
+class TestLustAndFightEnds(unittest.TestCase):
+    """Bloodlust on the raid and cooldowns timelines; where each player's boss died on the cooldowns one."""
+
+    def test_a_second_lust_inside_the_first_is_one(self):
+        from raidanalysis import cooldowns
+        uses = [{'t': 60000, 'ability': 'Bloodlust', 'name': 'Kyuby', 'ability_id': 2825},
+                {'t': 61000, 'ability': 'Time Warp', 'name': 'Mage', 'ability_id': 80353},
+                {'t': 5000, 'ability': 'Rallying Cry', 'name': 'W', 'ability_id': 97462}]
+        lusts = cooldowns.lust_uses(uses, duration=90000)
+        self.assertEqual([(u['t'], u['end'], len(u['also'])) for u in lusts], [(60000, 90000, 1)])  # cut at the pull's end
+        bands = cooldowns.lust_bands([{'type': 'applybuff', 'timestamp': 1500, 'abilityGameID': 390386, 'targetID': 3},
+                                      {'type': 'applybuff', 'timestamp': 1500, 'abilityGameID': 390386, 'targetID': 9}],
+                                     1000, 100000, target_id=3)
+        self.assertEqual(bands, [[500, 99000, 390386]])                                    # never removed: to the end
+
+    def test_raid_timeline_lust_lane_and_band(self):
+        from raidanalysis.web import consumables
+        analysis = {'_duration': 300000, 'players': [{'name': 'Boops', 'class': 'Hunter', 'role': 'dps'}],
+                    'consumables': [{'t': 70000, 'end': 100000, 'name': 'Boops', 'ability_id': 431932,
+                                     'ability': 'Tempered Potion', 'icon': 'potion.jpg', 'kind': 'potion'}],
+                    'cooldowns': [{'t': 60000, 'name': 'Kyuby', 'ability_id': 2825, 'ability': 'Bloodlust',
+                                   'icon': 'bl.jpg', 'category': 'utility', 'target': None}]}
+        html = consumables.timeline([{'number': 1, 'kill': True, 'analysis': analysis, 'phases': []}],
+                                    analysis['players'])
+        self.assertIn('data-k="lust" data-name="lust" aria-pressed="false"', html)           # a chip, off until clicked
+        self.assertIn('class="tl-row c-lane c-lust" data-k="lust"', html)
+        self.assertIn('class="tl-lust" data-k="lust"', html)                                  # the band behind everyone
+        self.assertIn('Bloodlust by Kyuby · 1:00–1:40 (40 s)', html)
+        self.assertIn('30 s of it in lust', html)                                             # the potion inside it
+
+    def test_cooldowns_timeline_fight_ends_and_lust(self):
+        from raidanalysis.web import compare
+        row = {'ids': [190319], 'icon_id': 190319, 'name': 'Combustion', 'category': 'throughput', 'verdict': 'good',
+               'known': True, 'windows': [], 'weak': []}
+        top = [{'rank': 1, 'name': 'Fast', 'amount': 1, 'duration': 240000, 'phases': [], 'casts': [[10000, 190319]],
+                'lust': [[2000, 42000, 80353]]}]
+        pull = {'number': 4, 'kill': False, 'duration': 300000, 'phases': [], 'casts': [[280000, 190319]],
+                'lust': [[5000, 45000, 2825, 'Bloodlust', 'Kyuby']]}
+        html = compare.timeline({'top': top, 'rows': [row], 'spells': {}}, pull)
+        self.assertIn('class="m fin kill" style="left:80.000%"', html)                       # their boss died at 4:00
+        self.assertIn('Boss killed at 4:00', html)
+        self.assertIn('class="m fin" style="left:100.000%"', html)                           # your wipe at 5:00
+        self.assertIn('class="m after" style="left:80.000%"', html)                          # hatched after the kill
+        self.assertIn('data-lust data-name="lust"', html)
+        self.assertIn('Time Warp · 0:02–0:42 (40 s)', html)
+        self.assertIn('Bloodlust by Kyuby · 0:05–0:45 (40 s)', html)
+        self.assertNotIn('fetched again', html)                                              # both have their lust
+        old = compare.timeline({'top': [{k: v for k, v in top[0].items() if k != 'lust'}], 'rows': [row], 'spells': {}},
+                               pull)
+        self.assertIn('fetched again', old)                                                  # stored before lust was

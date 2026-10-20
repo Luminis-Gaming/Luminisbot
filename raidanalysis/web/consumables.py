@@ -24,6 +24,7 @@ TIMELINE_KINDS = (('potion', 'Combat potion'), ('mana', 'Mana potion'), ('health
                   ('healing', 'Healing potion'))
 BOSS_TICK = '#9aa1b9'
 DEATH = '#ff6b6b'
+LUST = '#d6457a'  # Bloodlust & co: off the potion / defensive hues, so a potion inside a lust still reads as one
 POTION_BUFF_FALLBACK_MS = 30000
 DEFAULT_ON = ()  # cooldown groups shown without clicking: none - the boss and potions are what the timeline opens on
 ICON_BASE = 'https://assets.rpglogs.com/img/warcraft/abilities/'
@@ -118,11 +119,11 @@ def _dropdown(key, label, items):
             f'<label class="tl-dd-all"><input type="checkbox" data-all>All</label>{rows}</div></details>')
 
 
-def toolbar(pulls, single, cds, boss_items=()):
+def toolbar(pulls, single, cds, boss_items=(), lusts=0):
     """
     What the timeline shows, a dropdown per category (they double as its legend): Boss (phases, each kind
     of add, the enemy's abilities), Potions & healthstones (each kind), and each cooldown group with its
-    abilities - plus a Deaths chip. The boss (its priority adds only) and potions start visible, the cooldown groups (but DEFAULT_ON)
+    abilities - plus a Bloodlust chip (lusts: how many) and a Deaths chip. The boss (its priority adds only) and potions start visible, the cooldown groups (but DEFAULT_ON)
     don't, to keep the default view calm. PAGE_JS does the toggling.
     """
     dds = []
@@ -148,6 +149,11 @@ def toolbar(pulls, single, cds, boss_items=()):
                 (e['key'], _icon(e['icon']), name, e['count'], e['sid'], None, key in DEFAULT_ON)
                 for name, e in abilities]))
     chips = ''.join(dds)
+    if lusts:
+        chips += (f'<button type="button" class="tl-chip" data-k="lust" data-name="lust" aria-pressed="false" '
+                  f'data-tip="Bloodlust, Heroism, Time Warp, Primal Rage, Fury of the Aspects: when it was cast and its '
+                  f'{cooldowns.LUST_MS // 1000} s, shaded behind everyone">'
+                  f'<i style="--c:{LUST}"></i>Bloodlust</button>')
     if single:
         chips += (f'<button type="button" class="tl-chip" data-k="death" data-name="death" aria-pressed="true">'
                   f'<i style="--c:{DEATH}"></i>Deaths</button>')
@@ -242,6 +248,26 @@ def timeline(pulls, roster, spell_lookup=None, majors=None, adds=None, phase_nam
         return '' if single else f'Pull {pull["number"]} · '
 
     labels, rows, lines, boss_items = _boss_section(adds_pull(pulls), adds, phase_names, npc_icons or {}, at, longest)
+    # Bloodlust: a lane of its own (a bar per lust, its icon first) and a faint band behind every player's row -
+    # under their marks, so a potion or cooldown pressed into lust stays in sight, inside it
+    lusts = {id(p): cooldowns.lust_uses(cds[id(p)], p['analysis'].get('_duration')) for p in pulls}
+    if any(lusts.values()):
+        bars = []
+        for pull in pulls:
+            for u in lusts[id(pull)]:
+                width = 100 * (min(u['end'], longest) - u['t']) / longest
+                also = ''.join(f' · also {a["ability"]} by {a["name"]} at {fmt_duration(a["t"])} (already lusted)'
+                               for a in u['also'])
+                tip = (f'{prefix(pull)}{u["ability"]} by {u["name"]} · {fmt_duration(u["t"])}–{fmt_duration(u["end"])} '
+                       f'({(u["end"] - u["t"]) / 1000:.0f} s){also}')
+                bars.append(f'<i class="m bar k-lust" style="left:{at(u["t"])};width:{width:.3f}%" '
+                            f'data-spell="{u["ability_id"]}" data-tip="{esc(tip)}"><b class="sp{int(u["ability_id"])}"></b></i>')
+                lines.append(f'<i class="tl-lust" data-k="lust" style="left:{at(u["t"])};width:{width:.3f}%"></i>')
+        labels.append('<div class="tl-lab c-lust" data-k="lust">Bloodlust</div>')
+        rows.append(f'<div class="tl-row c-lane c-lust" data-k="lust">{"".join(bars)}</div>')
+
+    def in_lust(pull, start, end):  # seconds of [start, end] inside one of the pull's lusts
+        return sum(max(0, min(end, u['end']) - max(start, u['t'])) for u in lusts[id(pull)]) / 1000
     if reference:
         # One lane per ability *name* - bosses often cast the same ability under several spell IDs.
         analysis = reference['analysis']
@@ -281,6 +307,9 @@ def timeline(pulls, roster, spell_lookup=None, majors=None, adds=None, phase_nam
                 else:
                     end = use.get('end') or (use['t'] + POTION_BUFF_FALLBACK_MS)
                     tip += f' · {fmt_duration(end - use["t"])} buff'
+                    overlap = in_lust(pull, use['t'], end)
+                    if overlap >= 1:
+                        tip += f' · {overlap:.0f} s of it in lust'
                     width = 100 * (min(end, longest) - max(0, use['t'])) / longest
                     marks.append(f'<i class="m bar k-{k}" data-k="{k}" style="left:{at(use["t"])};width:{width:.3f}%" '
                                  f'data-spell="{use["ability_id"]}" data-tip="{esc(tip)}">'
@@ -314,9 +343,9 @@ def timeline(pulls, roster, spell_lookup=None, majors=None, adds=None, phase_nam
     icon_css = ''.join(f'.sp{int(sid)}{{background-image:url({_icon_src(icon)})}}'
                        for sid, (_, icon) in spells.items() if icon and _icon_src(icon))
     return f"""<div class="tl cons-tl{"" if single else " multi"}" data-duration="{longest}" data-remember="raid"
-        style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']}">
+        style="--potion:{KIND_COLORS['potion']};--mana:{KIND_COLORS['mana']};--defensive:{KIND_COLORS['defensive']};--lust:{LUST}">
         <style>{icon_css}</style>
-        {toolbar(pulls, single, cds, boss_items)}
+        {toolbar(pulls, single, cds, boss_items, sum(len(v) for v in lusts.values()))}
         {loading}
         <div class="tl-tools"><span class="muted small">Drag to pan · Ctrl + scroll or pinch to zoom</span>
             <button type="button" data-zoom="out" title="Zoom out">−</button>

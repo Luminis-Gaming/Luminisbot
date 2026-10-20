@@ -230,6 +230,7 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
+                        'lust': cooldowns.lust_bands(fight.get('lust'), fight['start'], fight['end'], fight.get('actor_id')),
                         'resources': resources, 'procs': procs, 'on_others': on_others, 'targets': targets})
     if wrong_spec:
         logger.warning(f"[RAIDS] Top {spec} {class_name} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
@@ -707,7 +708,9 @@ def our_pulls(pulls, name, spec=None):
             casts = [[c['t'], c['ability_id']] for c in analysis.get('cooldowns') or [] if c['name'] == name]
             casts += [[u['t'], u['ability_id']] for u in analysis.get('consumables') or [] if u['name'] == name]
         cast_ids, seen = analysis.get('cast_ids'), analysis.get('casts_seen')
-        out.append({'number': number, 'fight_id': pull['fight_id'], 'kill': pull.get('kill'),
+        lust = [[u['t'], u['end'], u['ability_id'], u['ability'], u['name']]
+                for u in cooldowns.lust_uses(analysis.get('cooldowns'), pull['end_ms'] - pull['start_ms'])]
+        out.append({'number': number, 'fight_id': pull['fight_id'], 'kill': pull.get('kill'), 'lust': lust,
                     'duration': pull['end_ms'] - pull['start_ms'], 'phases': pull.get('phases') or [],
                     'casts': sorted(casts), 'cast_ids': set(cast_ids) if cast_ids is not None else None,
                     'casts_seen': set(seen) if seen is not None else None,

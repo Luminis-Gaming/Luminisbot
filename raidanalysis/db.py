@@ -1324,9 +1324,10 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                   (b.status IN ('error', 'empty') AND b.fetched_at > NOW() - INTERVAL '1 day')
                   OR (b.status NOT IN ('error', 'empty') AND b.fetched_at > NOW() - make_interval(days => %s)
                       -- fetched before every top parse's spec was checked, or before their auras and
-                      -- casts were kept (uptime / casts per minute): fetch again
+                      -- casts were kept (uptime / casts per minute), or the lust on them (the cooldowns
+                      -- timeline): fetch again
                       AND (jsonb_array_length(b.players) = 0
-                           OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras'))))
+                           OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras' AND b.players -> 0 ? 'lust'))))
         )
         ORDER BY c.last_played DESC
         LIMIT %s

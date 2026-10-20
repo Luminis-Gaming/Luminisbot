@@ -496,8 +496,6 @@ async def load_by_target(code, pulls):
         return False, "Warcraft Logs' hourly budget is used up - everyone's damage loads once it resets."
     try:
         async with aiohttp.ClientSession() as session:
-            actors = await wcl.get_report_actors(session, code)
-            enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
             for pull in missing:
                 targets = ((pull.get('analysis') or {}).get('extras') or {}).get('targets') or []
                 had = db.get_focus(code, pull['fight_id'], TARGETS_KEY)
@@ -506,6 +504,7 @@ async def load_by_target(code, pulls):
                 else:
                     total = sum(t.get('total') or 0 for t in targets) or 1
                     wanted = {t['name'] for t in targets if (t.get('total') or 0) >= TARGET_MIN_SHARE * total}
+                    actors = await wcl.get_report_actors(session, code, need=wanted)
                     ids = {a['id']: a['name'] for a in actors if a.get('type') == 'NPC' and a['name'] in wanted}
                     tables = await wcl.get_damage_by_target(session, code, pull['fight_id'], list(ids))
                     out = {}
@@ -521,7 +520,7 @@ async def load_by_target(code, pulls):
                            for t, r in out.items() if t != main}
                 events = await wcl.get_events(session, code, pull['fight_id'], 'DamageDone', _up_filter(hitters),
                                               max_events=UP_MAX_EVENTS) if hitters else []
-                up = up_seconds(bin_damage(events, start, n, enemies), n)
+                up = up_seconds(bin_damage(events, start, n, await _enemies(session, code, events)), n)
                 up.update({t: n * BIN_MS / 1000 for t in out if t == main})
                 db.save_focus(code, pull['fight_id'], TARGETS_KEY, {'v': TARGETS_VERSION, 'targets': out, 'up': up})
     except wcl.WCLError as e:
@@ -530,7 +529,18 @@ async def load_by_target(code, pulls):
     return True, None
 
 
-async def _fetch_raid(session, code, pull, extras, enemies):
+async def _enemies(session, code, *event_lists):
+    """
+    {actor id: name} of the report's enemies - fetched again when these events hit one the copy we have doesn't
+    know (a report still being logged when we first fetched it: the later bosses and their adds).
+    """
+    from . import wcl
+    actors = await wcl.get_report_actors(session, code, need={e.get('targetID') for events in event_lists
+                                                              for e in events or []})
+    return {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
+
+
+async def _fetch_raid(session, code, pull, extras):
     """Fetch and store the pull's raid sample (RAID_KEY): its top DPS's damage, binned, and the enemies' deaths."""
     from . import db, wcl
     fight_id, start = pull['fight_id'], pull['start_ms']
@@ -540,6 +550,7 @@ async def _fetch_raid(session, code, pull, extras, enemies):
     events = await wcl.get_events(session, code, fight_id, 'DamageDone', _sources_filter(sample),
                                   max_events=RAID_MAX_EVENTS) if sample else []
     deaths = await wcl.get_events(session, code, fight_id, 'Deaths', 'type = "death"', hostility='Enemies')
+    enemies = await _enemies(session, code, events, deaths)
     raid = {'v': FOCUS_VERSION, 'main': targets[0]['name'] if targets else None, 'sample': sample,
             'b': bin_damage(events, start, n, enemies), 'appear': first_hits(events, start, enemies),
             'deaths': deaths_by_target(deaths, start, enemies)}
@@ -564,9 +575,7 @@ async def load_raid(code, pull):
         return False, "Warcraft Logs' hourly budget is used up - the adds load once it resets."
     try:
         async with aiohttp.ClientSession() as session:
-            actors = await wcl.get_report_actors(session, code)
-            enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
-            await _fetch_raid(session, code, pull, extras, enemies)
+            await _fetch_raid(session, code, pull, extras)
     except wcl.WCLError as e:
         logger.warning(f'[RAIDS] Raid sample for {code}#{pull["fight_id"]} failed: {e}')
         return False, "Couldn't load the adds from Warcraft Logs right now - try again in a bit."
@@ -599,20 +608,24 @@ async def load(code, pull, name, extras, cooldown_names=()):
     targets = extras.get('targets') or []
     try:
         async with aiohttp.ClientSession() as session:
-            actors = await wcl.get_report_actors(session, code)
-            me = next((a for a in actors if a['name'] == name and a.get('type') == 'Player'), None)
-            if not me:
-                return None, f"{name} isn't in this log's player list."
-            enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
             mine = await wcl.get_events(session, code, fight_id, 'DamageDone', _sources_filter([name]))
             wanted = sorted(set(cooldown_names) | set(external_buff_names()))
             quoted = name.replace('"', '')
             buffs = await wcl.get_events(session, code, fight_id, 'Buffs', f'target.name = "{quoted}" and ability.name in ('
                                          + ', '.join('"' + w.replace('"', '') + '"' for w in wanted) + ')')
-            abilities = await wcl.get_report_abilities(session, code) if buffs else {}
+            # The actors and abilities these events mention: a copy fetched while the report was still being
+            # logged lacks the later pulls' (their enemies' damage came back as "on no known enemy")
+            actors = await wcl.get_report_actors(session, code, need={name} | {e.get('targetID') for e in mine or []}
+                                                 | {e.get('sourceID') for e in buffs or []})
+            me = next((a for a in actors if a['name'] == name and a.get('type') == 'Player'), None)
+            if not me:
+                return None, f"{name} isn't in this log's player list."
+            enemies = {a['id']: a['name'] for a in actors if a.get('type') not in ('Player', 'Pet')}
+            abilities = await wcl.get_report_abilities(
+                session, code, need={e.get('abilityGameID') for e in buffs}) if buffs else {}
             raid = db.get_focus(code, fight_id, RAID_KEY)
             if not raid or raid.get('v') != FOCUS_VERSION:
-                raid = await _fetch_raid(session, code, pull, extras, enemies)
+                raid = await _fetch_raid(session, code, pull, extras)
     except wcl.WCLError as e:
         logger.warning(f'[RAIDS] Focus events for {code}#{fight_id} {name} failed: {e}')
         return None, "Couldn't load the timeline from Warcraft Logs right now - try again in a bit."

@@ -281,29 +281,45 @@ async def get_actor_ids(session, code):
     return _actors[code]
 
 
-_abilities = {}  # report code -> {game id: (name, icon)} (focus.py: buff events carry only the id)
+# Per report, kept for the process: (fetched at, data). A report that's still being logged grows - new pulls bring
+# actors and abilities the copy we fetched earlier doesn't have - so a caller passes `need` (the ids its events
+# mention) and a copy missing any of them is fetched again (at most every REFETCH_S: an id the report really
+# doesn't name never makes every call a request).
+REFETCH_S = 60
+_abilities = {}  # report code -> (time, {game id: (name, icon)}) (focus.py: buff events carry only the id)
 
 
-async def get_report_abilities(session, code):
-    """Every ability in a report: {game id: (name, icon file)}."""
-    if code not in _abilities:
+def _stale(cache, code, have, need):
+    import time
+    if code not in cache:
+        return True
+    at, data = cache[code]
+    return bool(set(need or ()) - {None} - have(data)) and time.time() - at > REFETCH_S
+
+
+async def get_report_abilities(session, code, need=()):
+    """Every ability in a report: {game id: (name, icon file)}. need: game ids the caller has to name."""
+    import time
+    if _stale(_abilities, code, set, need):
         if len(_abilities) > 200:
             _abilities.clear()
         data = await query(session, """
             query($code: String!) { reportData { report(code: $code) { masterData { abilities { gameID name icon } } } } }
         """, {'code': code})
         rows = ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {}).get('abilities')) or []
-        _abilities[code] = {a['gameID']: (a.get('name') or '', a.get('icon') or '') for a in rows if a.get('gameID')}
-    return _abilities[code]
+        _abilities[code] = (time.time(), {a['gameID']: (a.get('name') or '', a.get('icon') or '')
+                                          for a in rows if a.get('gameID')})
+    return _abilities[code][1]
 
 
-_all_actors = {}  # report code -> every actor (focus.py: enemies by id, a player's pets)
+_all_actors = {}  # report code -> (time, every actor) (focus.py: enemies by id, a player's pets)
 
 
-async def get_report_actors(session, code):
+async def get_report_actors(session, code, need=()):
     """Every actor in a report - players, pets, NPCs: [{'id', 'name', 'type', 'subType', 'petOwner', 'gameID',
-    'server' (players' realm)}]."""
-    if code not in _all_actors:
+    'server' (players' realm)}]. need: actor ids (events' sources / targets) or names the caller has to know."""
+    import time
+    if _stale(_all_actors, code, lambda actors: {a['id'] for a in actors} | {a['name'] for a in actors}, need):
         if len(_all_actors) > 200:
             _all_actors.clear()
         data = await query(session, """
@@ -311,9 +327,9 @@ async def get_report_actors(session, code):
               reportData { report(code: $code) { masterData { actors { id name type subType petOwner gameID server } } } }
             }
         """, {'code': code})
-        _all_actors[code] = ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {})
-                             .get('actors')) or []
-    return _all_actors[code]
+        _all_actors[code] = (time.time(), ((((data.get('reportData') or {}).get('report') or {}).get('masterData') or {})
+                                           .get('actors')) or [])
+    return _all_actors[code][1]
 
 
 @_v1_fallback
@@ -494,20 +510,21 @@ async def get_player_fight(session, code, fight_id, name):
     """
     One player's casts in someone else's logged kill, plus that fight's timing and the spec they
     played in it: {'start', 'end', 'phases': [{'id', 'start'}] (ms into the fight), 'casts': [events],
-    'spec': 'Devourer' or None}.
+    'spec': 'Devourer' or None, 'lust': [their lust buff events]}.
     """
     data = await query(session, """
-        query($code: String!, $fights: [Int]!, $filter: String!) {
+        query($code: String!, $fights: [Int]!, $filter: String!, $lust: String!) {
           reportData {
             report(code: $code) {
               fights(fightIDs: $fights) { id startTime endTime phaseTransitions { id startTime } }
               events(fightIDs: $fights, dataType: Casts, filterExpression: $filter, limit: 10000) { data }
+              lust: events(fightIDs: $fights, dataType: Buffs, filterExpression: $lust, limit: 1000) { data }
               playerDetails(fightIDs: $fights)
               enemyDamage: table(fightIDs: $fights, dataType: DamageTaken, hostilityType: Enemies)
             }
           }
         }
-    """, {'code': code, 'fights': [fight_id], 'filter': f'source.name = "{name}"'})
+    """, {'code': code, 'fights': [fight_id], 'filter': f'source.name = "{name}"', 'lust': lust_filter(name)})
     report = (data.get('reportData') or {}).get('report') or {}
     fight = next(iter(report.get('fights') or []), None)
     if not fight:
@@ -517,8 +534,16 @@ async def get_player_fight(session, code, fight_id, name):
     return {'start': start, 'end': fight['endTime'],
             'phases': [{'id': p['id'], 'start': p['startTime'] - start} for p in fight.get('phaseTransitions') or []],
             'casts': ((report.get('events') or {}).get('data')) or [],
+            'lust': ((report.get('lust') or {}).get('data')) or [],
             'spec': _spec_in_details(report.get('playerDetails'), name),
             'actor_id': entry.get('id'), 'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
+
+
+def lust_filter(name):
+    """Bloodlust and its kin landing on one player (Buffs events)."""
+    from .cooldowns import LUST
+    return (f'type in ("applybuff", "removebuff") and target.name = "{name.replace(chr(34), "")}" and ability.name in ('
+            + ', '.join(f'"{n}"' for n in LUST) + ')')
 
 
 def _details_entry(player_details, name):

@@ -191,6 +191,24 @@ def _external_lanes(auras, duration):
     return lanes, picks
 
 
+def _named(auras):
+    """
+    The buffs with a name: stored before the report's ability list knew them (fetched while it was still being
+    logged), they say "Spell 410089" - Wowhead's name (the tooltips' spell cache) and icon stand in.
+    """
+    unnamed = [a['id'] for a in auras if not a.get('name') or a['name'] == f'Spell {a["id"]}']
+    if not unnamed:
+        return auras
+    spells.offer(unnamed)
+    known = spells.lookup(unnamed)
+    out = []
+    for a in auras:
+        info = known.get(a['id']) if a['id'] in unnamed else None
+        out.append(dict(a, name=info['name'], icon=a.get('icon') or spells.icon_url(info.get('icon')))
+                   if info and info.get('name') else a)
+    return out
+
+
 def _group(title, hint='', key=None):
     """A group header in the label column (and an empty row beside it); key: the chip that hides it too."""
     hint_html = f'<small>{hint}</small>' if hint else ''
@@ -325,7 +343,7 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
                      f'data-tip="{esc(pot[0].get("ability") or "Potion")} at {_clock(pot[0]["t"])} - '
                      f'{_lead_text(pot[1])} ({esc(w["target"])}, {_clock(w["start"])})">'
                      f'<span>{abs(pot[1]):.1f} s</span></i>')
-    auras = data.get('auras') or []
+    auras = _named(data.get('auras') or [])
     (cd_lanes, cd_picks), (ext_lanes, ext_picks) = _cooldown_lanes(cooldowns, auras, duration), \
         _external_lanes(auras, duration)
     if cd_lanes:

@@ -7,8 +7,9 @@ The timeline has two time modes: "Align phases" (default) shifts everyone's cast
 timeline phase by phase - phases are health-based, so they start at different times for everyone -
 and shades the moments most top players agree on; "Real time" shows each fight as it happened.
 """
-from .. import benchmarks
+from .. import benchmarks, cooldowns
 from ..spells import icon_url
+from .consumables import LUST as LUST_COLOR
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
 
 VERDICTS = {'good': ('pill-kill', 'In line'), 'mostly': ('pill-mostly', 'Mostly in line'),
@@ -172,6 +173,8 @@ def timeline(data, pull, boss=None, spell_lookup=None):
     Grouped by ability: a header lane with the shared moments, then You and the top 5 underneath -
     under the boss's abilities from your pull (boss = {'abilities', 'casts'} from its analysis), so
     you can see what a cooldown was lined up against. spell_lookup(ids) -> Wowhead text (spells.lookup).
+    Every lane shows where its fight ended (a skull for a kill, hatched after it: a faster kill is why
+    someone has no casts left there) and, with the Bloodlust chip, when their raid lusted.
     """
     top, rows, spells = data['top'], major_rows(data), data['spells']
     ref = benchmarks.reference_starts(top)
@@ -179,23 +182,51 @@ def timeline(data, pull, boss=None, spell_lookup=None):
     boss_meta = {a['id']: a for a in boss.get('abilities') or []}
     boss_casts = [(t, sid) for t, sid in boss.get('casts') or [] if sid in boss_meta]
     lanes = [{'label': f'You · pull #{pull["number"]}', 'you': True, 'duration': pull['duration'],
-              'phases': pull['phases'], 'casts': pull['casts'],
+              'phases': pull['phases'], 'casts': pull['casts'], 'kill': pull.get('kill'),
+              'lust': [(s, e, sid, f'{ability} by {who}') for s, e, sid, ability, who in pull.get('lust') or []],
               'who': f'You (pull #{pull["number"]}, {fmt_duration(pull["duration"])}'
                      f'{" kill" if pull.get("kill") else ""})'}]
     for p in top:
         lanes.append({'label': f'#{p["rank"]} {p["name"]}', 'you': False, 'duration': p['duration'],
-                      'phases': p['phases'], 'casts': p['casts'],
+                      'phases': p['phases'], 'casts': p['casts'], 'kill': True,
+                      'lust': [(s, e, sid, cooldowns.LUST_IDS.get(sid, 'Bloodlust')) for s, e, sid in p.get('lust') or []],
                       'who': f'#{p["rank"]} {p["name"]} ({fmt_amount(p["amount"])} · {fmt_duration(p["duration"])} kill)'})
     for lane in lanes:
         lane['aligned'] = [(benchmarks.align(t, lane['phases'], ref), t, sid) for t, sid in lane['casts']]
+        lane['end'] = benchmarks.align(lane['duration'], lane['phases'], ref)
     boss_aligned = [(benchmarks.align(t, pull['phases'], ref), t, sid) for t, sid in boss_casts]
-    longest = max([lane['duration'] for lane in lanes]
+    longest = max([lane['duration'] for lane in lanes] + [lane['end'] for lane in lanes]
                   + [a for lane in lanes for a, _, _ in lane['aligned']] + [a for a, _, _ in boss_aligned] + [1])
 
     def at(t):
         return f'{100 * max(0, min(t, longest)) / longest:.3f}%'
 
+    def placed(cls, aligned, real, extra=''):  # a mark at its aligned spot, moved to `real` by Real time (PAGE_JS)
+        return f'<i class="m {cls}" style="left:{at(aligned)}{extra}" data-a="{at(aligned)}" data-r="{at(real)}"'
+
+    def lane_overlay(lane):
+        """(under its casts, over them): a lane's lusts (the Bloodlust chip shows them), hatching after its end, its end."""
+        lust = ''.join(placed('lust', benchmarks.align(s, lane['phases'], ref), s, f';width:{100 * (e - s) / longest:.3f}%')
+                       + f' data-spell="{sid}" data-tip="{esc(lane["who"])} · {esc(what)} · {fmt_duration(s)}–'
+                         f'{fmt_duration(e)} ({(e - s) / 1000:.0f} s)"></i>'
+                       for s, e, sid, what in lane['lust'])
+        ended = (f'Boss killed at {fmt_duration(lane["duration"])} - nothing left to press after this'
+                 if lane['kill'] else f'Pull ended (wipe) at {fmt_duration(lane["duration"])}')
+        after = placed('after', lane['end'], lane['duration']) + '></i>'
+        fin = (placed('fin kill' if lane['kill'] else 'fin', lane['end'], lane['duration'])
+               + f' data-tip="{esc(lane["who"])} · {esc(ended)}">{"💀" if lane["kill"] else "✕"}</i>')
+        return lust + after, fin
+
+    for lane in lanes:
+        lane['under'], lane['fin'] = lane_overlay(lane)
+
     labels, tracks, chips, icons = [], [], [], {}
+    if any(lane['lust'] for lane in lanes):
+        missing = '' if all('lust' in p for p in top) else (" The top players' shows once their parses are "
+                                                            "fetched again (within a few days).")
+        chips.append(f'<button type="button" class="tl-chip" data-lust data-name="lust" aria-pressed="false" '
+                     f'data-tip="When each raid lusted (Bloodlust, Heroism, Time Warp, Primal Rage, Fury of the '
+                     f'Aspects) and for how long, on every lane.{missing}"><i style="--c:{LUST_COLOR}"></i>Bloodlust</button>')
     # Boss abilities from your pull on top (one lane per ability name, like the consumables timeline).
     boss_spells = {}
     if boss_aligned:
@@ -256,9 +287,12 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                              f'style="left:{at(a)}" data-a="{at(a)}" data-r="{at(t)}" data-spell="{sid}" '
                              f'data-tip="{esc(lane["who"])} · {fmt_duration(t)}{where}"></i>')
             phase_ticks = ''.join(f'<i class="ph rl" style="left:{at(p["start"])}"></i>' for p in lane['phases'][1:])
-            labels.append(f'<div class="tl-lab{" you" if lane["you"] else ""}" data-g="{g}"{hidden}>{esc(lane["label"])}</div>')
+            labels.append(f'<div class="tl-lab{" you" if lane["you"] else ""}" data-g="{g}"{hidden}>'
+                          f'<span>{esc(lane["label"])}</span><small class="fin-t" data-tip="'
+                          f'{"Boss killed" if lane["kill"] else "Wiped"} at {fmt_duration(lane["duration"])}">'
+                          f'{fmt_duration(lane["duration"])}</small></div>')
             tracks.append(f'<div class="tl-row lane{" you" if lane["you"] else ""}" data-g="{g}"{hidden}>'
-                          f'{phase_ticks}{"".join(marks)}</div>')
+                          f'{phase_ticks}{lane["under"]}{"".join(marks)}{lane["fin"]}</div>')
     phases = ''.join(f'<i class="tl-phase al" style="left:{at(start)}"></i>'
                      for key, start in sorted(ref.items()) if start > 0)
     grid = ''.join(f'<i style="left:{at(t)}"></i>' for t in range(0, longest + 1, 60000))
@@ -274,7 +308,7 @@ def timeline(data, pull, boss=None, spell_lookup=None):
         spell_json[sid] = {'name': info.get('name') or name, 'icon': f'{ICON_BASE}{icon}' if icon else icon_url(info.get('icon')),
                            'meta': info.get('meta') or '', 'desc': info.get('description') or ''}
     has_phases = len(ref) > 1
-    return f"""<div class="tl cmp-tl" data-duration="{longest}" data-remember="cooldowns">
+    return f"""<div class="tl cmp-tl" data-duration="{longest}" data-remember="cooldowns" style="--lust:{LUST_COLOR}">
         <style>{icon_css}</style>
         <div class="tl-chips">{''.join(chips)}</div>
         <div class="tl-tools">
