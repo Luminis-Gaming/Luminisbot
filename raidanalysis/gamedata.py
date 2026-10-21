@@ -15,11 +15,17 @@ which one it replaces: Rushing Wind Kick takes Rising Sun Kick's place), TraitNo
 TraitNode which tree it's in. So an ability the top players use and you never pressed is "not talented"
 only when your talents that pull say so - a baseline cooldown you never pressed is still a miss. Kept in
 raid_talents, refreshed weekly.
+
+And the hero trees: TraitSubTree names them (Annihilator, Void-Scarred), the choice node's entries name the tree they
+pick (TraitNodeEntry.TraitSubTreeID) and its talents sit on nodes of that tree (TraitNode.TraitSubTreeID). Both our
+pulls' talents and WCL's rankings list those entries, so a player is compared with top players of their own hero
+tree (benchmarks.py) - not the other tree's buttons they don't have. Kept in raid_hero_trees.
 """
 import csv
 import io
 import logging
 import time
+from collections import Counter
 from typing import NamedTuple
 
 import aiohttp
@@ -73,13 +79,17 @@ async def refresh_if_stale():
             logger.info(f'[RAIDS] Cooldown Manager: {len(ids)} tracked buff spells')
             count = len(ids)
         if db.talents_stale(REFRESH_DAYS):
-            rows = talent_rows(*await _wago(session, 'TraitNodeEntry', 'TraitDefinition', 'TraitNodeXTraitNodeEntry',
-                                            'TraitNode', 'SpellName'))
-            if len(rows) < 1000:
-                raise RuntimeError(f'wago.tools talent tables look wrong ({len(rows)} entries)')
-            db.replace_talents(rows)
+            entry, definition, node_entry, node, spell_name, subtree = await _wago(
+                session, 'TraitNodeEntry', 'TraitDefinition', 'TraitNodeXTraitNodeEntry', 'TraitNode', 'SpellName',
+                'TraitSubTree')
+            rows = talent_rows(entry, definition, node_entry, node, spell_name)
+            heroes = hero_rows(entry, node_entry, node, subtree)
+            if len(rows) < 1000 or len(heroes) < 100:
+                raise RuntimeError(f'wago.tools talent tables look wrong ({len(rows)} entries, '
+                                   f'{len(heroes)} hero talents)')
+            db.replace_talents(rows, heroes)
             _catalog.update(at=0)
-            logger.info(f'[RAIDS] Talent trees: {len(rows)} entries')
+            logger.info(f'[RAIDS] Talent trees: {len(rows)} entries, {len(heroes)} hero talents')
     return count
 
 
@@ -118,13 +128,31 @@ def talent_rows(entry_csv, definition_csv, node_entry_csv, node_csv, spell_name_
     return out
 
 
-def catalog_from(rows):
-    """raid_talents rows -> {'entries': {entry id: (tree, name, replaces)}, 'trees': {tree: {ability names}}}."""
+def hero_rows(entry_csv, node_entry_csv, node_csv, subtree_csv):
+    """The DB2 tables -> [(entry id, hero tree name)]: the choice node's entry that picks each tree, and its talents."""
+    names = {row['ID']: row['Name_lang'] for row in csv.DictReader(io.StringIO(subtree_csv)) if row.get('Name_lang')}
+    out = {}
+    for row in csv.DictReader(io.StringIO(entry_csv)):
+        if row.get('TraitSubTreeID') in names and row.get('ID', '').isdigit():
+            out[int(row['ID'])] = names[row['TraitSubTreeID']]
+    tree_of_node = {row['ID']: names[row['TraitSubTreeID']] for row in csv.DictReader(io.StringIO(node_csv))
+                    if row.get('TraitSubTreeID') in names}
+    for row in csv.DictReader(io.StringIO(node_entry_csv)):
+        if row.get('TraitNodeID') in tree_of_node and row.get('TraitNodeEntryID', '').isdigit():
+            out.setdefault(int(row['TraitNodeEntryID']), tree_of_node[row['TraitNodeID']])
+    return sorted(out.items())
+
+
+def catalog_from(rows, heroes=None):
+    """
+    raid_talents rows (+ raid_hero_trees: {entry id: hero tree}) -> {'entries': {entry id: (tree, name, replaces)},
+    'trees': {tree: {ability names}}, 'heroes': {entry id: hero tree}}.
+    """
     entries, trees = {}, {}
     for r in rows:
         entries[r['entry_id']] = (r['tree_id'], r['name'], r['overrides'])
         trees.setdefault(r['tree_id'], set()).add(r['name'])
-    return {'entries': entries, 'trees': trees}
+    return {'entries': entries, 'trees': trees, 'heroes': dict(heroes or {})}
 
 
 class Talents(NamedTuple):
@@ -157,7 +185,7 @@ def _talent_catalog():
     from . import db
     if time.time() - _catalog['at'] > CATALOG_SECONDS:
         try:
-            _catalog['data'] = catalog_from(db.get_talents())
+            _catalog['data'] = catalog_from(db.get_talents(), db.get_hero_trees())
         except Exception as e:
             logger.warning(f'[RAIDS] Talent trees unavailable: {e}')
             _catalog['data'] = None
@@ -182,6 +210,39 @@ def not_taken(numbered, name, catalog=None):
         if found is not None:
             out = found if out is None else Talents(out.missing & found.missing, out.known | found.known)
     return out
+
+
+def hero_tree(entries, catalog=None):
+    """
+    The hero tree a set of talent entries is on (the one most of its hero talents belong to) - None when they don't
+    say (no hero talents among them, or no catalog yet).
+    """
+    catalog = catalog if catalog is not None else _talent_catalog()
+    heroes = (catalog or {}).get('heroes') or {}
+    found = Counter(heroes[e] for e in entries or () if e in heroes)
+    return found.most_common(1)[0][0] if found else None
+
+
+def pull_hero(analysis, name, catalog=None):
+    """The hero tree a character played in one pull (None when its talents weren't kept or don't say)."""
+    entries = ((analysis or {}).get('talents') or {}).get(name)
+    return hero_tree(entries, catalog) if entries else None
+
+
+def main_hero(numbered, name, spec=None, catalog=None):
+    """The hero tree a character played on most of these pulls (on `spec`; ties: the latest) - None when unknown."""
+    catalog = catalog if catalog is not None else _talent_catalog()
+    heroes = []
+    for _, pull in numbered:
+        analysis = pull.get('analysis') or {}
+        me = next((p for p in analysis.get('players') or [] if p['name'] == name), None)
+        if spec and me and me.get('spec') and me['spec'] != spec:
+            continue
+        hero = pull_hero(analysis, name, catalog)
+        if hero:
+            heroes.append(hero)
+    counts = Counter(heroes)
+    return max(reversed(heroes), key=counts.__getitem__) if heroes else None
 
 
 def tracked_ids():

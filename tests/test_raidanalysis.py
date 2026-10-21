@@ -1112,6 +1112,47 @@ class TestTopPlayersSameSpec(unittest.TestCase):
         self.assertEqual(why, 'WCL listed 100 parse(s): 10 failed to load, 1 another spec '
                               '(You do not have permission to view this report)')
 
+    def test_hero_tree_from_rankings_talents(self):
+        """An Annihilator is compared with the top Annihilators - a few pages down if most of the top are Void-Scarred."""
+        import asyncio
+        from unittest import mock
+        from raidanalysis import benchmarks, gamedata, wcl
+        catalog = {'entries': {}, 'trees': {}, 'heroes': {1: 'Void-Scarred', 2: 'Void-Scarred', 3: 'Annihilator'}}
+
+        def ranked(name, hero_entry):
+            return {'name': name, 'spec': 'Devourer', 'amount': 1, 'report': {'code': name, 'fightID': 1},
+                    'talents': [{'talentID': 99, 'points': 1}, {'talentID': hero_entry, 'points': 1}]}
+        pages = {1: [ranked(f'V{i}', 1 + i % 2) for i in range(98)] + [ranked('A1', 3), {'name': 'Nobody', 'spec':
+                     'Devourer', 'report': {'code': 'N', 'fightID': 1}}],  # no talents listed: can't tell, skipped
+                 2: [ranked('A2', 3), ranked('V98', 1)], 3: []}
+        asked = []
+
+        async def get_rankings(session, *args, page=1, talents=False, **kwargs):
+            asked.append((page, talents))
+            return pages[page]
+
+        async def get_fight(session, code, fight_id, name):
+            return {'start': 0, 'end': 300000, 'phases': [], 'spec': 'Devourer',
+                    'casts': [{'type': 'cast', 'abilityGameID': 1, 'timestamp': 1000}]}
+
+        with mock.patch.object(wcl, 'get_character_rankings', get_rankings), \
+                mock.patch.object(wcl, 'get_player_fight', get_fight), \
+                mock.patch.object(gamedata, '_talent_catalog', lambda: catalog):
+            top, why = asyncio.run(benchmarks.fetch_top_players(None, 1, 4, 'DemonHunter', 'Devourer', 'dps',
+                                                                'Annihilator'))
+            self.assertEqual([(p['name'], p['hero'], p['rank']) for p in top],
+                             [('A1', 'Annihilator', 1), ('A2', 'Annihilator', 2)])
+            self.assertEqual(asked, [(1, True), (2, True), (3, True)])  # never past an empty page
+            asked.clear()
+            top, why = asyncio.run(benchmarks.fetch_top_players(None, 1, 4, 'DemonHunter', 'Devourer', 'dps'))
+            self.assertEqual([p['name'] for p in top], ['V0', 'V1', 'V2', 'V3', 'V4'])  # the whole spec: as before
+            self.assertEqual(asked, [(1, False)])
+            pages[2], pages[3] = [], []
+            top, why = asyncio.run(benchmarks.fetch_top_players(None, 1, 4, 'DemonHunter', 'Devourer', 'dps',
+                                                                'Mountain Thane'))
+        self.assertEqual(top, [])
+        self.assertEqual(why, 'WCL listed 100 parse(s): 100 on another hero tree')
+
     def test_spec_from_fight_details(self):
         from raidanalysis import wcl
         details = {'data': {'playerDetails': {'dps': [{'name': 'X', 'icon': 'DemonHunter-Devourer'}],
@@ -1306,6 +1347,38 @@ class TestSpecSwap(unittest.TestCase):
         numbered = list(enumerate(pulls, 1))
         self.assertEqual(benchmarks._main_spec_player(numbered, 'Naautilus')['spec'], 'Devourer')
         self.assertEqual([p['fight_id'] for p in benchmarks.our_pulls(numbered, 'Naautilus', spec='Devourer')], [2, 3])
+
+    def test_hero_tree_swap(self):
+        """Annihilator on most Devourer pulls: that's the hero tree they're compared on, with those pulls only."""
+        from raidanalysis import benchmarks, gamedata
+        catalog = {'entries': {}, 'trees': {}, 'heroes': {1: 'Void-Scarred', 2: 'Void-Scarred', 3: 'Annihilator'}}
+
+        def pull(spec, fight_id, talents):
+            players = [{'name': 'Naautilus', 'class': 'DemonHunter', 'spec': spec, 'role': 'dps'}]
+            return {'fight_id': fight_id, 'kill': False, 'start_ms': 0, 'end_ms': 300000, 'phases': [],
+                    'analysis': {'players': players, 'casts': {'Naautilus': []}, 'cast_ids': [],
+                                 'talents': {'Naautilus': talents} if talents is not None else {}}}
+        numbered = list(enumerate([pull('Havoc', 1, [3]), pull('Devourer', 2, [7, 1, 2]), pull('Devourer', 3, [3]),
+                                   pull('Devourer', 4, [3, 8]), pull('Devourer', 5, None)], 1))
+        self.assertEqual(gamedata.main_hero(numbered, 'Naautilus', 'Devourer', catalog), 'Annihilator')
+        self.assertEqual(gamedata.main_hero(numbered[:3], 'Naautilus', 'Devourer', catalog), 'Annihilator')  # 1-1: latest
+        self.assertIsNone(gamedata.main_hero(numbered, 'Naautilus', 'Devourer', {'heroes': {}}))
+        self.assertEqual([p['fight_id'] for p in benchmarks.our_pulls(numbered, 'Naautilus', 'Devourer', 'Annihilator',
+                                                                      catalog)], [3, 4, 5])  # 5: talents don't say
+        self.assertEqual(benchmarks.spec_label({'class': 'DemonHunter', 'spec': 'Devourer'}, 'Annihilator'),
+                         'Annihilator Devourer Demon Hunters')
+
+    def test_hero_rows_from_db2(self):
+        from raidanalysis import gamedata
+        entries = ('ID,TraitDefinitionID,MaxRanks,NodeEntryType,TraitSubTreeID\n'
+                   '50,0,1,3,7\n51,0,1,3,8\n60,11,1,1,0\n61,12,1,1,0\n62,13,1,1,0\n')  # 50 / 51: the choice node's
+        node_entries = 'ID,TraitNodeID,TraitNodeEntryID,_Index\n1,201,60,0\n2,202,61,0\n3,203,62,0\n'
+        nodes = 'ID,TraitTreeID,PosX,PosY,Type,Flags,TraitSubTreeID\n201,1000,0,0,0,0,7\n202,1000,0,0,0,0,8\n' \
+                '203,1000,0,0,0,0,0\n'
+        subtrees = 'Name_lang,Description_lang,ID,UiTextureAtlasElementID,TraitTreeID\nAnnihilator,,7,0,1000\n' \
+                   'Void-Scarred,,8,0,1000\n'
+        self.assertEqual(gamedata.hero_rows(entries, node_entries, nodes, subtrees),
+                         [(50, 'Annihilator'), (51, 'Void-Scarred'), (60, 'Annihilator'), (61, 'Void-Scarred')])
 
 
 class TestTimingMargin(unittest.TestCase):

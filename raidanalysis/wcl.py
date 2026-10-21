@@ -486,21 +486,26 @@ async def get_events(session, code, fight_id, data_type, filter_expression, max_
 
 
 @_v1_fallback
-async def get_character_rankings(session, encounter_id, difficulty, class_name, spec_name, metric='dps'):
+async def get_character_rankings(session, encounter_id, difficulty, class_name, spec_name, metric='dps', page=1,
+                                 talents=False):
     """
-    The best parses of one spec on one boss (WCL's global character rankings, page 1), best first:
-    [{'name', 'amount', 'duration', 'report': {'code', 'fightID'}, 'server', 'guild', ...}].
+    The best parses of one spec on one boss (WCL's global character rankings, 100 a page), best first:
+    [{'name', 'amount', 'duration', 'report': {'code', 'fightID'}, 'server', 'guild', ...}] - with talents=True
+    also each one's 'talents': [{'talentID' (a trait node entry id), 'points'}], which say their hero tree.
     class_name / spec_name are WCL slugs, e.g. 'DeathKnight' / 'Frost', 'Hunter' / 'BeastMastery'.
     """
     data = await query(session, """
-        query($id: Int!, $cls: String!, $spec: String!, $diff: Int!, $metric: CharacterRankingMetricType!) {
+        query($id: Int!, $cls: String!, $spec: String!, $diff: Int!, $metric: CharacterRankingMetricType!,
+              $page: Int!, $talents: Boolean!) {
           worldData {
             encounter(id: $id) {
-              characterRankings(className: $cls, specName: $spec, difficulty: $diff, metric: $metric, page: 1)
+              characterRankings(className: $cls, specName: $spec, difficulty: $diff, metric: $metric, page: $page,
+                                includeCombatantInfo: $talents)
             }
           }
         }
-    """, {'id': encounter_id, 'cls': class_name, 'spec': spec_name, 'diff': difficulty, 'metric': metric})
+    """, {'id': encounter_id, 'cls': class_name, 'spec': spec_name, 'diff': difficulty, 'metric': metric,
+          'page': page, 'talents': bool(talents)})
     rankings = (((data.get('worldData') or {}).get('encounter') or {}).get('characterRankings')) or {}
     return rankings.get('rankings') or []
 

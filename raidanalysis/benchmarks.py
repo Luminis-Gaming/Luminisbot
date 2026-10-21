@@ -3,8 +3,9 @@ Top-player benchmarks (lorrgs.io-style): when the best parses of a spec press th
 cooldowns, potions and defensives on a boss - and how one of our players lines up with them.
 
 Data: Warcraft Logs' global character rankings for (boss, difficulty, class, spec) - the top 5
-parses - and each of those players' casts in that kill. Fetched for the specs we actually
-play, a few per sync (they change slowly), cached in raid_benchmarks and refreshed weekly.
+parses on the hero tree our player plays (an Annihilator Devourer isn't judged on Void-Scarred buttons) -
+and each of those players' casts in that kill. Fetched for the specs and hero trees we actually play,
+a few per sync (they change slowly), cached in raid_benchmarks and refreshed weekly.
 
 "Major" abilities aren't listed by hand, so every spec's own burst (Metamorphosis, Essence Break,
 Ebon Might, Combustion, trinkets...) is found automatically: anything the top players cast at most
@@ -49,6 +50,9 @@ NEAR_MS = 60000              # a cast this close to a moment counts toward "usua
 MIN_AGREE = 3
 MIN_PULL_MS = 60000          # shorter pulls say nothing about cooldown usage
 MAX_FAILED_LOADS = 10        # top parses whose log won't load before giving up on a spec (empty, retried tomorrow)
+# Pages of WCL's rankings (100 each) to look through for a hero tree: few of the top play the rarer one
+# (5 Mountain Thane Fury Warriors in a top 100, the best at #47)
+MAX_RANKING_PAGES = 3
 DIFFICULTIES = (3, 4, 5)
 
 THROUGHPUT, POTION, TRINKET, ROTATIONAL = 'throughput', 'potion', 'trinket', 'rotational'
@@ -176,21 +180,38 @@ def _ranking_fields(r):
             'code': report.get('code') or r.get('reportID'), 'fight_id': report.get('fightID') or r.get('fightID'),
             'server': server.get('name') or r.get('serverName') or '',
             'region': server.get('region') or r.get('regionName') or '',
-            'guild': guild.get('name') or r.get('guildName') or '', 'hidden': r.get('hidden')}
+            'guild': guild.get('name') or r.get('guildName') or '', 'hidden': r.get('hidden'),
+            'talents': [t.get('talentID') for t in r.get('talents') or [] if isinstance(t, dict)]}
 
 
-async def fetch_top_players(session, encounter_id, difficulty, class_name, spec, role):
+async def _rankings(session, encounter_id, difficulty, class_name, spec, role, hero, listed):
     """
-    The top TOP_N parses for a spec with their rare casts: ([{'rank', 'name', ..., 'phases', 'casts'}], why) -
-    why says what happened to WCL's parses when none made it ('WCL listed no parses', '40 failed to load: ...'),
-    so an empty benchmark can tell "nobody's ranked" from "we dropped them all".
+    WCL's ranked parses of a spec, best first - one page, or with a hero tree up to MAX_RANKING_PAGES, each
+    fetched only once the one before is used up. listed: a list the page sizes go into.
     """
     from . import wcl
-    rankings = await wcl.get_character_rankings(session, encounter_id, difficulty, class_name, spec,
-                                                metric_for(role))
-    players, wrong_spec = [], 0
+    for page in range(1, (MAX_RANKING_PAGES if hero else 1) + 1):
+        rankings = await wcl.get_character_rankings(session, encounter_id, difficulty, class_name, spec,
+                                                    metric_for(role), page=page, talents=bool(hero))
+        listed.append(len(rankings))
+        for ranking in rankings:
+            yield ranking
+        if not rankings:
+            return
+
+
+async def fetch_top_players(session, encounter_id, difficulty, class_name, spec, role, hero=''):
+    """
+    The top TOP_N parses for a spec - on one hero tree, when hero is given - with their rare casts:
+    ([{'rank', 'name', ..., 'hero', 'phases', 'casts'}], why) - why says what happened to WCL's parses when none
+    made it ('WCL listed no parses', '40 failed to load: ...'), so an empty benchmark can tell "nobody's ranked"
+    from "we dropped them all".
+    """
+    from . import gamedata, wcl
+    catalog = gamedata._talent_catalog() if hero else None
+    players, wrong_spec, listed = [], 0, []
     dropped, first_error = Counter(), None
-    for ranking in rankings:
+    async for ranking in _rankings(session, encounter_id, difficulty, class_name, spec, role, hero, listed):
         if len(players) >= TOP_N:
             break
         r = _ranking_fields(ranking)
@@ -201,6 +222,10 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
         # (Devourer) with the whole class's rankings. Ranking entries name their spec (v2).
         if isinstance(ranking.get('spec'), str) and _slug(ranking['spec']) != _slug(spec):
             wrong_spec += 1
+            continue
+        # ...and a hero tree with itself (their talents say which; none listed: can't tell, so not them)
+        if hero and gamedata.hero_tree(r['talents'], catalog) != hero:
+            dropped['on another hero tree'] += 1
             continue
         try:
             fight = await wcl.get_player_fight(session, r['code'], r['fight_id'], r['name'])
@@ -226,22 +251,24 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
         duration = fight['end'] - fight['start']
         auras, cast_names, resources, procs, on_others, targets = await _top_auras(session, r, fight, duration, role,
                                                                                    spec)
-        players.append({'rank': len(players) + 1, 'name': r['name'], 'spec': spec, 'amount': round(r['amount']),
+        players.append({'rank': len(players) + 1, 'name': r['name'], 'spec': spec, 'hero': hero or None,
+                        'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
                         'lust': cooldowns.lust_bands(fight.get('lust'), fight['start'], fight['end'], fight.get('actor_id')),
                         'resources': resources, 'procs': procs, 'on_others': on_others, 'targets': targets})
+    who = f"{hero + ' ' if hero else ''}{spec} {class_name}"
     if wrong_spec:
-        logger.warning(f"[RAIDS] Top {spec} {class_name} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
+        logger.warning(f"[RAIDS] Top {who} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
                        f"parse(s) of another spec")
         dropped['another spec'] += wrong_spec
     why = None
     if not players:
-        why = (f"WCL listed {len(rankings)} parse(s): "
+        why = (f"WCL listed {sum(listed)} parse(s): "
                + ', '.join(f'{n} {reason}' for reason, n in dropped.most_common())
-               + (f' ({first_error})' if first_error else '')) if rankings else 'WCL listed no parses'
-        logger.warning(f"[RAIDS] No top {spec} {class_name} on {encounter_id}/{difficulty}: {why}")
+               + (f' ({first_error})' if first_error else '')) if sum(listed) else 'WCL listed no parses'
+        logger.warning(f"[RAIDS] No top {who} on {encounter_id}/{difficulty}: {why}")
     return players, why
 
 
@@ -285,8 +312,8 @@ def _slug(name):
 
 async def refresh(session, budget_ok, limit=SPECS_PER_RUN, combos=None, progress=None):
     """
-    Fetch benchmarks for the specs we played lately that have none (or a stale one) - or for exactly
-    `combos` (db.boss_benchmarks rows: one boss's re-fetch), fresh or not. progress(done) after each.
+    Fetch benchmarks for the specs (and hero trees) we played lately that have none (or a stale one) - or for
+    exactly `combos` (db.boss_benchmarks rows: one boss's re-fetch), fresh or not. progress(done) after each.
     Returns how many.
     """
     from . import db
@@ -294,9 +321,9 @@ async def refresh(session, budget_ok, limit=SPECS_PER_RUN, combos=None, progress
     for combo in db.benchmarks_needed(limit, REFRESH_DAYS, DIFFICULTIES) if combos is None else combos:
         if not await budget_ok(session):
             break
-        key = (combo['encounter_id'], combo['difficulty'], combo['class'], combo['spec'])
+        key = (combo['encounter_id'], combo['difficulty'], combo['class'], combo['spec'], combo.get('hero') or '')
         try:
-            players, why = await fetch_top_players(session, *key, combo['role'])
+            players, why = await fetch_top_players(session, *key[:4], combo['role'], key[4])
             db.save_benchmark(*key, metric_for(combo['role']), players, 'ok' if players else 'empty', why)
             # Which of their spells are major cooldowns comes from Wowhead's text: look it up now, not
             # whenever the general backlog gets there (a spell without it silently drops out).
@@ -692,16 +719,20 @@ def trinket_tip(row, spec_label):
             f"worth getting if it drops")
 
 
-def our_pulls(pulls, name, spec=None):
+def our_pulls(pulls, name, spec=None, hero=None, catalog=None):
     """
     Our raid pulls -> compare() input for one character: pulls they weren't in are skipped, and so
-    are pulls on another spec than `spec` (a Havoc pull doesn't count against the Devourer top).
+    are pulls on another spec than `spec` (a Havoc pull doesn't count against the Devourer top) or
+    another hero tree than `hero` (pulls whose talents don't say still count).
     """
+    from .gamedata import pull_hero
     out = []
     for number, pull in pulls:
         analysis = pull.get('analysis') or {}
         me = next((p for p in analysis.get('players') or [] if p['name'] == name), None)
         if not me or (spec and me.get('spec') and me['spec'] != spec):
+            continue
+        if hero and pull_hero(analysis, name, catalog) not in (None, hero):
             continue
         casts = (analysis.get('casts') or {}).get(name)
         if casts is None:  # analyzed before every rare cast was kept: tracked cooldowns + consumables only
@@ -739,15 +770,33 @@ def _main_spec_player(numbered, name):
     return next((p for p in reversed(entries) if p['spec'] == spec), None)
 
 
-async def ensure_spells_for(numbered, name):
-    """Before comparing one character: make sure their spec's top-player spells have Wowhead text."""
+def _benchmark_for(numbered, name):
+    """
+    (player entry, hero tree, benchmark row, our pulls) for one character, or None when their spec isn't known.
+    The benchmark is their hero tree's top players; until those are fetched, the whole spec's (from before hero
+    trees) - its 'hero' says which it is.
+    """
     from . import db
+    from .gamedata import main_hero
     player = _main_spec_player(numbered, name)
     if not player or not numbered:
-        return 0
+        return None
     first = numbered[0][1]
-    bench = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
-    ours = {sid for p in our_pulls(numbered, name, spec=player['spec']) for _, sid in p['casts']}
+    key = (first['encounter_id'], first['difficulty'], player['class'], player['spec'])
+    hero = main_hero(numbered, name, player['spec'])
+    benchmark = db.get_benchmark(*key, hero or '')
+    if hero and benchmark is None:
+        benchmark = db.get_benchmark(*key, '')
+    return player, hero, benchmark, our_pulls(numbered, name, spec=player['spec'], hero=hero)
+
+
+async def ensure_spells_for(numbered, name):
+    """Before comparing one character: make sure their spec's top-player spells have Wowhead text."""
+    found = _benchmark_for(numbered, name)
+    if not found:
+        return 0
+    _, _, bench, pulls = found
+    ours = {sid for p in pulls for _, sid in p['casts']}
     # Wasted procs: the buffs' events only carry ids, so their names and icons come from Wowhead too
     from .throughput import detail_pulls
     procs = {v[2] for _, _, me, _ in detail_pulls(numbered, name) for v in (me.get('procs') or {}).values()}
@@ -763,8 +812,8 @@ FALLBACK_MAJOR_MS = 60000
 def spec_majors(encounter_id, difficulty, spell_lookup):
     """
     {(class, spec): {ability names}} - the damage / healing cooldowns and trinkets each spec's top
-    players use as majors on this boss (same rule as compare(): at least MIN_AGREE of them), so the
-    raid timeline shows what matters for that spec instead of every 30 s button.
+    players use as majors on this boss (same rule as compare(): at least MIN_AGREE of them - on any of
+    its hero trees), so the raid timeline shows what matters for that spec instead of every 30 s button.
     """
     from . import db
     rows = db.get_benchmarks(encounter_id, difficulty)
@@ -776,14 +825,13 @@ def spec_majors(encounter_id, difficulty, spell_lookup):
         top = r['players'] or []
         need = min(MIN_AGREE, len(top))
         overrides = all_overrides.get((r['class'], r['spec']), {})
-        majors = set()
+        majors = out.setdefault((r['class'], r['spec']), set())
         for name, g in top_groups(top, info).items():
             if g['category'] not in (THROUGHPUT, TRINKET) or len(g['users']) < need:
                 continue
             kind = ability_kind(name, g, top, windows(top, g['ids']), _texts(g['ids'], info)[1], overrides.get(name))
             if kind == MAJOR:
                 majors.add(name)
-        out[(r['class'], r['spec'])] = majors
     return out
 
 
@@ -802,9 +850,9 @@ def readable(slug):
     return re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', slug or '')
 
 
-def spec_label(player):
-    """'Fire Mages', 'Havoc Demon Hunters'."""
-    return f"{readable(player.get('spec'))} {readable(player.get('class'))}s".strip()
+def spec_label(player, hero=None):
+    """'Fire Mages', 'Havoc Demon Hunters' - with a hero tree 'Annihilator Devourer Demon Hunters'."""
+    return f"{hero or ''} {readable(player.get('spec'))} {readable(player.get('class'))}s".strip()
 
 
 def major_casts(analysis, name):
@@ -822,21 +870,22 @@ def major_casts(analysis, name):
 def for_player(numbered, name):
     """
     Everything the comparison views need for one character on one boss+difficulty:
-    {'player', 'benchmark', 'top', 'pulls', 'rows', 'spells', 'label', 'talents' (gamedata.not_taken)} - or
-    None when there's nothing to compare (no spec known). numbered: [(pull number, pull with analysis)].
+    {'player', 'hero' (their hero tree, None when unknown), 'benchmark', 'top', 'pulls', 'rows', 'spells', 'label',
+    'talents' (gamedata.not_taken)} - or None when there's nothing to compare (no spec known).
+    numbered: [(pull number, pull with analysis)].
     """
     from . import db
-    player = _main_spec_player(numbered, name)
-    if not player or not numbered:
+    found = _benchmark_for(numbered, name)
+    if not found:
         return None
-    first = numbered[0][1]
-    benchmark = db.get_benchmark(first['encounter_id'], first['difficulty'], player['class'], player['spec'])
+    player, hero, benchmark, pulls = found
     top = (benchmark or {}).get('players') or []
-    pulls = our_pulls(numbered, name, spec=player['spec'])
     ids = {sid for p in top for _, sid in p['casts']} | {sid for p in pulls for _, sid in p['casts']}
     spells = db.get_spells(ids) if ids else {}
     overrides = db.get_spec_overrides().get((player['class'], player['spec']), {})
     from .gamedata import not_taken
     talents = not_taken(numbered, name)
-    return {'player': player, 'benchmark': benchmark, 'top': top, 'pulls': pulls, 'talents': talents,
-            'rows': compare(pulls, top, spells, overrides, talents), 'spells': spells, 'label': spec_label(player)}
+    # Named after the top players it really is: their hero tree's, or the whole spec's until those are fetched
+    label = spec_label(player, benchmark.get('hero') if benchmark else hero)
+    return {'player': player, 'hero': hero, 'benchmark': benchmark, 'top': top, 'pulls': pulls, 'talents': talents,
+            'rows': compare(pulls, top, spells, overrides, talents), 'spells': spells, 'label': label}

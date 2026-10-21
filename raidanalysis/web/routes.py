@@ -2210,7 +2210,7 @@ def _compare_sections(code, numbered, data, pull, eligible, chip_href, back=None
         f'title="Pull {p["number"]}: {esc(_result_text(rows_by_fight[p["fight_id"]]))}">'
         f'#{p["number"]} {chip_label(p)}</a>' for p in eligible)
     fetched = data['benchmark'].get('fetched_at')
-    intro = _reanalyze_hint(data, code)
+    intro = compare.hero_hint(data) + _reanalyze_hint(data, code)
     fetched_text = f" (fetched {ts(fetched.timestamp() * 1000, 'date')})" if fetched else ''
     data['subtitle'] = (f'Major cooldowns, potions and defensives next to the top {len(data["top"])} '
                         f'{esc(data["label"])} parses on Warcraft Logs{fetched_text}. '
@@ -2557,7 +2557,8 @@ def _benchmarks_card(encounter_id, difficulty, base):
     rows = db.boss_benchmarks(encounter_id, difficulty)
     if not rows:
         return ''
-    label = lambda r: f"{benchmarks.readable(r['spec'])} {benchmarks.readable(r['class'])}"  # noqa: E731
+    label = lambda r: (f"{r.get('hero') or ''} {benchmarks.readable(r['spec'])} "  # noqa: E731
+                       f"{benchmarks.readable(r['class'])}").strip()
     have = sum(1 for r in rows if r['top'])
     never = sum(1 for r in rows if r['status'] is None)
     problems = [r for r in rows if not r['top'] and r['status'] in ('empty', 'error')]
@@ -2570,7 +2571,7 @@ def _benchmarks_card(encounter_id, difficulty, base):
                     for r in problems)
     return f"""
     <div class="card" id="benchmarks">
-        {section_head('⚔️', 'Top-player benchmarks', 'The top 5 parses per spec on Warcraft Logs, for the Cooldowns '
+        {section_head('⚔️', 'Top-player benchmarks', 'The top 5 parses per spec and hero tree on Warcraft Logs, for the Cooldowns '
                       'and Rotation tabs.')}
         <p class="muted small">{len(rows)} spec{'s' if len(rows) != 1 else ''} played here: {' · '.join(counts)}{oldest}.</p>
         {f'<ul class="small muted">{items}</ul>' if items else ''}

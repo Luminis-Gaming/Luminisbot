@@ -134,20 +134,33 @@ def ensure_guide_schema(cursor):
             PRIMARY KEY (encounter_id, guide_id)
         );
     """)
-    # Top parses per (boss, difficulty, spec) for the cooldown comparison (benchmarks.py)
+    # Top parses per (boss, difficulty, spec, hero tree) for the cooldown comparison (benchmarks.py). hero '': the
+    # whole spec's top players (pulls whose talents don't say, and every benchmark from before hero trees)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_benchmarks (
             encounter_id INTEGER NOT NULL,
             difficulty INTEGER NOT NULL,
             class TEXT NOT NULL,
             spec TEXT NOT NULL,
+            hero TEXT NOT NULL DEFAULT '',
             metric TEXT,
             players JSONB NOT NULL DEFAULT '[]',
             status TEXT NOT NULL,
             error TEXT,
             fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            PRIMARY KEY (encounter_id, difficulty, class, spec)
+            PRIMARY KEY (encounter_id, difficulty, class, spec, hero)
         );
+    """)
+    cursor.execute("ALTER TABLE raid_benchmarks ADD COLUMN IF NOT EXISTS hero TEXT NOT NULL DEFAULT ''")
+    cursor.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_index i
+                           JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                           WHERE i.indrelid = 'raid_benchmarks'::regclass AND i.indisprimary AND a.attname = 'hero') THEN
+                ALTER TABLE raid_benchmarks DROP CONSTRAINT IF EXISTS raid_benchmarks_pkey;
+                ALTER TABLE raid_benchmarks ADD PRIMARY KEY (encounter_id, difficulty, class, spec, hero);
+            END IF;
+        END $$
     """)
     # Wowhead tooltip text for the timeline (spells.py)
     cursor.execute("""
@@ -233,17 +246,28 @@ def ensure_guide_schema(cursor):
             fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
     """)
+    # Which hero tree each talent entry belongs to (gamedata.hero_rows): the choice node's entries and the tree's talents
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS raid_hero_trees (
+            entry_id BIGINT PRIMARY KEY,
+            name TEXT NOT NULL,
+            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
     # Each pull's player list on its own (a trigger keeps it equal to analysis->'players'): who was in which pull is
     # asked a lot (the Players tab, character pages, benchmarks), and reading it out of the analysis means
     # unpacking every pull's whole analysis - every cast, aura and hit - for a list of names.
     # ...and when its analysis last changed (re-analyzed, detail fetched later): data_version() - the page caches
     # keep a page until the data under it changes.
+    # ...and everyone's talents (analysis->'talents'): which hero trees we play, for the benchmarks to fetch.
     cursor.execute("ALTER TABLE raid_pulls ADD COLUMN IF NOT EXISTS players JSONB")
     cursor.execute("ALTER TABLE raid_pulls ADD COLUMN IF NOT EXISTS changed_at TIMESTAMP WITH TIME ZONE")
+    cursor.execute("ALTER TABLE raid_pulls ADD COLUMN IF NOT EXISTS talents JSONB")
     cursor.execute("""
         CREATE OR REPLACE FUNCTION raid_pulls_players() RETURNS trigger AS $$
         BEGIN
             NEW.players := COALESCE(NEW.analysis->'players', '[]'::jsonb);
+            NEW.talents := COALESCE(NEW.analysis->'talents', '{}'::jsonb);
             NEW.changed_at := NOW();
             RETURN NEW;
         END $$ LANGUAGE plpgsql
@@ -254,6 +278,7 @@ def ensure_guide_schema(cursor):
         FOR EACH ROW EXECUTE FUNCTION raid_pulls_players()
     """)
     cursor.execute("UPDATE raid_pulls SET players = COALESCE(analysis->'players', '[]'::jsonb) WHERE players IS NULL")
+    cursor.execute("UPDATE raid_pulls SET talents = COALESCE(analysis->'talents', '{}'::jsonb) WHERE talents IS NULL")
     cursor.execute("CREATE INDEX IF NOT EXISTS raid_pulls_players_gin ON raid_pulls USING gin (players jsonb_path_ops)")
     # A stored character's picture links as columns of their own (Postgres fills them in from the stored JSON on
     # every write): the Players tab needs four short links per character, not every character's whole armory.
@@ -1289,9 +1314,18 @@ def get_spells(spell_ids):
 # TOP-PLAYER BENCHMARKS (benchmarks.py)
 # ============================================================================
 
+# The hero tree a player (x, of raid_pulls.players) played in pull p: the one most of their hero talents are in -
+# '' when their talents weren't kept or don't say (gamedata.hero_tree, in SQL).
+_HERO_SQL = """COALESCE((
+    SELECT h.name FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.talents -> (x->>'name')) = 'array'
+                                                      THEN p.talents -> (x->>'name') ELSE '[]'::jsonb END) e
+    JOIN raid_hero_trees h ON h.entry_id = e::bigint
+    GROUP BY h.name ORDER BY COUNT(*) DESC, h.name LIMIT 1), '')"""
+
+
 def benchmarks_needed(limit, refresh_days, difficulties):
     """
-    (boss, difficulty, class, spec) combos played in the logs we keep (prune_reports: the latest
+    (boss, difficulty, class, spec, hero tree) combos played in the logs we keep (prune_reports: the latest
     KEEP_LATEST_LOGS guild / raid-event logs, plus imports from the last KEEP_IMPORTED_DAYS) that have no
     benchmark yet, a stale one, or a failed one from over a day ago - most recently played first.
     """
@@ -1302,21 +1336,24 @@ def benchmarks_needed(limit, refresh_days, difficulties):
             ORDER BY r.start_time DESC LIMIT %s
         )
         SELECT c.* FROM (
-            SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec,
-                   MAX(x->>'role') AS role, MAX(r.start_time + p.start_ms) AS last_played
-            FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code,
-                 jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
-            -- imports by source, not created_at alone: the column was added with every older night
-            -- getting the migration's time
-            WHERE (r.code IN (SELECT code FROM latest)
-                   OR (r.source = 'manual' AND COALESCE(r.created_at, NOW()) >= NOW() - make_interval(days => %s)))
-              AND p.difficulty = ANY(%s) AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
-            GROUP BY 1, 2, 3, 4
+            SELECT encounter_id, difficulty, class, spec, hero, MAX(role) AS role, MAX(played) AS last_played
+            FROM (
+                SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec, x->>'role' AS role,
+                       r.start_time + p.start_ms AS played, """ + _HERO_SQL + """ AS hero
+                FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code,
+                     jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
+                -- imports by source, not created_at alone: the column was added with every older night
+                -- getting the migration's time
+                WHERE (r.code IN (SELECT code FROM latest)
+                       OR (r.source = 'manual' AND COALESCE(r.created_at, NOW()) >= NOW() - make_interval(days => %s)))
+                  AND p.difficulty = ANY(%s) AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
+            ) played
+            GROUP BY 1, 2, 3, 4, 5
         ) c
         WHERE NOT EXISTS (
             SELECT 1 FROM raid_benchmarks b
             WHERE b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
-              AND b.class = c.class AND b.spec = c.spec
+              AND b.class = c.class AND b.spec = c.spec AND b.hero = c.hero
               AND (
                   -- failed lately: wait a day, whatever top players it kept (otherwise a failing combo
                   -- with old-format players would top this list again right away, every batch). Empty
@@ -1336,40 +1373,46 @@ def benchmarks_needed(limit, refresh_days, difficulties):
 
 def boss_benchmarks(encounter_id, difficulty):
     """
-    Every spec we ever played on one boss + difficulty (any team, any night) with its benchmark's state,
-    whatever its age: [{'encounter_id', 'difficulty', 'class', 'spec', 'role', 'status', 'error', 'fetched_at',
-    'top'}] - status None when never fetched. The boss page's re-fetch button.
+    Every spec + hero tree we ever played on one boss + difficulty (any team, any night) with its benchmark's
+    state, whatever its age: [{'encounter_id', 'difficulty', 'class', 'spec', 'hero', 'role', 'status', 'error',
+    'fetched_at', 'top'}] - status None when never fetched. The boss page's re-fetch button.
     """
     return _run("""
         SELECT c.*, b.status, b.error, b.fetched_at, jsonb_array_length(COALESCE(b.players, '[]'::jsonb)) AS top
         FROM (
-            SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec, MAX(x->>'role') AS role
-            FROM raid_pulls p, jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
-            WHERE p.encounter_id = %s AND p.difficulty = %s
-              AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
-            GROUP BY 1, 2, 3, 4
+            SELECT encounter_id, difficulty, class, spec, hero, MAX(role) AS role
+            FROM (
+                SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec, x->>'role' AS role,
+                       """ + _HERO_SQL + """ AS hero
+                FROM raid_pulls p, jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
+                WHERE p.encounter_id = %s AND p.difficulty = %s
+                  AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
+            ) played
+            GROUP BY 1, 2, 3, 4, 5
         ) c
         LEFT JOIN raid_benchmarks b ON b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
-                                    AND b.class = c.class AND b.spec = c.spec
-        ORDER BY c.class, c.spec
+                                    AND b.class = c.class AND b.spec = c.spec AND b.hero = c.hero
+        ORDER BY c.class, c.spec, c.hero
     """, (encounter_id, difficulty), fetch='all')
 
 
-def save_benchmark(encounter_id, difficulty, class_name, spec, metric, players, status, error=None):
-    """A failed refresh keeps the previous top players (only the status changes)."""
+def save_benchmark(encounter_id, difficulty, class_name, spec, hero, metric, players, status, error=None):
+    """A failed refresh keeps the previous top players (only the status changes). hero '': the whole spec's."""
     _run("""
-        INSERT INTO raid_benchmarks (encounter_id, difficulty, class, spec, metric, players, status, error, fetched_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        ON CONFLICT (encounter_id, difficulty, class, spec) DO UPDATE SET metric = EXCLUDED.metric,
+        INSERT INTO raid_benchmarks (encounter_id, difficulty, class, spec, hero, metric, players, status, error,
+                                     fetched_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (encounter_id, difficulty, class, spec, hero) DO UPDATE SET metric = EXCLUDED.metric,
             players = CASE WHEN EXCLUDED.status = 'error' THEN raid_benchmarks.players ELSE EXCLUDED.players END,
             status = EXCLUDED.status, error = EXCLUDED.error, fetched_at = NOW()
-    """, (encounter_id, difficulty, class_name, spec, metric, Json(players), status, error))
+    """, (encounter_id, difficulty, class_name, spec, hero or '', metric, Json(players), status, error))
 
 
-def get_benchmark(encounter_id, difficulty, class_name, spec):
+def get_benchmark(encounter_id, difficulty, class_name, spec, hero=''):
     return _run("""
-        SELECT * FROM raid_benchmarks WHERE encounter_id = %s AND difficulty = %s AND class = %s AND spec = %s
-    """, (encounter_id, difficulty, class_name, spec), fetch='one')
+        SELECT * FROM raid_benchmarks
+        WHERE encounter_id = %s AND difficulty = %s AND class = %s AND spec = %s AND hero = %s
+    """, (encounter_id, difficulty, class_name, spec, hero or ''), fetch='one')
 
 
 def benchmark_spell_ids(encounter_id):
@@ -1416,19 +1459,24 @@ def get_tracked_spells(kind):
 
 
 def talents_stale(days):
-    row = _run("SELECT MAX(fetched_at) > NOW() - make_interval(days => %s) AS fresh FROM raid_talents",
-               (days,), fetch='one')
+    """A week old - or without the hero trees (kept since): fetched again."""
+    row = _run("""
+        SELECT MAX(fetched_at) > NOW() - make_interval(days => %s) AND EXISTS (SELECT 1 FROM raid_hero_trees) AS fresh
+        FROM raid_talents
+    """, (days,), fetch='one')
     return not (row and row['fresh'])
 
 
-def replace_talents(rows):
-    """rows: [(entry id, tree id, ability name, name of the ability it replaces or None)]."""
+def replace_talents(rows, heroes):
+    """rows: [(entry id, tree id, ability name, name of the ability it replaces or None)]; heroes: [(entry id, hero tree)]."""
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM raid_talents")
             cur.executemany("INSERT INTO raid_talents (entry_id, tree_id, name, overrides) VALUES (%s, %s, %s, %s)",
                             rows)
+            cur.execute("DELETE FROM raid_hero_trees")
+            cur.executemany("INSERT INTO raid_hero_trees (entry_id, name) VALUES (%s, %s)", heroes)
         conn.commit()
     finally:
         conn.close()
@@ -1436,6 +1484,11 @@ def replace_talents(rows):
 
 def get_talents():
     return _run("SELECT entry_id, tree_id, name, overrides FROM raid_talents", fetch='all')
+
+
+def get_hero_trees():
+    """{talent entry id: hero tree name}."""
+    return {r['entry_id']: r['name'] for r in _run("SELECT entry_id, name FROM raid_hero_trees", fetch='all')}
 
 
 def get_spec_overrides():
@@ -1462,9 +1515,9 @@ def set_spec_override(class_name, spec, ability_name, kind, username):
 
 
 def get_benchmarks(encounter_id, difficulty):
-    """Every spec's top players on one boss + difficulty."""
+    """Every spec's (and hero tree's) top players on one boss + difficulty."""
     return _run("""
-        SELECT class, spec, players FROM raid_benchmarks
+        SELECT class, spec, hero, players FROM raid_benchmarks
         WHERE encounter_id = %s AND difficulty = %s AND status <> 'empty'
     """, (encounter_id, difficulty), fetch='all')
 

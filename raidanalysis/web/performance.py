@@ -425,7 +425,8 @@ def rotation_tab(numbered, player, data, back=None, tracked=frozenset()):
         tiles.append((_pct(active), f'Active time · raid {_pct(raid_active)}' if raid_active else 'Active time'))
     if cpm:
         tiles.append((f'{cpm["ours"]:.1f}', f'Casts / min · top {cpm["top"]:.1f}'))
-    sections = []
+    hint = compare.hero_hint(data)
+    sections = [hint] if hint else []
     if tiles:
         sections.append(stat_tiles(tiles))
     buff = throughput.raid_buff(numbered, name, player.get('class'))

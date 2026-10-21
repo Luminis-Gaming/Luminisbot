@@ -246,11 +246,17 @@ async def _class_ids(session, class_name, spec_name):
     raise wcl.WCLError(f'WCL v1 has no class / spec {class_name} {spec_name}')
 
 
-async def get_character_rankings(session, encounter_id, difficulty, class_name, spec_name, metric='dps'):
-    """v1-style flat rankings (name, reportID, fightID, total...) - benchmarks._ranking_fields reads both shapes."""
+async def get_character_rankings(session, encounter_id, difficulty, class_name, spec_name, metric='dps', page=1,
+                                 talents=False):
+    """
+    v1-style flat rankings (name, reportID, fightID, total...) - benchmarks._ranking_fields reads both shapes.
+    v1's talents don't say the hero tree: talents=True is v2's to answer.
+    """
+    if talents:
+        raise wcl.WCLError('v1 rankings carry no hero talents')
     class_id, spec_id = await _class_ids(session, class_name, spec_name)
     data = await _get(session, f'rankings/encounter/{int(encounter_id)}', metric=metric, difficulty=difficulty,
-                      **{'class': class_id, 'spec': spec_id, 'page': 1})
+                      **{'class': class_id, 'spec': spec_id, 'page': page})
     return (data or {}).get('rankings') or []
 
 
