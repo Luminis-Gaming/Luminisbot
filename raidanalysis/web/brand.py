@@ -1,4 +1,8 @@
-"""Guild wordmark and four distinct raiders, picked afresh by the browser on every load."""
+"""
+Guild wordmark and four distinct raiders, picked afresh by the browser on every load - and, under it, the tabs between
+the guild's public sites (site_tabs): raid analysis and the auction house. Both sites load this module's CSS, so the
+banner and the tabs look the same on every page.
+"""
 import html
 import json
 from pathlib import Path
@@ -6,7 +10,35 @@ from pathlib import Path
 ASSET_ROOT = Path(__file__).parent / 'static' / 'cartoons'
 ASSET_URL = '/raids/art/'
 
+# The public sites, in tab order: (key, address, icon, name)
+SITES = (('raids', '/raids', 'horned-helm', 'Raid Analysis'),
+         ('ah', '/ah', 'chest', 'Auction House'))
+
 CSS = r"""
+/* The tabs under the banner: a plaque in the banner's own navy, the site you're on lit in its gold */
+.site-tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; width: fit-content; max-width: 100%;
+    margin: -8px auto 22px; padding: 5px; border-radius: 16px;
+    background: linear-gradient(180deg, rgba(38, 44, 70, 0.92), rgba(13, 16, 32, 0.92));
+    border: 1px solid rgba(255, 206, 53, 0.2);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+.site-tab { display: inline-flex; align-items: center; gap: 9px; padding: 8px 18px 8px 11px; border-radius: 11px;
+    border: 1px solid transparent; color: #b8bed6; text-decoration: none; white-space: nowrap;
+    font: 400 16px/1.2 'Marcellus', 'Palatino Linotype', Palatino, Georgia, serif; letter-spacing: 0.02em;
+    transition: color .15s, background-color .15s, border-color .15s; }
+.site-tab:hover { color: #ffffff; background: rgba(255, 255, 255, 0.06); text-decoration: none; }
+.site-tab.active { color: #ffd76a; border-color: rgba(255, 206, 53, 0.45);
+    background: linear-gradient(180deg, rgba(255, 206, 53, 0.18), rgba(255, 206, 53, 0.05));
+    box-shadow: 0 0 20px -6px rgba(255, 206, 53, 0.65); }
+.site-tab:focus-visible { outline: 2px solid #ffce35; outline-offset: 2px; }
+.site-tab .site-tab-icon { width: 28px; height: 28px; margin: -6px 0; flex: none; }
+.site-tab:not(.active) .site-tab-icon { filter: saturate(0.75) brightness(0.9); }
+.site-tab:hover .site-tab-icon { filter: none; }
+@media (max-width: 600px) {
+    .site-tabs { margin-top: -4px; margin-bottom: 16px; }
+    .site-tab { padding: 7px 13px 7px 9px; font-size: 15px; gap: 7px; }
+    .site-tab .site-tab-icon { width: 24px; height: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { .site-tab { transition: none; } }
 .guild-banner { position: relative; isolation: isolate; display: block; width: 100%;
     max-width: 1050px; aspect-ratio: 2.6; margin: 0 auto 22px; overflow: hidden;
     border-radius: 18px; background: radial-gradient(ellipse at 50% 85%, #262c46, transparent 70%); }
@@ -127,6 +159,18 @@ def read_manifest():
             manifest = None
         _manifest_cache.update(key=key, manifest=manifest)
     return _manifest_cache['manifest']
+
+
+def site_tabs(active):
+    """The tabs between the public sites, the one you're on (a SITES key) lit up. Goes right under markup()."""
+    from .icons import icon
+    tabs = []
+    for key, href, name, label in SITES:
+        on = key == active
+        current = ' aria-current="page"' if on else ''
+        tabs.append(f'<a class="site-tab{" active" if on else ""}" href="{href}"{current}>'
+                    f'{icon(name, "gold", "site-tab-icon")}<span>{html.escape(label)}</span></a>')
+    return f'<nav class="site-tabs" aria-label="Luminis">{"".join(tabs)}</nav>'
 
 
 def markup(home='/raids', base=ASSET_URL):

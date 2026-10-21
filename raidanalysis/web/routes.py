@@ -542,9 +542,7 @@ def _page(title, session, body, waiting=False):
     banner = ''
     if session is PUBLIC_SESSION:
         body = _publicize(body)
-        from .icons import icon
-        nav = (f'<nav class="nav"><a href="/raids" class="active">{icon("luminis", "gold")} Raid Analysis</a>'
-               '<div class="spacer"></div><span class="user-info">Read-only view</span></nav>')
+        nav = brand.site_tabs('raids')  # the public sites' tabs: here, and the auction house
         render_nav = lambda _session, active=None: nav  # noqa: E731 - public pages get their own nav
     else:
         banner = sync_banner(sync.status, waiting)
@@ -559,7 +557,7 @@ def _page(title, session, body, waiting=False):
     {icon}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Marcellus&display=swap" rel="stylesheet">
     <style>{ADMIN_CSS}</style>
     <link rel="stylesheet" href="{STATIC_CSS_URL}">
 </head>

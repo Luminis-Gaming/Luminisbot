@@ -178,10 +178,10 @@ def _page(title, body, data, description):
 <body>
 <div class="page">
     {brand.markup('/ah')}
+    {brand.site_tabs('ah')}
     <div class="market-bar">
         <div class="market-title"><h1><a href="/ah">Auction House</a></h1><span class="region">EU</span></div>
         <div class="market-stats" id="market-stats"></div>
-        <a class="market-link" href="/raids">Raid analysis</a>
     </div>
     {body}
     <footer>Buyout listings from Blizzard's auction API for every EU realm, updated about once an hour. Tooltips from

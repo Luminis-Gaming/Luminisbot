@@ -351,8 +351,6 @@ footer { margin-top: 30px; font-size: 12.5px; color: var(--faint); text-align: c
 
 /* The live site: links where the mockup had buttons, loading and paging */
 .market-title h1 a { color: inherit; text-decoration: none; }
-.market-link { font-size: 13px; color: var(--arcane); text-decoration: none; }
-.market-link:hover { text-decoration: underline; }
 a.opp { color: inherit; text-decoration: none; }
 a.back { text-decoration: none; }
 #results.loading tbody { opacity: 0.5; transition: opacity .15s; }
