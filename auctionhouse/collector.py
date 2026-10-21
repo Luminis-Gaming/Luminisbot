@@ -13,6 +13,11 @@ Battle pets are in the realm dumps as cages; each species is stored as an item o
 Commodities - herbs, ore, flasks and other stackable goods - sell on one auction house for the whole region: its
 dump (process_commodities) becomes each item's price ladder, summary and hourly history.
 
+Each dump is also compared with the one before it (sales.py): listings that vanished while they still had hours
+to run were almost always bought - the estimated sales in ah_sales / ah_commodity_sales. And after each update the
+movers (price and supply against about a day ago) and the deals (rolls listed far below their usual price) are
+worked out for their pages.
+
 Parsing and the database run in a worker thread, one dump at a time, so nothing else waits on them.
 Afterwards a few lookups fill gaps, rate limited: item levels of new level curves (one Wowhead tooltip per curve,
 ever), icons the game tables lack, items newer than them, and battle pet species' names, families and icons
@@ -28,7 +33,7 @@ import aiohttp
 import orjson
 from psycopg2.extras import execute_values
 
-from . import blizzard, db, gamedata, prices, rolls
+from . import blizzard, collectibles, crafting, db, gamedata, prices, rolls, sales
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,13 @@ class Context:
             self.curves = dict(cur)
             cur.execute('SELECT item_id, roll_key, variant_id FROM ah_variants')
             self.variants = {(i, k): v for i, k, v in cur}
+            # what sales.realm_sales leaves out: the last summary's wall prices and typical prices
+            cur.execute('SELECT item_id, price FROM ah_walls')
+            self.walls = {}
+            for item_id, price in cur:
+                self.walls.setdefault(item_id, set()).add(price)
+            cur.execute('SELECT item_id, typical FROM ah_item_summary WHERE typical IS NOT NULL')
+            self.typical = dict(cur)
         self.decoded = {}
 
     def roll(self, item):
@@ -96,7 +108,8 @@ def process_realm(cr, body, last_modified, ctx):
         key = (item_id, roll.key)
         if key not in ctx.variants and key not in new:
             new[key] = roll
-        listings.append((item_id, key, buyout // max(1, a.get('quantity') or 1), TIME_LEFT.get(a.get('time_left'), 3)))
+        listings.append((item_id, key, buyout // max(1, a.get('quantity') or 1), TIME_LEFT.get(a.get('time_left'), 3),
+                         a.get('id')))
     del data
 
     with db.transaction() as cur:
@@ -112,10 +125,25 @@ def process_realm(cr, body, last_modified, ctx):
                                    list(new), page_size=5000, fetch=True)
             for i, k, v in found:
                 ctx.variants[(i, k)] = v
-        rows = [(cr, item_id, ctx.variants[key], price, tl) for item_id, key, price, tl in listings
+        rows = [(cr, item_id, ctx.variants[key], price, tl, auction_id) for item_id, key, price, tl, auction_id in listings
                 if key in ctx.variants]
+        # what sold since the last snapshot (when it's recent enough to tell)
+        cur.execute('SELECT swept_at FROM ah_realm_groups WHERE cr = %s', (cr,))
+        swept = (cur.fetchone() or [None])[0]
+        compared = bool(swept and swept > datetime.now(timezone.utc) - timedelta(hours=sales.MAX_GAP_HOURS))
+        sold = {}
+        if compared:
+            cur.execute("""SELECT auction_id, item_id, variant_id, buyout, time_left FROM ah_listings
+                           WHERE cr = %s AND auction_id IS NOT NULL""", (cr,))
+            sold = sales.realm_sales(cur.fetchall(), {r[5]: (r[2], r[3]) for r in rows}, ctx.walls, ctx.typical)
         cur.execute('DELETE FROM ah_listings WHERE cr = %s', (cr,))
-        db.copy_rows(cur, 'ah_listings', ('cr', 'item_id', 'variant_id', 'buyout', 'time_left'), rows)
+        db.copy_rows(cur, 'ah_listings', ('cr', 'item_id', 'variant_id', 'buyout', 'time_left', 'auction_id'), rows)
+        if sold:
+            today = datetime.now(timezone.utc).date()
+            execute_values(cur, """INSERT INTO ah_sales (day, cr, item_id, variant_id, sold, revenue) VALUES %s
+                                   ON CONFLICT (day, cr, variant_id) DO UPDATE
+                                   SET sold = ah_sales.sold + EXCLUDED.sold, revenue = ah_sales.revenue + EXCLUDED.revenue""",
+                           [(today, cr, i, v, n, rev) for (i, v), (n, rev) in sold.items()], page_size=2000)
         cur.execute("""INSERT INTO ah_realm_history (item_id, cr, day, lo, listings)
                        SELECT item_id, cr, CURRENT_DATE, min(buyout), count(*) FROM ah_listings WHERE cr = %s
                        GROUP BY item_id, cr
@@ -123,7 +151,7 @@ def process_realm(cr, body, last_modified, ctx):
                        SET lo = LEAST(ah_realm_history.lo, EXCLUDED.lo), listings = EXCLUDED.listings""", (cr,))
         cur.execute('UPDATE ah_realm_groups SET last_modified = %s, swept_at = NOW(), listings = %s WHERE cr = %s',
                     (last_modified, len(rows), cr))
-    return len(rows)
+    return len(rows), compared, sum(n for n, _ in sold.values())
 
 
 # ============================================================================
@@ -137,7 +165,7 @@ def process_commodities(body, last_modified):
     """
     data = orjson.loads(body)
     del body
-    book, listings = {}, {}
+    book, listings, auctions = {}, {}, []
     for a in data.get('auctions', ()):
         item_id = (a.get('item') or {}).get('id')
         price, quantity = a.get('unit_price'), a.get('quantity') or 0
@@ -146,6 +174,8 @@ def process_commodities(body, last_modified):
         key = (item_id, price)
         book[key] = book.get(key, 0) + quantity
         listings[item_id] = listings.get(item_id, 0) + 1
+        if a.get('id'):
+            auctions.append((a['id'], item_id, price, quantity, TIME_LEFT.get(a.get('time_left'), 3)))
     del data
     ladders = {}
     for (item_id, price), quantity in book.items():
@@ -160,20 +190,66 @@ def process_commodities(body, last_modified):
             continue
         summaries.append((item_id, s['lo'], s['p05'], s['market'], s['p30'], s['quantity'], listings[item_id], s['levels']))
         history.append((item_id, hour, s['lo'], s['p05'], s['market'], s['p30'], 0, min(s['quantity'], 2_000_000_000)))
+    previous_update = db.get_meta('commodities')
+    compared = bool(previous_update and previous_update[1] > datetime.now(timezone.utc) - timedelta(hours=sales.MAX_GAP_HOURS))
     with db.transaction() as cur:
+        sold = {}
+        if compared:  # what sold since the last dump
+            cur.execute('SELECT auction_id, item_id, price, quantity, time_left FROM ah_commodity_auctions')
+            previous = {r[0]: r[1:] for r in cur}
+            cur.execute('SELECT item_id, market FROM ah_commodity_summary')
+            sold = sales.commodity_sales(previous, {a[0]: a[3] for a in auctions}, dict(cur))
+            del previous
+        cur.execute('TRUNCATE ah_commodity_auctions')
+        db.copy_rows(cur, 'ah_commodity_auctions', ('auction_id', 'item_id', 'price', 'quantity', 'time_left'), auctions)
+        today = datetime.now(timezone.utc).date()
+        if sold:
+            execute_values(cur, """INSERT INTO ah_commodity_sales (day, item_id, sold, revenue) VALUES %s
+                                   ON CONFLICT (day, item_id) DO UPDATE
+                                   SET sold = ah_commodity_sales.sold + EXCLUDED.sold,
+                                       revenue = ah_commodity_sales.revenue + EXCLUDED.revenue""",
+                           [(today, i, n, rev) for i, (n, rev) in sold.items()], page_size=2000)
+        cur.execute('SELECT item_id, sum(sold) FROM ah_commodity_sales WHERE day > %s GROUP BY item_id',
+                    (today - timedelta(days=7),))
+        week = dict(cur)
         cur.execute('DELETE FROM ah_commodity_book')
         db.copy_rows(cur, 'ah_commodity_book', ('item_id', 'price', 'quantity'), book_rows)
         cur.execute('DELETE FROM ah_commodity_summary')
-        db.copy_rows(cur, 'ah_commodity_summary', ('item_id', 'lo', 'p05', 'market', 'p30', 'quantity', 'listings', 'levels'),
-                     summaries)
+        db.copy_rows(cur, 'ah_commodity_summary', ('item_id', 'lo', 'p05', 'market', 'p30', 'quantity', 'listings', 'levels',
+                                                   'sold_7d'), [r + (week.get(r[0], 0),) for r in summaries])
         cur.execute('CREATE TEMP TABLE ah_history_new (LIKE ah_item_history) ON COMMIT DROP')
         db.copy_rows(cur, 'ah_history_new', ('item_id', 'ts', 'lo', 'p25', 'med', 'p75', 'realms', 'listings'), history)
         cur.execute("""INSERT INTO ah_item_history SELECT * FROM ah_history_new
                        ON CONFLICT (item_id, ts) DO UPDATE SET lo = EXCLUDED.lo, p25 = EXCLUDED.p25,
                            med = EXCLUDED.med, p75 = EXCLUDED.p75, realms = EXCLUDED.realms,
                            listings = EXCLUDED.listings""")
+        _store_movers(cur, 'commodity', {r[0]: (r[3], r[5]) for r in summaries if r[3] >= 1000 and r[5] >= 50})
     db.set_meta('commodities', last_modified or '')
+    if compared and not db.get_meta('sales_since'):
+        db.set_meta('sales_since', 'commodities')
     return len(summaries)
+
+
+def _store_movers(cur, kind, current):
+    """
+    Each item's price and supply now ({item: (price, supply)}) against its history row nearest to a day ago (at
+    least 3 hours back, so a new install compares with what it has) -> ah_movers, for the market movers page.
+    """
+    if not current:
+        return
+    cur.execute("""SELECT DISTINCT ON (item_id) item_id, med, listings, EXTRACT(EPOCH FROM NOW() - ts) / 3600
+                   FROM ah_item_history
+                   WHERE item_id = ANY(%s) AND ts <= NOW() - INTERVAL '3 hours' AND ts >= NOW() - INTERVAL '30 hours'
+                   ORDER BY item_id, ABS(EXTRACT(EPOCH FROM ts - (NOW() - INTERVAL '24 hours')))""", (list(current),))
+    rows = []
+    for item_id, was, supply_was, hours in cur.fetchall():
+        now, supply_now = current[item_id]
+        if was and supply_was:
+            rows.append((kind, item_id, now, was, now / was - 1, supply_now, supply_was, supply_now / supply_was - 1,
+                         round(float(hours), 1)))
+    cur.execute('DELETE FROM ah_movers WHERE kind = %s', (kind,))
+    db.copy_rows(cur, 'ah_movers', ('kind', 'item_id', 'now', 'was', 'change', 'supply_now', 'supply_was',
+                                    'supply_change', 'hours'), rows)
 
 
 # ============================================================================
@@ -183,8 +259,12 @@ def process_commodities(body, last_modified):
 def summarize():
     """Recompute every item's EU numbers from the current listings. Runs in a worker thread."""
     started = time.monotonic()
-    summaries, walls_out, history = [], [], []
+    summaries, walls_out, history, deals = [], [], [], []
     hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    since = hour.date() - timedelta(days=7)
+    week = dict(db.fetch_all_tuples('SELECT item_id, sum(sold) FROM ah_sales WHERE day > %s GROUP BY item_id', (since,)))
+    roll_sales = {v: (n, rev) for v, n, rev in db.fetch_all_tuples(
+        'SELECT variant_id, sum(sold), sum(revenue) FROM ah_sales WHERE day > %s GROUP BY variant_id', (since,))}
 
     def finish(item_id, cells, levels):
         if not cells:
@@ -204,15 +284,28 @@ def summarize():
             if len(rows) < prices.GAP_MIN_REALMS:
                 continue
             vs = prices.stats(rows, walls, ref)
-            if vs and not vs['fell_back'] and vs['sane'] >= prices.GAP_MIN_REALMS and vs['gain'] > 0 and (not gap or vs['gain'] > gap[1]['gain']):
+            if not vs or vs['fell_back'] or vs['sane'] < prices.GAP_MIN_REALMS:
+                continue
+            if vs['gain'] > 0 and (not gap or vs['gain'] > gap[1]['gain']):
                 gap = (vid, vs)
+            # deals: realms where this roll's cheapest listing is far under what it usually goes for - its average sale
+            # price once we've seen it sell (proven), else the EU median of what's asked
+            sold, revenue = roll_sales.get(vid, (0, 0))
+            proven = sold >= prices.DEAL_PROVEN_SALES
+            reference = round(revenue / sold) if proven else vs['med']
+            if reference >= prices.DEAL_MIN_TYPICAL:
+                for cr, lo, _ in rows:
+                    if lo <= reference * prices.DEAL_SHARE and lo not in walls:
+                        deals.append((cr, item_id, vid, lo, reference, vs['realms'],
+                                      round(reference * prices.AH_CUT - lo), proven, sold))
         ilvls = [levels.get(v, 0) for v in by_variant]
         summaries.append((item_id, s['realms'], s['listings'], s['lo'], s['lo_realm'], s['p25'], s['med'], s['p75'],
                           s['hi'], s['hi_realm'], s['flagged'], s['fell_back'], len(by_variant), min(ilvls), max(ilvls),
                           round(ref) if ref else None,
                           gap[1]['gain'] if gap else None, gap[0] if gap else None,
                           gap[1]['lo_realm'] if gap else None, gap[1]['lo'] if gap else None,
-                          gap[1]['target_realm'] if gap else None, gap[1]['target'] if gap else None))
+                          gap[1]['target_realm'] if gap else None, gap[1]['target'] if gap else None,
+                          week.get(item_id, 0)))
         walls_out.extend((item_id, p, c) for p, c in walls.items())
         history.append((item_id, hour.isoformat(), s['lo'], s['p25'], s['med'], s['p75'], s['realms'], s['listings']))
 
@@ -241,7 +334,11 @@ def summarize():
         db.copy_rows(cur, 'ah_item_summary', (
             'item_id', 'realms', 'listings', 'lo', 'lo_cr', 'p25', 'med', 'p75', 'hi', 'hi_cr', 'flagged', 'walls_only', 'rolls',
             'ilvl_min', 'ilvl_max', 'typical', 'gap', 'gap_variant', 'gap_buy_cr', 'gap_buy', 'gap_sell_cr',
-            'gap_sell'), summaries)
+            'gap_sell', 'sold_7d'), summaries)
+        deals.sort(key=lambda d: (not d[7], -d[6]))  # proven ones first, then by profit
+        cur.execute('DELETE FROM ah_deals')
+        db.copy_rows(cur, 'ah_deals', ('cr', 'item_id', 'variant_id', 'price', 'typical', 'realms', 'profit', 'proven',
+                                       'sold_7d'), deals[:prices.DEALS_KEPT])
         cur.execute('DELETE FROM ah_walls')
         db.copy_rows(cur, 'ah_walls', ('item_id', 'price', 'seen'), walls_out)
         cur.execute('CREATE TEMP TABLE ah_history_new (LIKE ah_item_history) ON COMMIT DROP')
@@ -250,7 +347,9 @@ def summarize():
                        ON CONFLICT (item_id, ts) DO UPDATE SET lo = EXCLUDED.lo, p25 = EXCLUDED.p25,
                            med = EXCLUDED.med, p75 = EXCLUDED.p75, realms = EXCLUDED.realms,
                            listings = EXCLUDED.listings""")
-    logger.info(f'[AH] Summarized {len(summaries)} items ({len(walls_out)} wall prices) '
+        _store_movers(cur, 'item', {s[0]: (s[6], s[2]) for s in summaries
+                                    if not s[11] and s[1] >= 15 and s[6] >= 10000})
+    logger.info(f'[AH] Summarized {len(summaries)} items ({len(walls_out)} wall prices, {min(len(deals), prices.DEALS_KEPT)} deals) '
                 f'in {time.monotonic() - started:.1f}s')
 
 
@@ -277,17 +376,17 @@ async def refresh_realms(bz):
             return None
         d = orjson.loads(b)
         realms = d.get('realms') or []
-        names = sorted((r.get('name') or r.get('slug') or '?' for r in realms), key=str.lower)
+        pairs = sorted(((r.get('name') or r.get('slug') or '?', r.get('slug') or '') for r in realms), key=lambda p: p[0].lower())
         locale = ((realms[0].get('locale') or '')[:2].lower()) if realms else ''
-        return cr, names, locale, (d.get('population') or {}).get('type')
+        return cr, [p[0] for p in pairs], locale, (d.get('population') or {}).get('type'), [p[1] for p in pairs]
 
     groups = [g for g in await asyncio.gather(*(one(cr) for cr in ids)) if g]
 
     def store():
         with db.transaction() as cur:
-            execute_values(cur, """INSERT INTO ah_realm_groups (cr, names, locale, population) VALUES %s
+            execute_values(cur, """INSERT INTO ah_realm_groups (cr, names, locale, population, slugs) VALUES %s
                                    ON CONFLICT (cr) DO UPDATE SET names = EXCLUDED.names, locale = EXCLUDED.locale,
-                                       population = EXCLUDED.population""", groups)
+                                       population = EXCLUDED.population, slugs = EXCLUDED.slugs""", groups)
             cur.execute('DELETE FROM ah_realm_groups WHERE NOT (cr = ANY(%s))', ([g[0] for g in groups],))
             cur.execute('DELETE FROM ah_listings WHERE NOT (cr = ANY(%s))', ([g[0] for g in groups],))
         db.set_meta('realms', str(len(groups)))
@@ -455,8 +554,16 @@ async def run_once():
 async def _run():
     try:
         await gamedata.refresh_if_stale()
+    except RuntimeError as e:  # wago.tools down: try again next run
+        logger.warning(f'[AH] Game data refresh failed, keeping what we have: {e}')
     except Exception:
         logger.exception('[AH] Game data refresh failed (keeping what we have)')
+    try:
+        await crafting.refresh_if_stale()
+    except RuntimeError as e:
+        logger.warning(f'[AH] Recipe book refresh failed, keeping what we have: {e}')
+    except Exception:
+        logger.exception('[AH] Recipe book refresh failed (keeping what we have)')
     if not await asyncio.to_thread(db.fetch_one, 'SELECT 1 AS ok FROM ah_bonus LIMIT 1'):
         logger.warning('[AH] No game data yet: not collecting')
         return
@@ -477,8 +584,8 @@ async def _run():
             if st != 200 or not body:
                 return
             async with store_lock:
-                kept = await asyncio.to_thread(process_realm, group['cr'], body, last_modified, ctx)
-            changed.append((group['cr'], kept))
+                kept, compared, sold = await asyncio.to_thread(process_realm, group['cr'], body, last_modified, ctx)
+            changed.append((group['cr'], kept, compared, sold))
 
         async def commodities():
             row = await asyncio.to_thread(db.get_meta, 'commodities')
@@ -500,11 +607,16 @@ async def _run():
         if commodity_items:
             logger.info(f'[AH] Commodities updated ({commodity_items} items)')
         if changed:
-            logger.info(f'[AH] {len(changed)} realm groups updated ({sum(k for _, k in changed)} listings)')
+            sold = sum(c[3] for c in changed)
+            logger.info(f'[AH] {len(changed)} realm groups updated ({sum(c[1] for c in changed)} listings'
+                        + (f', about {sold} sold since the last update' if sold else '') + ')')
+            if any(c[2] for c in changed) and not await asyncio.to_thread(db.get_meta, 'sales_since'):
+                await asyncio.to_thread(db.set_meta, 'sales_since', 'realms')
             await asyncio.to_thread(summarize)
         looked_up = {}
         for name, step in (('levels', lambda: resolve_levels(session)), ('items', lambda: resolve_items(bz)),
-                           ('pets', lambda: resolve_pets(bz)), ('icons', lambda: resolve_icons(bz))):
+                           ('pets', lambda: resolve_pets(bz)), ('icons', lambda: resolve_icons(bz)),
+                           ('collectibles', lambda: collectibles.refresh_if_stale(bz))):
             try:
                 looked_up[name] = await step()
             except Exception:

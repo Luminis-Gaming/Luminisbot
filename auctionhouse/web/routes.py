@@ -4,6 +4,10 @@ The public auction house pages:
   GET /ah                       search every item on sale in EU (results from /ah/api/search)
   GET /ah/api/search            the results, as JSON
   GET /ah/item/{id}             one item: its stat rolls, where it sells best, every listing on your realm, history
+  GET /ah/deals                 rolls listed far below what they usually go for (/ah/api/deals)
+  GET /ah/movers                what rose, fell or ran low in about a day (/ah/api/movers)
+  GET /ah/crafting              every recipe's reagent cost against what it makes sells for (/ah/api/crafting)
+  GET /ah/collection            a character's missing mounts, pets and toys that are on sale (/ah/api/collection)
   GET /ah/tooltip/{id}?bonus=   an item's tooltip for one roll (raidanalysis.items: Wowhead, sanitized)
   GET /ah/static/...            the stylesheet and script (static/), cached for a year under a content hash
 
@@ -15,6 +19,7 @@ import hashlib
 import html
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -39,7 +44,7 @@ SLOTS = {1: 'Head', 2: 'Neck', 3: 'Shoulder', 4: 'Shirt', 5: 'Chest', 6: 'Waist'
          25: 'Thrown', 26: 'Ranged', 28: 'Relic', 29: 'Profession Tool', 30: 'Profession Equipment'}
 BINDING = {1: 'Binds when picked up', 2: 'Binds when equipped', 3: 'Binds when used', 4: 'Quest item',
            7: 'Binds to Blizzard account', 8: 'Binds to Blizzard account', 9: 'Warbound until equipped'}
-SORTS = {'name': 'i.name', 'ilvl': 'r.ilvl_max', 'req': 'i.req_level', 'lo': 'r.lo', 'med': 'r.med', 'hi': 'r.hi',
+SORTS = {'listings': 'r.listings', 'sold': 'r.sold_7d', 'name': 'i.name', 'ilvl': 'r.ilvl_max', 'req': 'i.req_level', 'lo': 'r.lo', 'med': 'r.med', 'hi': 'r.hi',
          'realms': 'r.realms', 'spread': 'r.hi::float / GREATEST(r.lo, 1)', 'here': 'h.here',
          'vs': 'h.here::float / NULLIF(r.med, 0)', 'qty': 'h.here_n'}
 NO_WALL = 'NOT EXISTS (SELECT 1 FROM ah_walls w WHERE w.item_id = l.item_id AND w.price = l.buyout)'
@@ -59,9 +64,22 @@ def _assets():
 CSS, JS, CSS_URL, JS_URL = _assets()
 
 
+# The auction house's own tabs, under its title: (key, address, name)
+SECTIONS = (('search', '/ah', 'Search'), ('deals', '/ah/deals', 'Deals'), ('movers', '/ah/movers', 'Market movers'),
+            ('crafting', '/ah/crafting', 'Crafting'), ('collection', '/ah/collection', 'Collection'))
+
+
 def register_routes(app):
     app.router.add_get('/ah', handle_search_page)
     app.router.add_get('/ah/api/search', handle_search_api)
+    app.router.add_get('/ah/deals', handle_deals_page)
+    app.router.add_get('/ah/api/deals', handle_deals_api)
+    app.router.add_get('/ah/movers', handle_movers_page)
+    app.router.add_get('/ah/api/movers', handle_movers_api)
+    app.router.add_get('/ah/crafting', handle_crafting_page)
+    app.router.add_get('/ah/api/crafting', handle_crafting_api)
+    app.router.add_get('/ah/collection', handle_collection_page)
+    app.router.add_get('/ah/api/collection', handle_collection_api)
     app.router.add_get('/ah/item/{item_id}', handle_item_page)
     app.router.add_get('/ah/tooltip/{item_id}', handle_tooltip)
     app.router.add_get(CSS_URL, handle_css)
@@ -100,8 +118,8 @@ def _cached(key, build):
 
 
 def _realms():
-    return {str(r['cr']): {'names': r['names'], 'locale': r['locale'] or '', 'pop': r['population'] or ''}
-            for r in db.realm_groups()}
+    return {str(r['cr']): {'names': r['names'], 'slugs': r['slugs'] or [], 'locale': r['locale'] or '',
+                           'pop': r['population'] or ''} for r in db.realm_groups()}
 
 
 def _class_names():
@@ -110,10 +128,14 @@ def _class_names():
 
 
 def _snapshot():
+    from datetime import datetime, timezone
     s = db.snapshot()
+    since = s.get('sales_since')
     return {'swept_at': s['swept_at'].isoformat() if s.get('swept_at') else None, 'groups': s.get('groups') or 0,
             'listings': int(s.get('listings') or 0), 'items': s.get('items') or 0,
-            'history_since': s['history_since'].isoformat() if s.get('history_since') else None}
+            'history_since': s['history_since'].isoformat() if s.get('history_since') else None,
+            # how long sales have been counted (the "sold per day" rates divide by min(7 days, this))
+            'sales_hours': round((datetime.now(timezone.utc) - since).total_seconds() / 3600, 1) if since else 0}
 
 
 def _categories():
@@ -157,6 +179,14 @@ def _opps():
 # Pages
 # ============================================================================
 
+def _section_tabs(active):
+    tabs = []
+    for key, href, name in SECTIONS:
+        current = ' class="active" aria-current="page"' if key == active else ''
+        tabs.append(f'<a href="{href}"{current}>{esc(name)}</a>')
+    return f'<nav class="ah-tabs" aria-label="Auction house">{"".join(tabs)}</nav>'
+
+
 def _page(title, body, data, description):
     from raidanalysis.web import brand
     from raidanalysis.web.routes import FAVICON
@@ -182,6 +212,7 @@ def _page(title, body, data, description):
     <div class="market-bar">
         <div class="market-title"><h1><a href="/ah">Auction House</a></h1><span class="region">EU</span></div>
         <div class="market-stats" id="market-stats"></div>
+        {_section_tabs(data.get('section', 'search'))}
     </div>
     {body}
     <footer>Buyout listings from Blizzard's auction API for every EU realm, updated about once an hour. Tooltips from
@@ -200,14 +231,14 @@ def _page(title, body, data, description):
 SEARCH_BODY = """
 <main id="search-view">
   <section id="opps-section" aria-labelledby="opp-title" hidden>
-    <div class="card-head"><h2 id="opp-title">Biggest realm gaps right now</h2>
+    <div class="section-head"><h2 id="opp-title">Biggest realm gaps right now</h2>
       <p>The same item with the same stat roll: the cheapest listing in EU against what a typical realm asks, after the
       5% auction cut. Bot price walls and lottery listings at the price cap are left out.</p></div>
     <div class="opps" id="opps"></div>
   </section>
   <div class="search-layout">
     <details class="rail" id="rail" open>
-      <summary class="eyebrow">Categories</summary>
+      <summary><span class="eyebrow">Categories</span><span class="rail-current" id="cat-current">All categories</span></summary>
       <ul class="cat-list" id="cats"></ul>
     </details>
     <section class="panel" aria-label="Search results">
@@ -224,19 +255,21 @@ SEARCH_BODY = """
           <div class="field"><span>Required level</span>
             <div class="range"><input class="input" id="req-min" type="number" min="0" placeholder="Min" aria-label="Minimum required level">
               <span class="faint">to</span><input class="input" id="req-max" type="number" min="0" placeholder="Max" aria-label="Maximum required level"></div></div>
-          <div class="field"><span>Rarity</span>
+          <div class="field wide"><span>Rarity</span>
             <div class="range"><select class="select" id="q-min" aria-label="Lowest rarity"></select>
               <span class="faint">to</span><select class="select" id="q-max" aria-label="Highest rarity"></select></div></div>
-          <label class="field"><span>Secondary stats</span><select class="select solo" id="f-sec"></select></label>
-          <label class="field"><span>Tertiary stat</span><select class="select solo" id="f-ter"></select></label>
-          <label class="field"><span>Expansion</span><select class="select solo" id="exp"></select></label>
-          <button class="btn-ghost" type="reset" id="reset">Clear filters</button>
+          <label class="field"><span>Expansion</span><select class="select" id="exp"></select></label>
+          <label class="field"><span>Secondary stats</span><select class="select" id="f-sec"></select></label>
+          <label class="field"><span>Tertiary stat</span><select class="select" id="f-ter"></select></label>
+        </div>
+        <div class="filter-foot">
           <div class="checks">
             <label class="check"><input type="checkbox" id="f-sock"> Has a socket</label>
             <label class="check"><input type="checkbox" id="below-vendor"> Only below vendor price</label>
             <label class="check"><input type="checkbox" id="out-of-stock"> Include items not listed on this realm</label>
             <label class="check"><input type="checkbox" id="median-col" checked> EU median column</label>
           </div>
+          <button class="btn-ghost" type="reset" id="reset">Clear filters</button>
         </div>
       </form>
       <div class="result-meta"><span id="result-count"></span><span id="result-mode"></span></div>
@@ -270,10 +303,12 @@ def _commodity_data(item, base):
     s = db.fetch_one('SELECT * FROM ah_commodity_summary WHERE item_id = %s', (item['item_id'],))
     book = [[r['price'], r['quantity']] for r in db.fetch_all(
         'SELECT price, quantity FROM ah_commodity_book WHERE item_id = %s ORDER BY price LIMIT 400', (item['item_id'],))]
+    daily = [[r['day'].isoformat(), r['sold'], r['revenue']] for r in db.fetch_all(
+        'SELECT day, sold, revenue FROM ah_commodity_sales WHERE item_id = %s ORDER BY day', (item['item_id'],))]
     return {'page': 'item', 'kind': 'commodity', 'realms': _cached('realms', _realms),
             'snapshot': _cached('snapshot', _snapshot), 'item': base,
-            'commodity': {k: s[k] for k in ('lo', 'p05', 'market', 'p30', 'quantity', 'listings', 'levels')},
-            'book': book, 'history': _history(item['item_id']), 'variants': [], 'listings': [], 'realm_history': {}}
+            'commodity': {k: s[k] for k in ('lo', 'p05', 'market', 'p30', 'quantity', 'listings', 'levels', 'sold_7d')},
+            'book': book, 'sales_daily': daily, 'history': _history(item['item_id']), 'variants': [], 'listings': [], 'realm_history': {}}
 
 
 def _item_data(item_id):
@@ -283,7 +318,8 @@ def _item_data(item_id):
     names = _cached('classes', _class_names)
     cls, sub = names.get((item['class_id'], item['subclass_id']), ('', ''))
     if item_id > 0 and db.fetch_one('SELECT 1 AS ok FROM ah_commodity_summary WHERE item_id = %s', (item_id,)):
-        return _commodity_data(item, {'id': item_id, 'name': item['name'], 'q': item['quality'], 'ilvl': item['ilvl'],
+        return _commodity_data(item, {'id': item_id, 'name': item['name'], 'q': item['quality'], 'rank': item['craft_rank'],
+                                      'ilvl': item['ilvl'],
                                       'req': item['req_level'], 'cls': cls, 'sub': sub,
                                       'slot': SLOTS.get(item['inventory_type'], ''), 'bind': '',
                                       'vendor': item['vendor'], 'icon': icon_url(item)})
@@ -301,6 +337,11 @@ def _item_data(item_id):
                 for r in db.fetch_all("""SELECT cr, variant_id, buyout, time_left FROM ah_listings WHERE item_id = %s
                                          ORDER BY buyout LIMIT 5000""", (item_id,)) if r['variant_id'] in index]
     history = _history(item_id)
+    from datetime import date, timedelta
+    sales = [[index[r['variant_id']], r['cr'], r['sold'], r['revenue']] for r in db.fetch_all(
+        """SELECT variant_id, cr, sum(sold)::int AS sold, sum(revenue) AS revenue FROM ah_sales
+           WHERE item_id = %s AND day > %s GROUP BY variant_id, cr""", (item_id, date.today() - timedelta(days=7)))
+        if r['variant_id'] in index]
     realm_history = {}
     for r in db.fetch_all('SELECT cr, day, lo FROM ah_realm_history WHERE item_id = %s ORDER BY day', (item_id,)):
         realm_history.setdefault(str(r['cr']), []).append([r['day'].isoformat(), r['lo']])
@@ -310,12 +351,12 @@ def _item_data(item_id):
     pet = item_id < 0
     return {'page': 'item', 'kind': 'pet' if pet else 'item', 'realms': _cached('realms', _realms),
             'snapshot': _cached('snapshot', _snapshot),
-            'item': {'id': item_id, 'name': item['name'], 'q': item['quality'], 'ilvl': item['ilvl'],
+            'item': {'id': item_id, 'name': item['name'], 'q': item['quality'], 'rank': item['craft_rank'], 'ilvl': item['ilvl'],
                      'req': item['req_level'], 'cls': cls, 'sub': sub,
                      'slot': '' if pet else SLOTS.get(item['inventory_type'], ''),
                      'bind': '' if pet else BINDING.get(binding, ''), 'vendor': item['vendor'], 'icon': icon_url(item),
                      'description': item.get('description') or ''},
-            'variants': out, 'listings': listings, 'history': history, 'realm_history': realm_history}
+            'variants': out, 'listings': listings, 'history': history, 'realm_history': realm_history, 'sales': sales}
 
 
 async def handle_item_page(request):
@@ -402,17 +443,18 @@ def search(args):
                          (array_agg(cr ORDER BY lo))[1] AS lo_cr,
                          percentile_disc(0.5) WITHIN GROUP (ORDER BY lo) AS med,
                          max(lo) AS hi, (array_agg(cr ORDER BY lo DESC))[1] AS hi_cr,
-                         x.ilvl_min, x.ilvl_max, x.rolls, FALSE AS walls_only, FALSE AS commodity
+                         x.ilvl_min, x.ilvl_max, x.rolls, FALSE AS walls_only, FALSE AS commodity,
+                         (SELECT sold_7d FROM ah_item_summary s WHERE s.item_id = m.item_id)::bigint AS sold_7d
                   FROM m JOIN x USING (item_id) GROUP BY m.item_id, x.ilvl_min, x.ilvl_max, x.rolls)"""
         here_source = 'lf'
     else:
         # commodities (one auction house for all of EU) sit beside them: on every realm, at one price
         ctes = """r AS (SELECT item_id, realms, listings, lo, lo_cr, med, hi, hi_cr, ilvl_min, ilvl_max, rolls, walls_only,
-                               FALSE AS commodity
+                               FALSE AS commodity, sold_7d::bigint
                         FROM ah_item_summary
                         UNION ALL
                         SELECT item_id, (SELECT count(*) FROM ah_realm_groups)::smallint, listings, lo, NULL, market, NULL,
-                               NULL, NULL, NULL, 1, FALSE, TRUE
+                               NULL, NULL, NULL, 1, FALSE, TRUE, sold_7d
                         FROM ah_commodity_summary)"""
         here_source = f'(SELECT l.item_id, l.cr, l.buyout FROM ah_listings l WHERE {NO_WALL})'
 
@@ -431,17 +473,17 @@ def search(args):
     if args.get('below') == '1':
         where.append(f"i.vendor > 0 AND {'COALESCE(h.here, r.lo)' if realm else 'r.lo'} < i.vendor")
 
-    sort = args.get('sort') if args.get('sort') in SORTS else 'realms'
+    sort = args.get('sort') if args.get('sort') in SORTS else 'listings'
     if sort in ('here', 'vs', 'qty') and not realm:
-        sort = 'realms'
+        sort = 'listings'
     direction = 'ASC' if args.get('dir') == 'asc' else 'DESC'
     p['offset'] = _int(args, 'offset', 0, 100000) or 0
     sql = f"""
         WITH {ctes}
-        SELECT i.item_id AS id, i.name, i.quality AS q, i.icon, i.icon_file, i.class_id, i.subclass_id,
+        SELECT i.item_id AS id, i.name, i.quality AS q, i.icon, i.icon_file, i.class_id, i.subclass_id, i.craft_rank,
                i.inventory_type, i.req_level AS req,
                r.realms, r.listings, r.lo, r.lo_cr, r.med, r.hi, r.hi_cr, r.ilvl_min, r.ilvl_max, r.rolls,
-               r.commodity, i.ilvl AS base_ilvl, {here_cols}, count(*) OVER () AS total
+               r.commodity, r.sold_7d, i.ilvl AS base_ilvl, {here_cols}, count(*) OVER () AS total
         FROM r JOIN ah_items i USING (item_id) {join}
         WHERE {' AND '.join(where) or 'TRUE'}
         ORDER BY r.walls_only, {SORTS[sort]} {direction} NULLS LAST, i.name
@@ -451,13 +493,399 @@ def search(args):
     out = []
     for r in rows:
         cls, sub = names.get((r['class_id'], r['subclass_id']), ('', ''))
-        out.append({'id': r['id'], 'name': r['name'], 'q': r['q'], 'icon': icon_url(r), 'cls': cls, 'sub': sub,
+        out.append({'id': r['id'], 'name': r['name'], 'q': r['q'], 'rank': r['craft_rank'], 'icon': icon_url(r), 'cls': cls, 'sub': sub,
                     'slot': SLOTS.get(r['inventory_type'], ''), 'req': r['req'], 'realms': r['realms'],
                     'listings': r['listings'], 'lo': r['lo'], 'lo_cr': r['lo_cr'], 'med': r['med'], 'hi': r['hi'],
                     'hi_cr': r['hi_cr'], 'ilvl_min': r['ilvl_min'] if r['ilvl_min'] is not None else r['base_ilvl'],
                     'ilvl_max': r['ilvl_max'] if r['ilvl_max'] is not None else r['base_ilvl'], 'rolls': r['rolls'],
-                    'commodity': r['commodity'], 'here': r['here'], 'here_n': r['here_n']})
+                    'commodity': r['commodity'], 'sold_7d': r['sold_7d'] or 0, 'here': r['here'], 'here_n': r['here_n']})
     return out, (rows[0]['total'] if rows else 0)
+
+
+def _base_data(section):
+    return {'page': section, 'section': section, 'realms': _cached('realms', _realms),
+            'snapshot': _cached('snapshot', _snapshot), 'categories': _cached('categories', _categories)}
+
+
+DEALS_BODY = """
+<main id="deals-view">
+  <div class="section-head"><h2>Deals</h2>
+    <p>Realms where an item - the same stat roll and item level - is listed for half of what it usually goes for, or
+    less. "Usually" is its average sale price once we've seen it sell a few times this week (a proven deal), else
+    the EU median of what's asked. Buy it there; sell it where it's worth more.</p></div>
+  <section class="panel">
+    <form class="search-head" id="deals-form">
+      <div class="filters">
+        <label class="field"><span>Realm</span><select class="select" id="d-realm"></select></label>
+        <label class="field"><span>Category</span><select class="select" id="d-cat"></select></label>
+        <label class="field"><span>Profit at least</span><select class="select" id="d-min"></select></label>
+        <label class="field"><span>Sort by</span><select class="select" id="d-sort"></select></label>
+      </div>
+      <div class="filter-foot"><div class="checks">
+        <label class="check"><input type="checkbox" id="d-proven"> Only proven deals (seen selling)</label></div></div>
+    </form>
+    <div class="result-meta"><span id="d-count"></span><span id="d-note"></span></div>
+    <div class="table-wrap"><table id="deals"><thead></thead><tbody></tbody></table></div>
+    <div class="more"><button type="button" class="btn-ghost" id="d-more" hidden>Show more</button></div>
+  </section>
+</main>"""
+
+MOVERS_BODY = """
+<main id="movers-view">
+  <div class="section-head"><h2>Market movers</h2>
+    <p>What changed most since about a day ago: prices that rose or fell, and goods running low. Commodities use
+    their market price (the cheapest 15% on sale); everything else the EU median of each realm's cheapest listing.</p></div>
+  <div class="mover-tools" id="m-kind"></div>
+  <div class="movers" id="movers"></div>
+</main>"""
+
+
+async def handle_deals_page(request):
+    data = await asyncio.to_thread(_base_data, 'deals')
+    return _page('Deals · Luminis Auction House', DEALS_BODY, data, 'Items listed far below what they usually sell for.')
+
+
+async def handle_movers_page(request):
+    data = await asyncio.to_thread(_base_data, 'movers')
+    return _page('Market movers · Luminis Auction House', MOVERS_BODY, data,
+                 'The EU auction house prices that rose, fell or ran low in the last day.')
+
+
+def deals(args):
+    p, where = {}, []
+    realm = _int(args, 'realm', 1, 10 ** 6)
+    if realm:
+        where.append('d.cr = %(realm)s')
+        p['realm'] = realm
+    cat = _int(args, 'cat', -1, 1000)
+    if cat is not None:
+        where.append('i.class_id = %(cat)s')
+        p['cat'] = cat
+    p['min'] = (_int(args, 'min', 0, 10 ** 9) or 0) * 10000
+    where.append('d.profit >= %(min)s')
+    if args.get('proven') == '1':
+        where.append('d.proven')
+    order = 'd.price::float / d.typical, d.profit DESC' if args.get('sort') == 'discount' else 'd.proven DESC, d.profit DESC'
+    p['offset'] = _int(args, 'offset', 0, 100000) or 0
+    rows = db.fetch_all(f"""
+        SELECT d.cr, d.item_id, d.price, d.typical, d.realms, d.profit, d.proven, d.sold_7d,
+               i.name, i.quality, i.icon, i.icon_file, i.class_id, i.subclass_id, i.craft_rank,
+               v.sec, v.ter, v.sock, v.ilvl, v.tooltip, count(*) OVER () AS total
+        FROM ah_deals d JOIN ah_items i USING (item_id) JOIN ah_variants v USING (variant_id)
+        WHERE {' AND '.join(where)}
+        ORDER BY {order} LIMIT {PAGE_SIZE} OFFSET %(offset)s""", p)
+    names = _cached('classes', _class_names)
+    out = [{'id': r['item_id'], 'name': r['name'], 'q': r['quality'], 'rank': r['craft_rank'], 'icon': icon_url(r),
+            'sub': names.get((r['class_id'], r['subclass_id']), ('', ''))[1], 'cr': r['cr'], 'price': r['price'],
+            'typical': r['typical'], 'realms': r['realms'], 'profit': r['profit'], 'proven': r['proven'],
+            'sold_7d': r['sold_7d'], 'roll': {'sec': r['sec'], 'ter': r['ter'], 'sock': r['sock'], 'ilvl': r['ilvl'],
+                                              'tooltip': r['tooltip']}} for r in rows]
+    return out, (rows[0]['total'] if rows else 0)
+
+
+async def handle_deals_api(request):
+    rows, total = await asyncio.to_thread(deals, request.query)
+    return web.json_response({'rows': rows, 'total': total}, headers={'Cache-Control': 'no-store', **_headers()})
+
+
+MOVER_LISTS = {
+    # (kind, list) -> (extra condition, order)
+    'up': ('m.change > 0', 'm.change DESC'),
+    'down': ('m.change < 0', 'm.change ASC'),
+    'low': ('m.supply_change < -0.2', 'm.supply_change ASC'),
+}
+MOVER_FLOOR = {  # what's too thin to mean anything: both prices and both supplies at least
+    'commodity': (10000, 500),   # 1g, 500 on sale (thinner markets swing wildly on one bought-out stack)
+    'item': (10000, 15),         # 1g, 15 listings
+}
+
+
+def movers(args):
+    from datetime import datetime, timedelta, timezone
+    kind = 'commodity' if args.get('kind') != 'item' else 'item'
+    price_floor, supply_floor = MOVER_FLOOR[kind]
+    summary = 'ah_commodity_summary' if kind == 'commodity' else 'ah_item_summary'
+    out = {}
+    for name, (condition, order) in MOVER_LISTS.items():
+        out[name] = db.fetch_all(f"""
+            SELECT m.item_id, m.now, m.was, m.change, m.supply_now, m.supply_was, m.supply_change, m.hours,
+                   i.name, i.quality, i.icon, i.icon_file, i.class_id, i.subclass_id, i.craft_rank, s.sold_7d
+            FROM ah_movers m JOIN ah_items i USING (item_id) LEFT JOIN {summary} s USING (item_id)
+            WHERE m.kind = %s AND m.now >= %s AND m.was >= %s AND m.supply_now >= %s AND m.supply_was >= %s
+              AND ABS(m.change) <= 10 AND {condition}
+            ORDER BY {order} LIMIT 25""", (kind, price_floor, price_floor, supply_floor // (4 if name == 'low' else 1),
+                                          supply_floor))
+    ids = list({r['item_id'] for rows in out.values() for r in rows})
+    lines = {}
+    for r in db.fetch_all("""SELECT item_id, ts, med FROM ah_item_history WHERE item_id = ANY(%s) AND ts >= %s
+                             ORDER BY item_id, ts""", (ids, datetime.now(timezone.utc) - timedelta(hours=48))):
+        lines.setdefault(r['item_id'], []).append(r['med'])
+    names = _cached('classes', _class_names)
+    return {name: [{'id': r['item_id'], 'name': r['name'], 'q': r['quality'], 'rank': r['craft_rank'], 'icon': icon_url(r),
+                    'sub': names.get((r['class_id'], r['subclass_id']), ('', ''))[1], 'now': r['now'], 'was': r['was'],
+                    'change': r['change'], 'supply_now': r['supply_now'], 'supply_was': r['supply_was'],
+                    'supply_change': r['supply_change'], 'hours': r['hours'], 'sold_7d': r['sold_7d'] or 0,
+                    'line': lines.get(r['item_id'], [])} for r in rows] for name, rows in out.items()}
+
+
+async def handle_movers_api(request):
+    data = await asyncio.to_thread(movers, request.query)
+    return web.json_response(data, headers={'Cache-Control': 'no-store', **_headers()})
+
+
+# ============================================================================
+# Collection: what a character hasn't collected that's on sale
+# ============================================================================
+
+COLLECTION_BODY = """
+<main id="collection-view">
+  <div class="section-head"><h2>Collection</h2>
+    <p>Look up a character to see the mounts, battle pets and toys they haven't collected that are for sale right now:
+    on their own realm first, then wherever in EU it's cheapest. Collections come from the character's armory profile.</p></div>
+  <section class="panel">
+    <form class="search-head" id="c-form">
+      <div class="search-row coll-lookup">
+        <label class="field"><span>Character</span>
+          <input class="input big" id="c-name" type="text" placeholder="Character name" autocomplete="off"
+                 spellcheck="false" maxlength="12" required></label>
+        <label class="field"><span>Realm</span><select class="select big" id="c-realm" required></select></label>
+        <button class="btn" type="submit" id="c-go">Look up</button>
+      </div>
+    </form>
+    <div id="c-status" class="coll-status" role="status"></div>
+    <div id="c-result" hidden>
+      <div class="coll-summary" id="c-summary"></div>
+      <div class="coll-tools">
+        <div class="seg" role="group" aria-label="What to show" id="c-kind"></div>
+        <label class="check"><input type="checkbox" id="c-here"> Only listed on their realm</label>
+        <label class="field inline"><span>Sort by</span><select class="select" id="c-sort"></select></label>
+      </div>
+      <div class="result-meta"><span id="c-count"></span><span id="c-note"></span></div>
+      <div class="table-wrap"><table id="coll"><thead></thead><tbody></tbody></table></div>
+      <div class="more"><button type="button" class="btn-ghost" id="c-more" hidden>Show more</button></div>
+    </div>
+  </section>
+</main>"""
+
+# our kind -> Blizzard's name for the collection, and for each entry's id in it
+COLLECTIONS = {'mount': ('mounts', 'mount'), 'pet': ('pets', 'species'), 'toy': ('toys', 'toy')}
+CHARACTER_NAME = re.compile(r'^[^\W\d_]{2,12}$')
+PROFILE_SECONDS = 600
+PROFILES_KEPT = 500
+_profiles = {}
+_blizzard = None
+
+
+async def handle_collection_page(request):
+    data = await asyncio.to_thread(_base_data, 'collection')
+    return _page('Collection · Luminis Auction House', COLLECTION_BODY, data,
+                 "The mounts, battle pets and toys a character hasn't collected that are for sale in EU right now.")
+
+
+async def _collected(slug, name):
+    """
+    -> ({kind: set of mount, species or toy ids}, None), or (None, why not). From Blizzard's profile API with the
+    site's client credentials (public profiles only), kept ten minutes so flipping filters and reloads cost nothing.
+    """
+    global _blizzard
+    hit = _profiles.get((slug, name))
+    if hit and time.monotonic() - hit[0] < PROFILE_SECONDS:
+        return hit[1], None
+    if _blizzard is None:
+        import aiohttp
+        from ..blizzard import Blizzard
+        _blizzard = Blizzard(aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)))
+
+    async def one(kind):
+        plural, entry = COLLECTIONS[kind]
+        st, body, _ = await _blizzard.get(f'/profile/wow/character/{slug}/{name}/collections/{plural}', 'profile-eu')
+        if st != 200:
+            return kind, st
+        return kind, {(e.get(entry) or {}).get('id') for e in json.loads(body).get(plural) or []} - {None}
+
+    try:
+        results = dict(await asyncio.gather(*(one(kind) for kind in COLLECTIONS)))
+    except Exception as e:
+        logger.warning(f'[AH] Collection lookup for {name}-{slug} failed: {e}')
+        return None, 'unavailable'
+    failed = [v for v in results.values() if not isinstance(v, set)]
+    if failed:
+        return None, 'not found' if 404 in failed or 403 in failed else 'unavailable'
+    if len(_profiles) >= PROFILES_KEPT:
+        _profiles.clear()
+    _profiles[(slug, name)] = (time.monotonic(), results)
+    return results, None
+
+
+def collection(cr, owned):
+    """The collectibles on sale that the character doesn't have, with the cheapest on their realm and in EU."""
+    from ..prices import PRICE_CAP
+    rows = db.fetch_all(f"""
+        WITH c AS (SELECT item_id, kind, ref_id FROM ah_collectibles
+                   UNION ALL SELECT item_id, 'pet', -item_id FROM ah_item_summary WHERE item_id < 0),
+             here AS (SELECT l.item_id, min(l.buyout) AS price, count(*) AS n FROM ah_listings l
+                      WHERE l.cr = %(cr)s AND l.buyout < %(cap)s AND {NO_WALL} GROUP BY l.item_id)
+        SELECT c.item_id, c.kind, s.lo, s.lo_cr, s.med, s.realms, s.sold_7d, h.price AS here, h.n AS here_n,
+               i.name, i.quality, i.icon, i.icon_file
+        FROM c JOIN ah_item_summary s USING (item_id) JOIN ah_items i USING (item_id) LEFT JOIN here h USING (item_id)
+        WHERE NOT s.walls_only
+          AND NOT ((c.kind = 'mount' AND c.ref_id = ANY(%(mount)s)) OR (c.kind = 'pet' AND c.ref_id = ANY(%(pet)s))
+                   OR (c.kind = 'toy' AND c.ref_id = ANY(%(toy)s)))""",
+                        {'cr': cr, 'cap': PRICE_CAP, **{kind: sorted(ids) for kind, ids in owned.items()}})
+    return [{'id': r['item_id'], 'kind': r['kind'], 'name': r['name'], 'q': r['quality'], 'icon': icon_url(r),
+             'lo': r['lo'], 'lo_cr': r['lo_cr'], 'med': r['med'], 'realms': r['realms'], 'sold_7d': r['sold_7d'],
+             'here': r['here'], 'here_n': r['here_n'] or 0} for r in rows]
+
+
+async def handle_collection_api(request):
+    headers = {'Cache-Control': 'no-store', **_headers()}
+    slug = (request.query.get('realm') or '').strip().lower()
+    name = (request.query.get('name') or '').strip().lower()
+    groups = await asyncio.to_thread(_cached, 'realms', _realms)
+    cr = next((int(c) for c, g in groups.items() if slug in g['slugs']), None)
+    if not cr or not CHARACTER_NAME.match(name):
+        return web.json_response({'error': 'Enter a character name and pick their realm.'}, status=400, headers=headers)
+    owned, error = await _collected(slug, name)
+    if error == 'not found':
+        return web.json_response({'error': "We couldn't find that character. Check the name and realm: characters "
+                                           "under level 10, or not played in a long while, don't show up."},
+                                 status=404, headers=headers)
+    if error:
+        return web.json_response({'error': "Blizzard's armory didn't answer. Try again in a moment."}, status=502,
+                                 headers=headers)
+    rows = await asyncio.to_thread(collection, cr, owned)
+    return web.json_response({'cr': cr, 'owned': {kind: len(ids) for kind, ids in owned.items()}, 'rows': rows},
+                             headers=headers)
+
+
+# ============================================================================
+# Crafting: every recipe's reagent cost against what it makes sells for
+# ============================================================================
+
+CRAFTING_BODY = """
+<main id="crafting-view">
+  <div class="section-head"><h2>Crafting</h2>
+    <p>Every recipe priced against the auction house right now: what its reagents cost to buy, what it makes sells
+    for after the 5% auction cut, and whether it actually sells. Quality reagents and results come in ranks - pick
+    rank 1 throughout, or the best rank of each. Commodities at their market price; gear at what it sold for this
+    week, or what's asked until we've seen it sell. Before multicraft, resourcefulness and concentration.</p></div>
+  <section class="panel">
+    <form class="search-head" id="cr-form">
+      <div class="filters">
+        <label class="field"><span>Profession</span><select class="select" id="cr-prof"></select></label>
+        <label class="field"><span>Expansion</span><select class="select" id="cr-exp"></select></label>
+        <label class="field"><span>Sort by</span><select class="select" id="cr-sort"></select></label>
+      </div>
+      <div class="filter-foot">
+        <div class="seg" role="group" aria-label="Reagent and result quality" id="cr-mode"></div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="cr-sells"> Only what sells (seen selling this week)</label>
+          <label class="check"><input type="checkbox" id="cr-profit"> Only profitable</label>
+        </div>
+      </div>
+    </form>
+    <div class="result-meta"><span id="cr-count"></span><span id="cr-note"></span></div>
+    <div class="table-wrap"><table id="crafts"><thead></thead><tbody></tbody></table></div>
+    <div class="more"><button type="button" class="btn-ghost" id="cr-more" hidden>Show more</button></div>
+  </section>
+</main>"""
+
+CRAFT_SORTS = {'profit': lambda r: -r['profit'], 'margin': lambda r: -r['profit'] / max(r['cost'], 1),
+               'sold': lambda r: (-r['sold_7d'], -r['profit'])}
+TIER_FIRST = 4  # the recipe tables' tier index of Classic: tier index - 4 = the expansion (EXPANSIONS)
+
+
+def _craft_prices():
+    """
+    item -> (unit price, sold in 7 days, only asked): commodities at their market price; other items at what they
+    sold for this week once seen selling a few times, else the EU median of what's asked (old gear can ask millions)
+    """
+    from datetime import date, timedelta
+    from ..prices import DEAL_PROVEN_SALES
+    out = {r['item_id']: (r['market'], r['sold_7d'], False) for r in db.fetch_all(
+        'SELECT item_id, market, sold_7d FROM ah_commodity_summary WHERE market > 0')}
+    sold = {r['item_id']: r for r in db.fetch_all(
+        'SELECT item_id, sum(sold) AS n, sum(revenue) AS revenue FROM ah_sales WHERE day > %s GROUP BY item_id',
+        (date.today() - timedelta(days=7),))}
+    for r in db.fetch_all('SELECT item_id, med, sold_7d FROM ah_item_summary WHERE item_id > 0 AND NOT walls_only'):
+        s = sold.get(r['item_id'])
+        if s and s['n'] >= DEAL_PROVEN_SALES:
+            out.setdefault(r['item_id'], (round(s['revenue'] / s['n']), r['sold_7d'], False))
+        else:
+            out.setdefault(r['item_id'], (r['med'], r['sold_7d'], True))
+    return out
+
+
+def _crafts():
+    """Every recipe priced twice - rank 1 reagents for a rank 1 result, and the best of each - for the crafting page."""
+    from ..prices import AH_CUT
+    slots = {}
+    for r in db.fetch_all('SELECT recipe_id, slot, items, qty FROM ah_recipe_reagents ORDER BY recipe_id, slot'):
+        slots.setdefault(r['recipe_id'], []).append((r['items'], r['qty']))
+    price = _craft_prices()
+    out = {'basic': [], 'top': []}
+    skipped = {}
+    for r in db.fetch_all('SELECT recipe_id, profession, tier_index, outputs, per_craft FROM ah_recipes'):
+        if not any(i in price for i in r['outputs']):
+            continue  # makes nothing that's on sale: nothing to compare with
+        for mode, pick in (('basic', 0), ('top', -1)):
+            made = r['outputs'][pick]
+            parts = [(items[pick], qty) for items, qty in slots.get(r['recipe_id'], [])]
+            if made not in price or not parts:
+                continue
+            if any(item not in price for item, _ in parts):
+                key = (mode, r['profession'], r['tier_index'])
+                skipped[key] = skipped.get(key, 0) + 1
+                continue
+            cost = sum(price[item][0] * qty for item, qty in parts)
+            sell, sold, asked = price[made]
+            out[mode].append({'recipe': r['recipe_id'], 'prof': r['profession'], 'tier': r['tier_index'],
+                              'id': made, 'per': r['per_craft'], 'sell': sell, 'cost': cost, 'sold_7d': sold, 'asked': asked,
+                              'profit': round(sell * r['per_craft'] * AH_CUT - cost),
+                              'reagents': [(item, qty, price[item][0]) for item, qty in parts]})
+    return out, skipped
+
+
+def crafting(args):
+    from ..crafting import PROFESSIONS
+    rows, skipped = _cached('crafts', _crafts)
+    mode = 'top' if args.get('mode') == 'top' else 'basic'
+    tiers = sorted({r['tier'] for r in rows[mode]}, reverse=True)
+    prof = _int(args, 'prof', 1, 10 ** 5)
+    tier = _int(args, 'tier', 0, 100)
+    if tier is None and tiers:
+        tier = tiers[0]  # the newest expansion unless asked
+    picked = [r for r in rows[mode] if (not prof or r['prof'] == prof) and (not tier or r['tier'] == tier)
+              and (args.get('sells') != '1' or r['sold_7d'] > 0) and (args.get('profit') != '1' or r['profit'] > 0)]
+    picked.sort(key=CRAFT_SORTS.get(args.get('sort'), CRAFT_SORTS['profit']))
+    offset = _int(args, 'offset', 0, 100000) or 0
+    page = picked[offset:offset + PAGE_SIZE]
+    ids = {r['id'] for r in page} | {item for r in page for item, _, _ in r['reagents']}
+    items = {i['item_id']: i for i in db.fetch_all(
+        'SELECT item_id, name, quality, icon, icon_file, craft_rank FROM ah_items WHERE item_id = ANY(%s)', (list(ids),))}
+
+    def describe(item_id):
+        i = items.get(item_id) or {'name': f'Item {item_id}', 'quality': 1, 'craft_rank': 0}
+        return {'id': item_id, 'name': i['name'], 'q': i['quality'], 'rank': i['craft_rank'], 'icon': icon_url(i)}
+
+    out = [{**describe(r['id']), 'recipe': r['recipe'], 'prof': PROFESSIONS.get(r['prof'], ''), 'per': r['per'],
+            'sell': r['sell'], 'cost': r['cost'], 'profit': r['profit'], 'sold_7d': r['sold_7d'], 'asked': r['asked'],
+            'reagents': [{**describe(item), 'qty': qty, 'price': p} for item, qty, p in r['reagents']]} for r in page]
+    names = {t: EXPANSIONS[t - TIER_FIRST] if 0 <= t - TIER_FIRST < len(EXPANSIONS) else f'Tier {t}' for t in tiers}
+    missing = sum(n for (m, p, t), n in skipped.items() if m == mode and (not prof or p == prof) and (not tier or t == tier))
+    return {'rows': out, 'total': len(picked), 'tier': tier, 'tiers': [[t, names[t]] for t in tiers],
+            'professions': sorted(PROFESSIONS.items(), key=lambda p: p[1]), 'skipped': missing}
+
+
+async def handle_crafting_page(request):
+    data = await asyncio.to_thread(_base_data, 'crafting')
+    return _page('Crafting · Luminis Auction House', CRAFTING_BODY, data,
+                 'What every profession recipe costs to craft and what it sells for on the EU auction house.')
+
+
+async def handle_crafting_api(request):
+    data = await asyncio.to_thread(crafting, request.query)
+    return web.json_response(data, headers={'Cache-Control': 'no-store', **_headers()})
 
 
 async def handle_search_api(request):

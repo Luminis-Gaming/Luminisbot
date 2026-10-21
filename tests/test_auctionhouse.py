@@ -1,6 +1,6 @@
 """
 Unit tests for the auction house's pure parts: reading a listing's roll (auctionhouse/rolls.py) and which prices
-count (auctionhouse/prices.py). Run with:  python -m unittest discover tests
+count (auctionhouse/prices.py), and matching collectibles to what they teach. Run with:  python -m unittest discover tests
 Fixtures are real EU listings and prices seen in October 2026.
 """
 import sys
@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from auctionhouse import prices, rolls
+from auctionhouse import collectibles, crafting, prices, rolls, sales
 
 G = 10000  # copper per gold
 
@@ -105,6 +105,43 @@ class CommodityTest(unittest.TestCase):
         self.assertIsNone(prices.commodity_stats([(9999999 * G, 3)]))
 
 
+class SalesTest(unittest.TestCase):
+    def test_a_listing_gone_with_hours_left_was_sold(self):
+        # (auction id, item, roll, price, time left: 0 short, 1 medium, 2 long, 3 very long)
+        before = [(1, 10, 100, 50 * G, 3), (2, 10, 100, 60 * G, 2), (3, 10, 100, 40 * G, 1), (4, 10, 101, 80 * G, 0),
+                  (5, 10, 100, 65 * G, 3)]
+        sold = sales.realm_sales(before, current={5: (100, 65 * G)}, walls={}, typical={})
+        self.assertEqual(sold, {(10, 100): [2, 110 * G]})  # 1 and 2; 3 and 4 may just have run out; 5 is still up
+
+    def test_buyers_take_the_cheapest_first(self):
+        # Bound Serpent's Jade Eye: 35k still up, the 120k asks above it vanished - cancelled, not bought
+        before = [(1, 10, 100, 35000 * G, 3), (2, 10, 100, 120000 * G, 3), (3, 10, 100, 110000 * G, 2),
+                  (4, 10, 101, 90000 * G, 3)]
+        sold = sales.realm_sales(before, current={1: (100, 35000 * G)}, walls={}, typical={})
+        self.assertEqual(sold, {(10, 101): [1, 90000 * G]})  # another roll's cheapest is its own matter
+
+    def test_a_repost_just_under_is_not_a_sale(self):
+        before = [(1, 10, 100, 1000 * G, 3), (2, 10, 100, 1500 * G, 3)]
+        sold = sales.realm_sales(before, current={9: (100, 999 * G)}, walls={}, typical={})
+        self.assertEqual(sold, {(10, 100): [1, 1500 * G]})  # 1 came back at 999g; 2 is gone with nothing after it
+
+    def test_bot_walls_and_lottery_asks_that_vanish_are_not_sales(self):
+        before = [(1, 10, 100, 6255261 * G, 3), (2, 10, 100, 9999999 * G, 3), (3, 10, 100, 900 * G, 3), (4, 10, 100, 40 * G, 3)]
+        sold = sales.realm_sales(before, {}, walls={10: {6255261 * G}}, typical={10: 50 * G})
+        self.assertEqual(sold, {(10, 100): [1, 40 * G]})  # the wall, the cap and 18x typical are left out
+
+    def test_commodities_count_partial_buys_and_vanished_stacks(self):
+        before = {1: (7, 10 * G, 200, 3), 2: (7, 11 * G, 50, 3), 3: (7, 12 * G, 20, 0), 4: (7, 99 * G, 10, 3)}
+        sold = sales.commodity_sales(before, current={1: 150}, market={7: 11 * G})
+        # 50 bought out of stack 1, stack 2 gone (sold), 3 may have run out, 4 is 9x the market: likely cancelled
+        self.assertEqual(sold, {7: [100, 50 * 10 * G + 50 * 11 * G]})
+
+    def test_a_commodity_stack_gone_above_an_untouched_cheaper_one_was_cancelled(self):
+        before = {1: (7, 10 * G, 200, 3), 2: (7, 12 * G, 50, 3), 3: (7, 9 * G, 30, 3)}
+        sold = sales.commodity_sales(before, current={1: 200}, market={7: 10 * G})
+        self.assertEqual(sold, {7: [30, 30 * 9 * G]})  # stack 3 (under the untouched 10g one) sold; 2 was pulled
+
+
 class PriceTest(unittest.TestCase):
     def test_people_pick_round_prices(self):
         for g in (3499999, 296000, 50000, 2900000, 499):
@@ -160,6 +197,58 @@ class PriceTest(unittest.TestCase):
         s = prices.stats([(1, 1688999 * G, 1), (2, 1688999 * G, 1)], walls)
         self.assertTrue(s['fell_back'])
         self.assertEqual(s['flagged'], 0)
+
+
+class CollectibleTest(unittest.TestCase):
+    def test_names_match_despite_case_spacing_and_curly_quotes(self):
+        self.assertEqual(collectibles._norm("Ashes of Al’ar"), collectibles._norm("ashes of  Al'ar "))
+
+    def test_character_names(self):
+        from auctionhouse.web.routes import CHARACTER_NAME
+        for ok in ('tallgrogu', 'ælfric', 'børre', 'jo'):
+            self.assertTrue(CHARACTER_NAME.match(ok), ok)
+        for bad in ('j', 'bob1', 'bob/../x', 'a' * 13, 'bob smith', ''):
+            self.assertFalse(CHARACTER_NAME.match(bad), bad)
+
+
+# The game tables for two Midnight recipes, as wago.tools has them (only the columns crafting.py reads)
+RECIPE_TABLES = {
+    'SkillLine': 'ID,DisplayName_lang,ParentSkillLineID,ParentTierIndex\n171,Alchemy,0,0\n2906,Midnight Alchemy,171,15\n'
+                 '2950,Alchemy Research,0,0\n',
+    'SkillLineAbility': 'ID,SkillLine,Spell,SkillupSkillLineID\n52685,171,1230858,2906\n52935,333,1230900,2909\n'
+                        '54379,2950,1248781,0\n',
+    'SpellReagents': 'ID,SpellID,Reagent_0,Reagent_1,ReagentCount_0,ReagentCount_1\n1,1230858,236949,0,1,0\n',
+    'ModifiedCraftingReagentSlot': "ID,Name_lang,ReagentType\n779,Sunglass Vial,1\n396,Artisan's Authenticity,2\n",
+    'MCRSlotXMCRCategory': 'ID,ModifiedCraftingCategoryID,_Order,ModifiedCraftingReagentSlotID\n1,779,0,779\n2,826,0,396\n',
+    'CraftingReagentQuality': 'ID,OrderIndex,ItemID,ModifiedCraftingCategoryID\n10,1,240990,779\n11,0,240991,779\n'
+                              '12,0,246447,826\n',
+    'ModifiedCraftingSpellSlot': 'ID,SpellID,Slot,ModifiedCraftingReagentSlotID,ReagentCount\n1,1230858,0,779,5\n'
+                                 '2,1230858,1,396,1\n',
+    'CraftingData': 'ID,CraftedItemID\n3255,0\n',
+    'CraftingDataItemQuality': 'ID,ItemID,CraftingDataID\n7,241287,3255\n8,241286,3255\n',
+    'CraftingDataEnchantQuality': 'ID,Rank,ItemID,CraftingDataID\n1,14,243947,3795\n2,13,243946,3795\n',
+}
+
+
+class CraftingTest(unittest.TestCase):
+    def test_recipes_belong_to_their_expansion_and_trade_professions_only(self):
+        spells, lines = crafting.recipe_spells(RECIPE_TABLES)
+        self.assertEqual(spells[1230858], (52685, 171, 2906))
+        self.assertNotIn(1248781, spells)   # "Alchemy Research" isn't a profession that crafts for sale
+        self.assertEqual(lines[2906], ('Midnight Alchemy', 15))
+
+    def test_what_a_recipe_makes_rank_1_first(self):
+        effects = {1230858: [(crafting.CRAFT_ITEM, 0, 5.0, 3255)], 1230900: [(crafting.CRAFT_ENCHANT, 0, 1.0, 3795)],
+                   1: [(24, 2459, 3.0, 0)]}
+        made = crafting.outputs(effects, RECIPE_TABLES)
+        self.assertEqual(made[1230858], ([241287, 241286], 5))   # Light's Preservation, 5 a craft
+        self.assertEqual(made[1230900], ([243946, 243947], 1))   # the enchant's scroll, rank 13 before 14
+        self.assertEqual(made[1], ([2459], 3))
+
+    def test_reagents_are_the_plain_ones_and_required_quality_slots(self):
+        needs = crafting.reagents({1230858}, RECIPE_TABLES)
+        # Mote of Light x1; Sunglass Vial x5 in either rank; the optional finishing reagent is left out
+        self.assertEqual(needs[1230858], [(0, [236949], 1), (crafting.QUALITY_SLOT, [240991, 240990], 5)])
 
 
 if __name__ == '__main__':

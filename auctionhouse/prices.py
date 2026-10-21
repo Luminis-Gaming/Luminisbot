@@ -24,6 +24,10 @@ FAR_ABOVE = 10           # x the typical price
 AH_CUT = 0.95            # the auction house keeps 5%
 PRICE_CAP = 9_990_000 * 10000  # at or near the 9,999,999g maximum: a lottery ticket, not a price
 MARKET_SHARE = 0.15      # a commodity's market price: the average of the cheapest 15% of its supply
+DEAL_SHARE = 0.5         # a deal: a realm's cheapest listing at half its roll's EU median or less
+DEAL_MIN_TYPICAL = 100 * 10000  # ...of a roll that's worth at least 100g (below that a "deal" is pocket change)
+DEALS_KEPT = 5000
+DEAL_PROVEN_SALES = 3    # a roll seen selling this often in a week: its average sale price is the reference
 
 
 def _sig_digits(n):

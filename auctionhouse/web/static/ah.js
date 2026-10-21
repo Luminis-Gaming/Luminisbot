@@ -61,6 +61,8 @@ const realmsHint = (cr, text = '?') => groupMore(cr)
 const realmLabel = cr => `${esc(groupName(cr))}${realmsHint(cr, `+${groupMore(cr)}`)}`;
 const icon = (it, cls = '', tt = '', focusable = true) => `<span class="item-icon ${cls} q-${qkey(it.q)}" ${tt ? `data-tt="${esc(tt)}"${focusable ? ' tabindex="0"' : ''}` : ''}>${it.icon
   ? `<img src="${esc(it.icon)}" alt="" width="56" height="56" loading="lazy">` : `<span class="fallback">${esc((it.name || '?')[0])}</span>`}</span>`;
+// a reagent's crafting quality rank (Mycobloom R1 / R2 / R3: three items with one name)
+const rankPill = n => (n ? `<span class="rank-pill" title="Crafting quality rank ${n}">R${n}</span>` : '');
 const ttAttr = (tt, note = '') => `data-tt="${esc(tt)}"${note ? ` data-tt-note="${esc(note)}"` : ''}`;
 // A small icon that shows the tooltip of one roll: the only thing on a row you hover for it. Inside a button
 // (the roll picker) it can't take focus itself; everywhere else the keyboard can reach it too.
@@ -209,8 +211,36 @@ const rollQuery = r => {
   return p.toString();
 };
 
+// Estimated sales (auctionhouse/sales.py) are counted over at most the last 7 days; until they've been counted for a
+// while there's nothing to show. perDay: "sold per day", from a 7-day count.
+const salesHours = () => (D.snapshot || {}).sales_hours || 0;
+const salesDays = () => (salesHours() >= 1 ? Math.min(7, salesHours() / 24) : 0);
+const perDay = n => {
+  const days = salesDays();
+  if (!days) return '–';
+  const v = (n || 0) / days;
+  return v >= 10 ? Math.round(v).toLocaleString('en-GB') : v >= 1 ? v.toFixed(1) : v > 0 ? v.toFixed(2) : '0';
+};
+const salesSpan = () => {
+  const h = salesHours();
+  return h >= 7 * 24 ? 'the last 7 days' : h >= 48 ? `the last ${Math.round(h / 24)} days` : `the last ${Math.max(1, Math.round(h))} hours`;
+};
+const spark = vals => {
+  if (!vals || vals.length < 2) return '<span class="spark"></span>';
+  const w = 84, h = 26, lo = Math.min(...vals), hi = Math.max(...vals);
+  const x = i => 2 + i / (vals.length - 1) * (w - 6), y = v => (hi > lo ? h - 3 - (v - lo) / (hi - lo) * (h - 6) : h / 2);
+  const d = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><path d="${d}" fill="none"
+    stroke="var(--arcane-mark)" stroke-width="1.6" stroke-linejoin="round"/><circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}"
+    r="2.6" fill="var(--arcane-mark)"/></svg>`;
+};
+
 if (D.page === 'search') initSearch();
 else if (D.page === 'item') initItem();
+else if (D.page === 'deals') initDeals();
+else if (D.page === 'movers') initMovers();
+else if (D.page === 'crafting') initCrafting();
+else if (D.page === 'collection') initCollection();
 
 // =====================================================================================================================
 // Search page
@@ -230,8 +260,8 @@ function initSearch() {
   els.ter.innerHTML = '<option value="">Any</option><option value="any">Any tertiary stat</option><option value="none">None</option>'
     + TERTIARY.map(t => `<option value="${t}">${t}</option>`).join('');
 
-  // first view: the items listed on the most realms - what actually trades (one realm's lottery ask isn't news)
-  const state = {cat: null, sub: null, sort: 'realms', dir: 'desc', offset: 0, rows: [], total: 0};
+  // first view: the most listed items - what's actually trading right now
+  const state = {cat: null, sub: null, sort: 'listings', dir: 'desc', offset: 0, rows: [], total: 0};
   // the address keeps the search, so it can be shared and Back returns to it
   const url = new URLSearchParams(location.search);
   const setVal = (el, v) => { if (v != null) el.value = v; };
@@ -261,7 +291,7 @@ function initSearch() {
     if (els.sock.checked) add('sock', '1');
     if (els.below.checked) add('below', '1');
     if (els.oos.checked) add('oos', '1');
-    if (state.sort !== 'realms' || state.dir !== 'desc') { add('sort', state.sort); add('dir', state.dir); }
+    if (state.sort !== 'listings' || state.dir !== 'desc') { add('sort', state.sort); add('dir', state.dir); }
     return p;
   }
   const statFilter = () => !!(els.sec.value || els.ter.value || els.sock.checked);
@@ -278,6 +308,9 @@ function initSearch() {
         html += btn(s.name, s.n, c.id, s.id, String(state.sub) === String(s.id), 'cat-sub');
     }
     $('#cats').innerHTML = html;
+    const cat = cats.find(c => String(c.id) === String(state.cat));
+    const sub = cat && cat.subs.find(s => String(s.id) === String(state.sub));
+    $('#cat-current').textContent = sub ? `${cat.name} · ${sub.name}` : cat ? cat.name : 'All categories';
   }
 
   function renderOpps() {
@@ -286,11 +319,16 @@ function initSearch() {
     $('#opps').innerHTML = opps.map(o => `<a class="opp" href="/ah/item/${o.item.id}${o.roll ? '?' + rollQuery(o.roll) : ''}">
       ${icon(o.item, '', `${o.item.id}|${o.roll ? o.roll.tooltip : ''}`, false)}<span class="opp-name qtext q-${qkey(o.item.q)}">${esc(o.item.name)}</span>
       <span class="item-sub">${o.roll && rollText(o.roll) ? esc(rollText(o.roll)) + ' · ilvl ' + o.roll.ilvl : esc(o.item.sub)} · ${o.realms} realms</span>
-      <span class="opp-route"><span>Buy on ${esc(groupName(o.buy_cr))}</span> ${coins(o.buy)}
-        <span class="arrow" aria-hidden="true">→</span><span>sell on ${esc(groupName(o.sell_cr))}</span> ${coins(o.sell)}
-        <span class="opp-gain">+${gold(o.gain)}</span></span></a>`).join('');
+      <span class="opp-route">
+        <span class="leg"><span class="leg-label">Buy</span><span class="leg-realm">${esc(groupName(o.buy_cr))}</span>${coins(o.buy)}</span>
+        <span class="leg"><span class="leg-label">Sell</span><span class="leg-realm">${esc(groupName(o.sell_cr))}</span>${coins(o.sell)}</span>
+        <span class="opp-gain"><small>gain</small>+${gold(o.gain)}</span></span></a>`).join('');
   }
 
+  const placeholders = () => {
+    $('#results tbody').innerHTML = Array.from({length: 8}, (_, i) =>
+      `<tr class="skeleton" aria-hidden="true"><td colspan="8"><span class="sk" style="width:${[62, 48, 70, 55, 66, 44, 58, 50][i]}%"></span></td></tr>`).join('');
+  };
   let pending = 0;
   async function search(append = false) {
     const p = params();
@@ -317,17 +355,17 @@ function initSearch() {
     const showMed = els.medCol.checked;
     const cols = realm
       ? [['name', 'Item'], ['ilvl', 'Item level', 'r'], ['req', 'Req.', 'r'], ['here', 'Price here', 'r'], ...(showMed ? [['med', 'EU median', 'r']] : []),
-         ['vs', 'vs EU median', 'r'], ['qty', 'Listings here', 'r']]
+         ['vs', 'vs EU median', 'r'], ['qty', 'Listings here', 'r'], ...(salesDays() ? [['sold', 'Sold/day', 'r']] : [])]
       : [['name', 'Item'], ['ilvl', 'Item level', 'r'], ['req', 'Req.', 'r'], ['lo', 'Cheapest', 'r'], ...(showMed ? [['med', 'EU median', 'r']] : []),
-         ['hi', 'Highest', 'r'], ['realms', 'Realms', 'r'], ['spread', 'Spread', 'r']];
+         ['hi', 'Highest', 'r'], ['realms', 'Realms', 'r'], ...(salesDays() ? [['sold', 'Sold/day', 'r']] : []), ['spread', 'Spread', 'r']];
     $('#results thead').innerHTML = '<tr>' + cols.map(([k, label, cls]) =>
-      `<th class="${cls || ''}" ${k === state.sort ? `aria-sort="${state.dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>
+      `<th class="${cls || ''}" data-col="${k}" ${k === state.sort ? `aria-sort="${state.dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>
         <button type="button" class="sort" data-sort="${k}">${label}</button></th>`).join('') + '</tr>';
     const extra = rollQuery({sec: els.sec.value, ter: els.ter.value, sock: els.sock.checked});
     const cell = (r, k) => {
       const spread = r.hi / Math.max(r.lo, 1);
       switch (k) {
-        case 'name': return `<td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}${extra ? '?' + extra : ''}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>
+        case 'name': return `<td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}${extra ? '?' + extra : ''}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>${rankPill(r.rank)}
           ${r.rolls > 1 ? `<span class="rolls-badge">${r.rolls} ${r.id < 0 ? 'variants' : 'rolls'}</span>` : ''}
           <div class="item-sub">${esc(r.sub)}${r.slot ? ' · ' + esc(r.slot) : ''}</div></div></div></td>`;
         case 'ilvl': return `<td class="r num">${r.ilvl_min === r.ilvl_max ? r.ilvl_max : `${r.ilvl_min}–${r.ilvl_max}`}</td>`;
@@ -348,19 +386,24 @@ function initSearch() {
           return `<td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${pct(d)}</td>`;
         }
         case 'qty': return `<td class="r num">${r.here_n || '<span class="faint">0</span>'}</td>`;
+        case 'sold': return `<td class="r num${r.sold_7d ? '' : ' faint'}" title="Estimated sales per day in EU, over ${salesSpan()}">${perDay(r.sold_7d)}</td>`;
       }
       return '<td></td>';
     };
     $('#results tbody').innerHTML = state.rows.length
-      ? state.rows.map(r => `<tr class="link ${realm && r.here == null ? 'dim' : ''}" data-href="/ah/item/${r.id}${extra ? '?' + extra : ''}">${cols.map(c => cell(r, c[0])).join('')}</tr>`).join('')
+      ? state.rows.map(r => `<tr class="link ${realm && r.here == null ? 'dim' : ''}" data-href="/ah/item/${r.id}${extra ? '?' + extra : ''}">${
+          cols.map(c => cell(r, c[0]).replace('<td', `<td data-col="${c[0]}"`)).join('')}</tr>`).join('')
       : `<tr><td colspan="${cols.length}"><div class="empty">${D.snapshot.swept_at ? 'No items match these filters. Clear a filter or pick another category.'
           : 'The first snapshot of every EU auction house is still being collected. Check back in a few minutes.'}</div></td></tr>`;
     $('#result-count').textContent = `${state.total.toLocaleString('en-GB')} item${state.total === 1 ? '' : 's'}`
+      + (state.sort === 'listings' && state.dir === 'desc' ? ' · most listed first' : '')
       + (statFilter() ? ' · only items that roll random stats' : '');
     $('#result-mode').textContent = realm
       ? `Prices on ${els.realm.value.split('|')[1]}${groupMore(realm) ? ` (shares its auction house with ${groupMore(realm)} connected realm${groupMore(realm) === 1 ? '' : 's'})` : ''}`
       : 'Comparing all EU realms';
     $('#more').hidden = state.rows.length >= state.total;
+    const body = $('#results tbody');
+    body.classList.remove('fade-in'); void body.offsetWidth; body.classList.add('fade-in');
   }
 
   let debounce;
@@ -390,7 +433,374 @@ function initSearch() {
   });
   $('#more').addEventListener('click', () => { state.offset = state.rows.length; search(true); });
   if (window.matchMedia('(max-width: 860px)').matches) $('#rail').open = false;
-  renderCats(); renderOpps(); search();
+  renderCats(); renderOpps(); placeholders(); search();
+}
+
+// =====================================================================================================================
+// Deals: rolls listed far below what they usually go for (/ah/api/deals)
+// =====================================================================================================================
+function initDeals() {
+  const els = {realm: $('#d-realm'), cat: $('#d-cat'), min: $('#d-min'), sort: $('#d-sort'), proven: $('#d-proven')};
+  const mine = myRealm ? realmList.find(r => r.cr === myRealm && r.name === myRealmName()) : null;
+  els.realm.innerHTML = '<option value="">All EU realms</option>'
+    + (mine ? `<option value="${mine.cr}">Your realm (${esc(mine.name)})</option>` : '')
+    + realmList.map(r => `<option value="${r.cr}">${esc(r.name)}</option>`).join('');
+  els.cat.innerHTML = '<option value="">All categories</option>' + (D.categories || []).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  els.min.innerHTML = [[0, 'Any profit'], [1000, '1,000g'], [10000, '10,000g'], [100000, '100,000g'], [1000000, '1,000,000g']]
+    .map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  els.min.value = '1000';
+  els.sort.innerHTML = '<option value="profit">Biggest profit</option><option value="discount">Biggest discount</option>';
+  els.proven.checked = salesHours() >= 24;
+  const state = {rows: [], total: 0};
+  let ticket = 0;
+  async function load(append = false) {
+    const p = new URLSearchParams();
+    if (els.realm.value) p.set('realm', els.realm.value);
+    if (els.cat.value) p.set('cat', els.cat.value);
+    p.set('min', els.min.value);
+    p.set('sort', els.sort.value);
+    if (els.proven.checked) p.set('proven', '1');
+    p.set('offset', append ? state.rows.length : 0);
+    const t = ++ticket;
+    $('#deals').classList.add('loading');
+    let data = null;
+    try { const r = await fetch('/ah/api/deals?' + p); data = r.ok ? await r.json() : null; } catch {}
+    if (t !== ticket) return;
+    $('#deals').classList.remove('loading');
+    if (!data) { $('#d-count').textContent = 'Could not load deals. Try again in a moment.'; return; }
+    state.rows = append ? state.rows.concat(data.rows) : data.rows;
+    state.total = data.total;
+    render();
+  }
+  function render() {
+    $('#deals thead').innerHTML = `<tr><th class="plain">Item</th><th class="plain">Realm</th><th class="plain r">Price</th>
+      <th class="plain r">Usually</th><th class="plain r">Discount</th><th class="plain r">Profit</th></tr>`;
+    $('#deals tbody').innerHTML = state.rows.map(d => {
+      const href = `/ah/item/${d.id}${d.roll ? '?' + rollQuery(d.roll) : ''}`;
+      const roll = rollText(d.roll);
+      return `<tr class="link" data-href="${href}">
+        <td><div class="item-cell">${icon(d, '', `${d.id}|${d.roll.tooltip || ''}`)}<div><a href="${href}" class="qtext q-${qkey(d.q)}">${esc(d.name)}</a>${rankPill(d.rank)}
+          <div class="item-sub">${roll ? esc(roll) + ' · ' : ''}${d.id < 0 ? 'level' : 'ilvl'} ${d.roll.ilvl} · ${esc(d.sub)}</div></div></div></td>
+        <td>${esc(groupName(d.cr))}${groupMore(d.cr) ? realmsHint(d.cr, `+${groupMore(d.cr)}`) : ''}</td>
+        <td class="r">${coins(d.price)}</td>
+        <td class="r">${coins(d.typical)}<span class="realm-tag">${d.proven ? `average sale · ${d.sold_7d} sold this week` : 'median ask · not seen selling yet'}</span></td>
+        <td class="r num"><span class="deal-pct">−${Math.round((1 - d.price / d.typical) * 100)}%</span></td>
+        <td class="r"><span class="gain-text">+${gold(d.profit)}</span><span class="realm-tag">after the 5% cut</span></td></tr>`;
+    }).join('') || `<tr><td colspan="6"><div class="empty">No deals match these filters right now. Try a lower minimum profit${els.proven.checked ? ' or include unproven deals' : ''}.</div></td></tr>`;
+    $('#d-count').textContent = `${state.total.toLocaleString('en-GB')} deal${state.total === 1 ? '' : 's'}`;
+    $('#d-note').textContent = salesDays() ? `Sales counted over ${salesSpan()}` : 'Sales are still being counted: deals compare with what is asked';
+    $('#d-more').hidden = state.rows.length >= state.total;
+    const body = $('#deals tbody');
+    body.classList.remove('fade-in'); void body.offsetWidth; body.classList.add('fade-in');
+  }
+  $('#deals-form').addEventListener('change', () => load());
+  $('#deals-form').addEventListener('submit', e => { e.preventDefault(); load(); });
+  $('#d-more').addEventListener('click', () => load(true));
+  $('#deals tbody').addEventListener('click', e => {
+    const row = e.target.closest('tr[data-href]');
+    if (row && !e.target.closest('a, button')) location.href = row.dataset.href;
+  });
+  $('#deals tbody').innerHTML = Array.from({length: 6}, () => '<tr class="skeleton" aria-hidden="true"><td colspan="6"><span class="sk" style="width:60%"></span></td></tr>').join('');
+  load();
+}
+
+// =====================================================================================================================
+// Market movers: rising, falling, running low (/ah/api/movers)
+// =====================================================================================================================
+function initMovers() {
+  const url = new URLSearchParams(location.search);
+  let kind = url.get('kind') === 'item' ? 'item' : 'commodity';
+  const LISTS = [['up', 'Rising', 'Prices up most since about a day ago'], ['down', 'Falling', 'Prices down most'],
+                 ['low', 'Running low', 'Far less on sale than a day ago']];
+  function tools() {
+    $('#m-kind').innerHTML = `<div class="seg" role="group" aria-label="What to show">
+      ${[['commodity', 'Commodities'], ['item', 'Gear, pets & more']].map(([k, t]) =>
+        `<button type="button" data-kind="${k}" aria-pressed="${kind === k}">${t}</button>`).join('')}</div>`;
+  }
+  async function load() {
+    tools();
+    $('#movers').innerHTML = LISTS.map(([, title]) => `<section class="card mover-list"><h3>${title}</h3>
+      ${Array.from({length: 5}, () => '<div class="skeleton-line"><span class="sk"></span></div>').join('')}</section>`).join('');
+    let data = null;
+    try { const r = await fetch('/ah/api/movers?kind=' + kind); data = r.ok ? await r.json() : null; } catch {}
+    if (!data) { $('#movers').innerHTML = '<div class="empty">Could not load the movers. Try again in a moment.</div>'; return; }
+    const hours = Object.values(data).flat().map(r => r.hours);
+    $('#movers').innerHTML = LISTS.map(([key, title, sub]) => `<section class="card mover-list fade-in">
+      <div class="card-head"><div><h3>${title}</h3><p>${sub}</p></div></div>
+      ${data[key].length ? `<ol class="movers-rows">${data[key].map(m => {
+        const up = key === 'up', low = key === 'low';
+        const change = low ? m.supply_change : m.change;
+        const arrow = change > 0 ? '▲' : '▼';
+        return `<li><a href="/ah/item/${m.id}" class="mover">
+          ${icon(m, '', `${m.id}|`, false)}
+          <span class="mover-name"><span class="qtext q-${qkey(m.q)}">${esc(m.name)}${rankPill(m.rank)}</span>
+            <small>${low ? `${m.supply_was.toLocaleString('en-GB')} → ${m.supply_now.toLocaleString('en-GB')} on sale` : `${gold(m.was)} → ${gold(m.now)}`}${salesDays() && m.sold_7d ? ` · ${perDay(m.sold_7d)} sold/day` : ''}</small></span>
+          ${spark(m.line)}
+          <span class="mover-change ${(up || (low ? m.change > 0 : false)) ? 'rise' : low ? 'low' : 'fall'}">${arrow} ${Math.abs(Math.round(change * 100)).toLocaleString('en-GB')}%</span>
+        </a></li>`;
+      }).join('')}</ol>` : '<div class="empty">Nothing here yet: prices need about a day of history to compare.</div>'}
+    </section>`).join('') + (hours.length ? `<p class="movers-foot faint">Compared with about ${Math.round(hours.sort((a, b) => a - b)[Math.floor(hours.length / 2)])} hours ago. Lines show the last 2 days.</p>` : '');
+  }
+  $('#m-kind').addEventListener('click', e => {
+    const b = e.target.closest('button[data-kind]');
+    if (!b || b.dataset.kind === kind) return;
+    kind = b.dataset.kind;
+    history.replaceState(null, '', '/ah/movers' + (kind === 'item' ? '?kind=item' : ''));
+    load();
+  });
+  load();
+}
+
+// =====================================================================================================================
+// Crafting: every recipe's reagent cost against what it makes sells for (/ah/api/crafting)
+// =====================================================================================================================
+function initCrafting() {
+  const els = {form: $('#cr-form'), prof: $('#cr-prof'), exp: $('#cr-exp'), sort: $('#cr-sort'), sells: $('#cr-sells'),
+               profit: $('#cr-profit')};
+  const MODES = [['basic', 'Rank 1 reagents'], ['top', 'Best rank reagents']];
+  const url = new URLSearchParams(location.search);
+  const state = {rows: [], total: 0, skipped: 0, mode: url.get('mode') === 'top' ? 'top' : 'basic', open: new Set(), ready: false};
+  els.sort.innerHTML = [['profit', 'Most profit per craft'], ['margin', 'Best margin'], ['sold', 'Sells the most']]
+    .map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  els.sort.value = url.get('sort') || 'profit';
+  els.sells.checked = url.get('sells') !== '0' && salesDays() > 0;
+  els.profit.checked = url.get('profit') === '1';
+  const modeTools = () => {
+    $('#cr-mode').innerHTML = MODES.map(([k, t]) => `<button type="button" data-mode="${k}" aria-pressed="${state.mode === k}">${t}</button>`).join('');
+  };
+  modeTools();
+  let ticket = 0;
+
+  async function load(append = false) {
+    const p = new URLSearchParams({mode: state.mode, sort: els.sort.value});
+    if (state.ready) {
+      if (els.prof.value) p.set('prof', els.prof.value);
+      p.set('tier', els.exp.value);
+    } else {
+      if (url.get('prof')) p.set('prof', url.get('prof'));
+      if (url.get('tier')) p.set('tier', url.get('tier'));
+    }
+    if (els.sells.checked) p.set('sells', '1');
+    if (els.profit.checked) p.set('profit', '1');
+    p.set('offset', append ? state.rows.length : 0);
+    const t = ++ticket;
+    $('#crafts').classList.add('loading');
+    let data = null;
+    try { const r = await fetch('/ah/api/crafting?' + p); data = r.ok ? await r.json() : null; } catch {}
+    if (t !== ticket) return;
+    $('#crafts').classList.remove('loading');
+    if (!data) { $('#cr-count').textContent = 'Could not load the recipes. Try again in a moment.'; return; }
+    if (!state.ready) {
+      els.prof.innerHTML = '<option value="">All professions</option>' + data.professions.map(([id, name]) => `<option value="${id}">${esc(name)}</option>`).join('');
+      els.prof.value = url.get('prof') || '';
+      els.exp.innerHTML = '<option value="0">All expansions</option>' + data.tiers.map(([id, name]) => `<option value="${id}">${esc(name)}</option>`).join('');
+      els.exp.value = String(data.tier || 0);
+      state.ready = true;
+    }
+    const keep = new URLSearchParams(p);
+    keep.delete('offset');
+    if (!els.sells.checked) keep.set('sells', '0');
+    history.replaceState(null, '', '/ah/crafting?' + keep);
+    state.rows = append ? state.rows.concat(data.rows) : data.rows;
+    state.total = data.total;
+    state.skipped = data.skipped;
+    if (!append) state.open.clear();
+    render();
+  }
+
+  const reagentList = r => `<ul class="reagents">${r.reagents.map(g => `<li>
+      ${tipIcon(g, `${g.id}|`)}<a href="/ah/item/${g.id}" class="qtext q-${qkey(g.q)}">${esc(g.name)}</a>${rankPill(g.rank)}
+      <span class="faint">× ${g.qty.toLocaleString('en-GB')}</span><span class="reagent-cost">${coins(g.price * g.qty)}</span></li>`).join('')}
+      <li class="reagents-total"><span>Reagents for one craft</span><span class="reagent-cost">${coins(r.cost)}</span></li>
+      <li class="reagents-total"><span>${r.per > 1 ? `${r.per} made, ` : ''}sold at ${coins(r.sell)}${r.per > 1 ? ' each' : ''}, after the 5% cut</span>
+        <span class="reagent-cost">${coins(r.sell * r.per * AH_CUT)}</span></li></ul>`;
+
+  function render() {
+    const sales = salesDays() > 0;
+    $('#crafts thead').innerHTML = `<tr><th class="plain">Recipe</th><th class="plain r">Reagents</th><th class="plain r" data-col="sell">Sells for</th>
+      <th class="plain r">Profit</th><th class="plain r" data-col="margin">Margin</th>${sales ? '<th class="plain r" data-col="sold">Sold/day</th>' : ''}</tr>`;
+    const cols = sales ? 6 : 5;
+    $('#crafts tbody').innerHTML = state.rows.map(r => {
+      const open = state.open.has(r.recipe);
+      const margin = r.cost ? r.profit / r.cost : 0;
+      return `<tr class="link craft-row${open ? ' open' : ''}" data-recipe="${r.recipe}" tabindex="0" aria-expanded="${open}">
+        <td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>${rankPill(r.rank)}
+          <div class="item-sub">${esc(r.prof)}${r.per > 1 ? ` · makes ${r.per}` : ''} · <span class="craft-toggle">${open ? 'Hide' : 'Show'} reagents</span></div></div></div></td>
+        <td class="r">${coins(r.cost)}</td>
+        <td class="r" data-col="sell">${coins(r.sell * r.per)}${r.per > 1 ? `<span class="realm-tag">${r.per} × ${gold(r.sell)}</span>` : ''}${r.asked ? '<span class="realm-tag">asked, not seen selling</span>' : ''}</td>
+        <td class="r"><span class="${r.profit > 0 ? 'gain-text' : 'loss-text'}">${r.profit > 0 ? '+' : '−'}${coins(Math.abs(r.profit))}</span></td>
+        <td class="r num" data-col="margin">${r.cost ? `<span class="${margin > 0 ? 'gain-text' : 'loss-text'}">${pct(margin)}</span>` : ''}</td>
+        ${sales ? `<td class="r num" data-col="sold">${r.sold_7d ? perDay(r.sold_7d) : '<span class="faint">–</span>'}</td>` : ''}</tr>
+        ${open ? `<tr class="craft-detail"><td colspan="${cols}">${reagentList(r)}</td></tr>` : ''}`;
+    }).join('') || `<tr><td colspan="${cols}"><div class="empty">No recipes match these filters${els.sells.checked || els.profit.checked ? '. Try without "Only what sells" or "Only profitable"' : ''}.</div></td></tr>`;
+    $('#cr-count').textContent = `${state.total.toLocaleString('en-GB')} recipe${state.total === 1 ? '' : 's'}`;
+    $('#cr-note').textContent = state.skipped ? `${state.skipped.toLocaleString('en-GB')} more need a reagent that isn't on the auction house (bought from a vendor, or soulbound)` : '';
+    $('#cr-more').hidden = state.rows.length >= state.total;
+    const body = $('#crafts tbody');
+    body.classList.remove('fade-in'); void body.offsetWidth; body.classList.add('fade-in');
+  }
+
+  function toggle(row) {
+    const id = +row.dataset.recipe;
+    if (state.open.has(id)) state.open.delete(id); else state.open.add(id);
+    render();
+  }
+  els.form.addEventListener('change', () => load());
+  $('#cr-mode').addEventListener('click', e => {
+    const b = e.target.closest('button[data-mode]');
+    if (!b || b.dataset.mode === state.mode) return;
+    state.mode = b.dataset.mode;
+    modeTools();
+    load();
+  });
+  $('#cr-more').addEventListener('click', () => load(true));
+  $('#crafts tbody').addEventListener('click', e => {
+    const row = e.target.closest('tr.craft-row');
+    if (row && !e.target.closest('a, button, [data-tt]')) toggle(row);
+  });
+  $('#crafts tbody').addEventListener('keydown', e => {
+    const row = e.target.closest('tr.craft-row');
+    if (row && e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(row); }
+  });
+  $('#crafts tbody').innerHTML = Array.from({length: 6}, () => '<tr class="skeleton" aria-hidden="true"><td colspan="6"><span class="sk" style="width:60%"></span></td></tr>').join('');
+  load();
+}
+
+// =====================================================================================================================
+// Collection: a character's missing mounts, pets and toys that are on sale (/ah/api/collection)
+// =====================================================================================================================
+function initCollection() {
+  const KINDS = [['all', 'Everything'], ['mount', 'Mounts'], ['pet', 'Battle pets'], ['toy', 'Toys']];
+  const KIND_NAME = {mount: 'Mount', pet: 'Battle pet', toy: 'Toy'};
+  const COLL_PAGE = 100;
+  const els = {form: $('#c-form'), name: $('#c-name'), realm: $('#c-realm'), go: $('#c-go'), status: $('#c-status'),
+               result: $('#c-result'), here: $('#c-here'), sort: $('#c-sort')};
+  // every realm by name, with the slug the armory knows it by
+  const realms = [];
+  for (const [cr, g] of Object.entries(realmGroups)) g.names.forEach((n, i) => { if (g.slugs[i]) realms.push({name: n, slug: g.slugs[i], cr: +cr}); });
+  realms.sort((a, b) => a.name.localeCompare(b.name));
+  els.realm.innerHTML = '<option value="">Pick a realm</option>' + realms.map(r => `<option value="${esc(r.slug)}">${esc(r.name)}</option>`).join('');
+  els.sort.innerHTML = [['here', 'Cheapest on their realm'], ['lo', 'Cheapest in EU'], ['sold', 'Sells the most'], ['name', 'Name']]
+    .map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  const url = new URLSearchParams(location.search);
+  const mine = realms.find(r => r.cr === myRealm && r.name === myRealmName());
+  els.name.value = url.get('name') || store.get('ah-coll-name') || '';
+  els.realm.value = url.get('realm') || store.get('ah-coll-realm') || (mine ? mine.slug : '');
+
+  const state = {data: null, kind: 'all', shown: COLL_PAGE, who: '', realm: null};
+  let ticket = 0;
+
+  async function lookup() {
+    const name = els.name.value.trim(), slug = els.realm.value;
+    if (!name || !slug) { els.status.innerHTML = '<p class="coll-msg">Enter a character name and pick their realm.</p>'; return; }
+    store.set('ah-coll-name', name);
+    store.set('ah-coll-realm', slug);
+    history.replaceState(null, '', `/ah/collection?${new URLSearchParams({realm: slug, name})}`);
+    const t = ++ticket;
+    state.who = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+    state.realm = realms.find(r => r.slug === slug);
+    els.go.disabled = true;
+    els.status.innerHTML = `<p class="coll-msg">Looking up ${esc(state.who)}'s collection…</p>`;
+    els.result.hidden = false;
+    $('#c-summary').innerHTML = Array.from({length: 4}, () => '<div class="kpi"><span class="sk" style="width:50%"></span><span class="sk" style="width:70%;margin-top:10px"></span></div>').join('');
+    $('#coll tbody').innerHTML = Array.from({length: 6}, () => '<tr class="skeleton" aria-hidden="true"><td colspan="5"><span class="sk" style="width:60%"></span></td></tr>').join('');
+    let data = null, error = null;
+    try {
+      const r = await fetch('/ah/api/collection?' + new URLSearchParams({realm: slug, name}));
+      data = await r.json();
+      if (!r.ok) { error = data.error; data = null; }
+    } catch { error = 'Could not reach the server. Try again in a moment.'; }
+    if (t !== ticket) return;
+    els.go.disabled = false;
+    if (!data) {
+      els.result.hidden = true;
+      els.status.innerHTML = `<p class="coll-msg bad">${esc(error || 'Something went wrong. Try again in a moment.')}</p>`;
+      return;
+    }
+    els.status.innerHTML = '';
+    state.data = data;
+    state.shown = COLL_PAGE;
+    summary();
+    render();
+  }
+
+  const realmName = () => (state.realm ? state.realm.name : 'their realm');
+  function summary() {
+    const {rows, owned} = state.data;
+    const card = (kind, title) => {
+      const missing = rows.filter(r => r.kind === kind);
+      const here = missing.filter(r => r.here).length;
+      return `<button type="button" class="kpi kpi-btn${state.kind === kind ? ' active' : ''}" data-kind="${kind}">
+        <div class="eyebrow">${title}</div><div class="val">${missing.length.toLocaleString('en-GB')} <small>missing for sale</small></div>
+        <div class="sub">${owned[kind].toLocaleString('en-GB')} collected · ${here.toLocaleString('en-GB')} on ${esc(realmName())}</div></button>`;
+    };
+    const here = rows.filter(r => r.here);
+    const cheapest = here.reduce((a, r) => (!a || r.here < a.here ? r : a), null);
+    $('#c-summary').innerHTML = card('mount', 'Mounts') + card('pet', 'Battle pets') + card('toy', 'Toys')
+      + `<div class="kpi accent"><div class="eyebrow">On ${esc(realmName())}</div>
+          <div class="val">${here.length.toLocaleString('en-GB')} <small>you can buy there</small></div>
+          <div class="sub">${cheapest ? `cheapest: ${esc(cheapest.name)}, ${gold(cheapest.here)}` : 'nothing missing is listed there right now'}</div></div>`;
+  }
+
+  function sorted() {
+    let rows = state.data.rows;
+    if (state.kind !== 'all') rows = rows.filter(r => r.kind === state.kind);
+    if (els.here.checked) rows = rows.filter(r => r.here);
+    const by = els.sort.value;
+    const cmp = {
+      here: (a, b) => (a.here ? 0 : 1) - (b.here ? 0 : 1) || (a.here || a.lo) - (b.here || b.lo),
+      lo: (a, b) => a.lo - b.lo,
+      sold: (a, b) => b.sold_7d - a.sold_7d || a.lo - b.lo,
+      name: (a, b) => a.name.localeCompare(b.name),
+    }[by];
+    return rows.slice().sort(cmp);
+  }
+
+  function render() {
+    $('#c-kind').innerHTML = KINDS.map(([k, t]) => `<button type="button" data-kind="${k}" aria-pressed="${state.kind === k}">${t}</button>`).join('');
+    document.querySelectorAll('#c-summary .kpi-btn').forEach(b => b.classList.toggle('active', b.dataset.kind === state.kind));
+    const rows = sorted();
+    const sales = salesDays() > 0;
+    $('#coll thead').innerHTML = `<tr><th class="plain">Item</th><th class="plain r"><span class="th-long">On ${esc(realmName())}</span><span class="th-short">Their realm</span></th>
+      <th class="plain r"><span class="th-long">Cheapest in EU</span><span class="th-short">EU low</span></th><th class="plain r" data-col="med">EU median</th>${sales ? '<th class="plain r" data-col="sold">Sold/day</th>' : ''}</tr>`;
+    $('#coll tbody').innerHTML = rows.slice(0, state.shown).map(r => `<tr class="link" data-href="/ah/item/${r.id}">
+        <td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>
+          <div class="item-sub">${KIND_NAME[r.kind]}<span class="coll-spread"> · listed on ${r.realms} realm group${r.realms === 1 ? '' : 's'}</span></div></div></div></td>
+        <td class="r">${r.here ? `${coins(r.here)}<span class="realm-tag">${r.here_n} listed</span>` : '<span class="faint">Not listed</span>'}</td>
+        <td class="r">${coins(r.lo)}<span class="realm-tag coll-where">${esc(groupName(r.lo_cr))}${realmsHint(r.lo_cr, `+${groupMore(r.lo_cr)}`)}</span></td>
+        <td class="r" data-col="med">${coins(r.med)}</td>
+        ${sales ? `<td class="r num" data-col="sold">${r.sold_7d ? perDay(r.sold_7d) : '<span class="faint">–</span>'}</td>` : ''}</tr>`).join('')
+      || `<tr><td colspan="5"><div class="empty">${state.data.rows.length
+        ? `Nothing here with these filters${els.here.checked ? `: try including items not listed on ${esc(realmName())}` : ''}.`
+        : `${esc(state.who)} has everything we can see for sale. Impressive.`}</div></td></tr>`;
+    $('#c-count').textContent = `${rows.length.toLocaleString('en-GB')} item${rows.length === 1 ? '' : 's'} ${state.who} doesn't have`;
+    $('#c-note').textContent = 'Prices are the cheapest buyout; battle pets of any level and breed';
+    $('#c-more').hidden = rows.length <= state.shown;
+    const body = $('#coll tbody');
+    body.classList.remove('fade-in'); void body.offsetWidth; body.classList.add('fade-in');
+  }
+
+  function setKind(kind) {
+    if (!state.data || kind === state.kind) return;
+    state.kind = kind;
+    state.shown = COLL_PAGE;
+    render();
+  }
+  els.form.addEventListener('submit', e => { e.preventDefault(); lookup(); });
+  $('#c-kind').addEventListener('click', e => { const b = e.target.closest('button[data-kind]'); if (b) setKind(b.dataset.kind); });
+  $('#c-summary').addEventListener('click', e => {
+    const b = e.target.closest('button[data-kind]');
+    if (b) setKind(state.kind === b.dataset.kind ? 'all' : b.dataset.kind);
+  });
+  els.here.addEventListener('change', () => { state.shown = COLL_PAGE; render(); });
+  els.sort.addEventListener('change', () => { state.shown = COLL_PAGE; render(); });
+  $('#c-more').addEventListener('click', () => { state.shown += COLL_PAGE; render(); });
+  $('#coll tbody').addEventListener('click', e => {
+    const row = e.target.closest('tr[data-href]');
+    if (row && !e.target.closest('a, button')) location.href = row.dataset.href;
+  });
+  if (url.get('name') && url.get('realm')) lookup();
+  else els.name.focus();
 }
 
 // =====================================================================================================================
@@ -406,6 +816,8 @@ function initItem() {
   let rollFilter = {sec: url.get('sec') || '', ter: url.get('ter') || '', sock: url.get('sock') || '', ilvl: url.get('ilvl') ? +url.get('ilvl') : null};
   let tableSort = {key: 'lo', dir: -1};
   let listRealm = null, listRealmName = null;  // the "Listings on" menu: a realm group, and the realm picked in it
+  let listAll = false;  // all of a realm's listings, or the cheapest LIST_FIRST
+  const LIST_FIRST = 12;
   // a battle pet's "roll" is its breed, level and quality; an item's its stats and item level
   const pet = D.kind === 'pet';
   const L = pet
@@ -512,13 +924,37 @@ function initItem() {
     return PAIRS.filter(p => secs.includes(p)).concat(secs.filter(s => s && !PAIRS.includes(s)).sort(), secs.includes('') ? [''] : []);
   };
 
-  function rankList(rows, color, scaleMax) {
+  // estimated sales of each roll on each realm over the last 7 days: [roll, realm, sold, revenue]
+  const sales = (D.sales || []).map(([vi, cr, n, rev]) => ({v: it.variants[vi], cr, n, rev})).filter(s => s.v);
+  function salesFor(f) {
+    const byCr = {};
+    let n = 0, rev = 0;
+    for (const s of sales) {
+      if (!matches(s.v, f)) continue;
+      n += s.n; rev += s.rev;
+      const c = byCr[s.cr] || (byCr[s.cr] = {n: 0, rev: 0});
+      c.n += s.n; c.rev += s.rev;
+    }
+    return {n, rev, byCr};
+  }
+  function salesStrip(SS) {
+    if (!salesDays()) return `<section class="sales-strip"><p class="muted">Sales estimates start once two snapshots in a row have been compared - within a couple of hours of the first collection.</p></section>`;
+    const mineSold = myRealm ? (SS.byCr[myRealm] || {n: 0}).n : null;
+    return `<section class="sales-strip" aria-label="Estimated sales">
+      <div><span class="eyebrow">Sold per day in EU</span><b class="num">${perDay(SS.n)}</b></div>
+      <div><span class="eyebrow">Average sale price</span><b>${SS.n ? coins(SS.rev / SS.n) : '<span class="faint">no sales seen</span>'}</b></div>
+      ${myRealm ? `<div><span class="eyebrow">Sold per day on ${esc(groupName(myRealm))}</span><b class="num">${perDay(mineSold)}</b></div>` : ''}
+      <p class="faint">Estimated from listings that disappeared while they still had hours to run, over ${salesSpan()}${it.hasVariants ? ', for the rolls you picked' : ''}. A few of those were cancelled rather than bought.</p>
+    </section>`;
+  }
+
+  function rankList(rows, color, scaleMax, byCr = {}) {
     return `<ol class="rank">${rows.map((r, i) => `<li class="${r.cr === myRealm ? 'you' : ''}">
       <span class="pos">${i + 1}</span>
       ${tipIcon(it, r.v.tt, `<b>${esc(groupName(r.cr))}</b> · cheapest here: ${gold(r.lo)}`)}
       <span class="name">${realmLabel(r.cr)}${r.cr === myRealm ? '<span class="you-tag">YOU</span>' : ''}${rollLabel(r.v)}</span>
       <span class="bar-track"><span class="bar" style="--bar:${color};width:${Math.max(1, r.lo / scaleMax * 100)}%"></span></span>
-      <span class="price">${coins(r.lo)}<small>${r.n} listing${r.n === 1 ? '' : 's'}</small></span></li>`).join('')}</ol>`;
+      <span class="price">${coins(r.lo)}<small>${r.n} listing${r.n === 1 ? '' : 's'}${salesDays() && byCr[r.cr] ? ` · ${perDay(byCr[r.cr].n)} sold/day` : ''}</small></span></li>`).join('')}</ol>`;
   }
 
   // The roll picker: one ranked list - each secondary-stat pair, cheapest first - that is also the selector.
@@ -592,8 +1028,10 @@ function initItem() {
     const shared = names.filter(n => n !== name);
     const here = listings.filter(l => l[0] === cr).map(([, vi, price, tl]) => ({v: it.variants[vi], price, tl}))
       .filter(l => l.v).sort((a, b) => a.price - b.price);
-    const shown = here.filter(l => matches(l.v, f));
-    const hidden = here.length - shown.length;
+    const matching = here.filter(l => matches(l.v, f));
+    const shown = listAll ? matching : matching.slice(0, LIST_FIRST);
+    const more = matching.length - shown.length;
+    const hidden = here.length - matching.length;
     const cache = new Map();
     const rollStats = v => { if (!cache.has(v)) cache.set(v, variantStats(v)); return cache.get(v); };
     const rows = shown.map(l => {
@@ -606,7 +1044,7 @@ function initItem() {
         <td><span class="with-icon">${tipIcon(it, l.v.tt, `<b>${esc(name)}</b> · ${gold(l.price)}`)}${it.hasVariants ? rollLabel(l.v) : `<span class="roll">Item level ${l.v.ilvl}</span>`}</span></td>
         <td class="r">${coins(l.price)}${tag}</td>
         <td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${vs ? `${pct(d)}<span class="realm-tag">median ${gold(vs.med)} · ${vs.n} realms</span>` : '–'}</td>
-        <td class="muted">${TIME_LEFT[l.tl] || ''}</td></tr>`;
+        <td class="muted col-time">${TIME_LEFT[l.tl] || ''}</td></tr>`;
     }).join('');
     const options = realmList.map(r => `<option value="${r.cr}|${esc(r.name)}" ${r.cr === cr && r.name === name ? 'selected' : ''}>${esc(r.name)}${
       r.cr === myRealm && r.name === myRealmName() ? ' (your realm)' : ''}</option>`).join('');
@@ -614,8 +1052,10 @@ function initItem() {
       <div class="card-head"><div><h3 id="list-title">Listings on ${esc(name)}</h3>
         <p>Every ${esc(it.name)} on ${esc(name)}'s auction house${shared.length ? ` (shared with ${esc(shared.join(', '))})` : ''}, cheapest first. Each price is compared with the same ${it.hasVariants ? L.what : 'item'} across EU.</p></div>
         <label class="inline-field"><span>Realm</span><select class="select" id="list-realm">${options}</select></label></div>
-      ${shown.length ? `<div class="table-wrap"><table><thead><tr><th class="plain">${it.hasVariants ? L.roll : 'Item'}</th><th class="plain r">Price</th><th class="plain r">vs ${it.hasVariants ? `same ${L.word}` : 'the rest of'} EU</th><th class="plain">Time left</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : `<div class="empty">${here.length ? 'No listings here match the roll you picked.'
+      ${shown.length ? `<div class="table-wrap"><table><thead><tr><th class="plain">${it.hasVariants ? L.roll : 'Item'}</th><th class="plain r">Price</th><th class="plain r">vs ${it.hasVariants ? `same ${L.word}` : 'the rest of'} EU</th><th class="plain col-time">Time left</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+        ${more ? `<div class="more"><button type="button" class="btn-ghost" id="list-more">Show all ${matching.length.toLocaleString('en-GB')} listings</button></div>` : ''}`
+        : `<div class="empty">${here.length ? 'No listings here match the roll you picked.'
           : `Nobody on ${esc(name)} has ${esc(it.name)} listed right now.`}</div>`}
       ${hidden ? `<div class="roll-foot"><span>${hidden} more listing${hidden === 1 ? '' : 's'} here with other rolls.</span>
         <button type="button" class="link-btn" id="list-all">Show every roll</button></div>` : ''}
@@ -636,7 +1076,7 @@ function initItem() {
         ${icon(it, 'lg', heroTip)}
         <div style="min-width:0">
           <div class="eyebrow">${esc(it.cls)} · ${esc(it.sub)}</div>
-          <h2>${esc(it.name)}</h2>
+          <h2>${esc(it.name)}${rankPill(it.rank)}</h2>
           <ul class="meta">
             <li class="qtext">${pet ? 'Battle Pet' : QNAME[it.q] || ''}</li>
             ${it.slot ? `<li>${esc(it.slot)}</li>` : ''}
@@ -659,6 +1099,7 @@ function initItem() {
       return;
     }
     const sell = S.sane.slice().reverse().slice(0, 10), buy = S.rows.slice(0, 10);
+    const SS = salesFor(f);
     const scaleMax = Math.max(S.hi.lo, buy[buy.length - 1].lo);
     const walls = S.rows.filter(r => r.flag === 'wall').length, highs = S.rows.filter(r => r.flag === 'high').length;
     const flagNote = S.flagged ? `Leaves out ${[walls && `${walls} price-wall listing${walls === 1 ? '' : 's'}`, highs && `${highs} far above the typical price`].filter(Boolean).join(' and ')}.` : '';
@@ -679,6 +1120,7 @@ function initItem() {
           : `<div class="kpi ${myRealm ? 'accent' : ''}"><div class="eyebrow">Realms listing it</div><div class="val num">${S.n} <span class="faint" style="font-size:15px">of ${D.snapshot.groups}</span></div>
                <div class="sub">${myRealm ? 'Not listed on your realm: you would be the only seller' : `${S.rows.reduce((a, r) => a + r.n, 0)} listings in total`}</div></div>`}
       </div>
+      ${salesStrip(SS)}
 
       ${flip && flip.s.gain > 0 ? `<div class="flip" role="note">
         <span class="with-icon">${tipIcon(it, flip.v.tt)}${it.hasVariants ? rollLabel(flip.v) : ''}</span>
@@ -692,9 +1134,9 @@ function initItem() {
 
       <div class="two">
         <section class="card"><div class="card-head"><div><h3>Best realms to sell</h3><p>Highest lowest-listing right now. Undercut it and you're the cheapest there. ${flagNote}</p>${mixHint}</div></div>
-          ${rankList(sell, 'var(--gold-mark)', scaleMax)}</section>
+          ${rankList(sell, 'var(--gold-mark)', scaleMax, SS.byCr)}</section>
         <section class="card"><div class="card-head"><div><h3>Cheapest realms to buy</h3><p>Lowest listings in EU, on the same scale as the list beside it.</p></div></div>
-          ${rankList(buy, 'var(--arcane-mark)', scaleMax)}</section>
+          ${rankList(buy, 'var(--arcane-mark)', scaleMax, SS.byCr)}</section>
       </div>
 
       <div class="stack">
@@ -762,7 +1204,9 @@ function initItem() {
       };
     }
     const lr = $('#list-realm');
-    if (lr) lr.onchange = () => { const [cr, name] = lr.value.split('|'); listRealm = +cr; listRealmName = name; rerender('#list-realm'); };
+    if (lr) lr.onchange = () => { const [cr, name] = lr.value.split('|'); listRealm = +cr; listRealmName = name; listAll = false; rerender('#list-realm'); };
+    const lm = $('#list-more');
+    if (lm) lm.onclick = () => { listAll = true; rerender(); };
     const la = $('#list-all');
     if (la) la.onclick = e => { rollFilter = {sec: '', ter: '', sock: '', ilvl: null}; rerender(e.detail === 0 ? '#list-realm' : null); };
     const clear2 = $('#roll-clear2');
@@ -779,10 +1223,11 @@ function initItem() {
 
   function renderRealmTable(S) {
     const f = ($('#realm-filter').value || '').trim().toLowerCase();
+    const sold = salesFor(rollFilter).byCr;
     const cols = [['name', 'Realm group'], ['lang', 'Language'], ['pop', 'Population'], ...(it.hasVariants ? [['roll', `Cheapest ${L.word}`]] : []),
-                  ['lo', 'Lowest', 'r'], ['n', 'Listings', 'r'], ['vs', 'vs EU median', 'r']];
+                  ['lo', 'Lowest', 'r'], ['n', 'Listings', 'r'], ...(salesDays() ? [['sold', 'Sold/day', 'r']] : []), ['vs', 'vs EU median', 'r']];
     const v = (r, k) => ({name: groupName(r.cr), lang: (realmGroups[r.cr] || {}).locale || '', pop: (realmGroups[r.cr] || {}).pop || '',
-                          roll: (r.v.sec || '') + r.v.ilvl, lo: r.lo, n: r.n, vs: r.lo / S.med}[k]);
+                          roll: (r.v.sec || '') + r.v.ilvl, lo: r.lo, n: r.n, vs: r.lo / S.med, sold: (sold[r.cr] || {n: 0}).n}[k]);
     const rows = S.rows.filter(r => !f || ((realmGroups[r.cr] || {}).names || []).some(n => n.toLowerCase().includes(f)))
       .sort((a, b) => { const x = v(a, tableSort.key), y = v(b, tableSort.key); return (typeof x === 'string' ? x.localeCompare(y) : x - y) * tableSort.dir; });
     $('#realm-table thead').innerHTML = '<tr>' + cols.map(([k, l, c]) => `<th class="${c || ''}" ${k === tableSort.key ? `aria-sort="${tableSort.dir > 0 ? 'ascending' : 'descending'}"` : ''}>
@@ -798,6 +1243,7 @@ function initItem() {
         <td class="muted">${esc(POP[g.pop] || g.pop || '–')}</td>
         ${it.hasVariants ? `<td><span class="with-icon">${tipIcon(it, r.v.tt, `<b>${esc(groupName(r.cr))}</b> · ${gold(r.lo)}`)}${rollLabel(r.v)}</span></td>` : ''}
         <td class="r">${coins(r.lo)}</td><td class="r num">${r.n}</td>
+        ${salesDays() ? `<td class="r num${sold[r.cr] ? '' : ' faint'}">${perDay((sold[r.cr] || {n: 0}).n)}</td>` : ''}
         <td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${pct(d)}</td></tr>`;
     }).join('') || `<tr><td colspan="${cols.length}"><div class="empty">No realm group matches “${esc(f)}”.</div></td></tr>`;
     $('#realm-count').textContent = `${rows.length} of ${S.n} shown`;
@@ -932,7 +1378,7 @@ function initItem() {
         ${icon(it, 'lg', `${it.id}|`)}
         <div style="min-width:0">
           <div class="eyebrow">${esc(it.cls)} · ${esc(it.sub)}</div>
-          <h2>${esc(it.name)}</h2>
+          <h2>${esc(it.name)}${rankPill(it.rank)}</h2>
           <ul class="meta">
             <li class="qtext">${QNAME[it.q] || ''}</li>
             ${it.ilvl > 1 ? `<li>Item level ${it.ilvl}</li>` : ''}
@@ -948,6 +1394,7 @@ function initItem() {
         <div class="kpi"><div class="eyebrow">${it.vendor ? 'Vendor buys for' : 'Price levels'}</div><div class="val">${it.vendor ? coins(it.vendor) : `<span class="num">${c.levels.toLocaleString('en-GB')}</span>`}</div>
           <div class="sub">${it.vendor ? (c.lo < it.vendor ? 'More than the cheapest listing!' : 'per unit') : 'different prices listed'}</div></div>
       </div>
+      ${commoditySales(c)}
       <div class="two">
         <section class="card"><div class="card-head"><div><h3>Cost to buy</h3>
           <p>What it costs to buy from the cheapest listings up, the way the auction house fills a purchase.</p></div></div>
@@ -994,6 +1441,18 @@ function initItem() {
     $('#item-view').querySelectorAll('.buy-quick').forEach(b => { b.onclick = () => { input.value = b.dataset.n; update(); }; });
     update();
     drawHistory({line: 'Market price', band: '5% – 30% into the supply'});
+  }
+
+  function commoditySales(c) {
+    if (!salesDays()) return `<section class="sales-strip"><p class="muted">Sales estimates start once two snapshots in a row have been compared - within a couple of hours of the first collection.</p></section>`;
+    const week = (D.sales_daily || []).filter(([day]) => Date.parse(day) > Date.now() - 7 * 864e5);
+    const units = week.reduce((a, d) => a + d[1], 0), revenue = week.reduce((a, d) => a + d[2], 0);
+    return `<section class="sales-strip" aria-label="Estimated sales">
+      <div><span class="eyebrow">Sold per day</span><b class="num">${perDay(c.sold_7d)}</b></div>
+      <div><span class="eyebrow">Average sale price</span><b>${units ? coins(revenue / units) : '<span class="faint">no sales seen</span>'}</b></div>
+      <div><span class="eyebrow">Supply lasts</span><b>${units ? `${(c.quantity / (units / salesDays())).toFixed(1)} days` : '–'}</b></div>
+      <p class="faint">Estimated over ${salesSpan()} from stacks that were bought out, wholly or partly. "Supply lasts" is how long what's on sale would last at that pace.</p>
+    </section>`;
   }
 
   const draw = D.kind === 'commodity' ? renderCommodity : render;

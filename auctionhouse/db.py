@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 HOURLY_DAYS = 14
 REALM_HISTORY_DAYS = 60
+SALES_DAYS = 30
 
 
 def ensure_schema(cursor):
@@ -160,8 +161,94 @@ def ensure_schema(cursor):
             levels INTEGER NOT NULL
         );
 
+        -- estimated sales (sales.py): a day's sales per realm and roll, and per commodity
+        CREATE TABLE IF NOT EXISTS ah_sales (
+            day DATE NOT NULL,
+            cr INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            variant_id INTEGER NOT NULL,
+            sold INTEGER NOT NULL,
+            revenue BIGINT NOT NULL,
+            PRIMARY KEY (day, cr, variant_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ah_sales_item ON ah_sales (item_id, day);
+        CREATE UNLOGGED TABLE IF NOT EXISTS ah_commodity_auctions (
+            auction_id BIGINT PRIMARY KEY,
+            item_id INTEGER NOT NULL,
+            price BIGINT NOT NULL,
+            quantity INTEGER NOT NULL,
+            time_left SMALLINT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ah_commodity_sales (
+            day DATE NOT NULL,
+            item_id INTEGER NOT NULL,
+            sold BIGINT NOT NULL,
+            revenue BIGINT NOT NULL,
+            PRIMARY KEY (day, item_id)
+        );
+
+        -- market movers: each item's price and supply now against about a day ago
+        CREATE TABLE IF NOT EXISTS ah_movers (
+            kind TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            now BIGINT NOT NULL, was BIGINT NOT NULL, change REAL NOT NULL,
+            supply_now BIGINT NOT NULL, supply_was BIGINT NOT NULL, supply_change REAL NOT NULL,
+            hours REAL NOT NULL,
+            PRIMARY KEY (kind, item_id)
+        );
+
+        -- deals: realms where a roll's cheapest listing is far below its usual price - what it sells for once we've
+        -- seen it sell (proven), else the EU median of what's asked
+        CREATE TABLE IF NOT EXISTS ah_deals (
+            cr INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            variant_id INTEGER NOT NULL,
+            price BIGINT NOT NULL,
+            typical BIGINT NOT NULL,
+            realms SMALLINT NOT NULL,
+            profit BIGINT NOT NULL,
+            proven BOOLEAN NOT NULL DEFAULT FALSE,
+            sold_7d INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (cr, variant_id)
+        );
+
+        -- the recipe book (crafting.py): each recipe's output - one item, or one per quality rank, rank 1 first - and
+        -- its reagents, a quality slot (100 + slot) listing its items by rank too
+        CREATE TABLE IF NOT EXISTS ah_recipes (
+            recipe_id INTEGER PRIMARY KEY,
+            spell_id INTEGER NOT NULL,
+            profession INTEGER NOT NULL,
+            tier INTEGER NOT NULL,
+            tier_name TEXT NOT NULL,
+            tier_index SMALLINT NOT NULL,
+            outputs INTEGER[] NOT NULL,
+            per_craft SMALLINT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ah_recipe_reagents (
+            recipe_id INTEGER NOT NULL,
+            slot SMALLINT NOT NULL,
+            items INTEGER[] NOT NULL,
+            qty INTEGER NOT NULL,
+            PRIMARY KEY (recipe_id, slot)
+        );
+
+        -- what a mount, toy or companion item teaches (collectibles.py): its mount, toy or battle pet species id.
+        -- Caged pets aren't here - their item id is -species already
+        CREATE TABLE IF NOT EXISTS ah_collectibles (
+            item_id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            ref_id INTEGER NOT NULL
+        );
+        ALTER TABLE ah_deals ADD COLUMN IF NOT EXISTS proven BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE ah_deals ADD COLUMN IF NOT EXISTS sold_7d INTEGER NOT NULL DEFAULT 0;
+
         -- columns added after the first version
         ALTER TABLE ah_items ADD COLUMN IF NOT EXISTS description TEXT;
+        ALTER TABLE ah_items ADD COLUMN IF NOT EXISTS craft_rank SMALLINT NOT NULL DEFAULT 0;
+        ALTER TABLE ah_listings ADD COLUMN IF NOT EXISTS auction_id BIGINT;
+        ALTER TABLE ah_item_summary ADD COLUMN IF NOT EXISTS sold_7d INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE ah_commodity_summary ADD COLUMN IF NOT EXISTS sold_7d BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE ah_realm_groups ADD COLUMN IF NOT EXISTS slugs TEXT[];
         ALTER TABLE ah_variants ADD COLUMN IF NOT EXISTS bind SMALLINT NOT NULL DEFAULT 0;
         ALTER TABLE ah_item_summary ADD COLUMN IF NOT EXISTS walls_only BOOLEAN NOT NULL DEFAULT FALSE;
     """)
@@ -207,6 +294,8 @@ def set_meta(key, value):
 def _copy_value(v):
     if v is None:
         return '\\N'
+    if isinstance(v, (list, tuple)):  # an integer array
+        return '{' + ','.join(str(int(x)) for x in v) + '}'
     return str(v).replace('\\', '\\\\').replace('\t', '\\t').replace('\n', '\\n').replace('\r', '\\r')
 
 
@@ -226,13 +315,19 @@ def fetch_all(sql, params=()):
         return cur.fetchall()
 
 
+def fetch_all_tuples(sql, params=()):
+    with transaction() as cur:
+        cur.execute(sql, params)
+        return cur.fetchall()
+
+
 def fetch_one(sql, params=()):
     rows = fetch_all(sql, params)
     return rows[0] if rows else None
 
 
 def realm_groups():
-    return fetch_all('SELECT cr, names, locale, population, last_modified, swept_at, listings FROM ah_realm_groups ORDER BY cr')
+    return fetch_all('SELECT cr, names, slugs, locale, population, last_modified, swept_at, listings FROM ah_realm_groups ORDER BY cr')
 
 
 def snapshot():
@@ -241,7 +336,8 @@ def snapshot():
                               coalesce(sum(listings), 0) AS listings,
                               (SELECT count(*) FROM ah_item_summary)
                                 + (SELECT count(*) FROM ah_commodity_summary) AS items,
-                              (SELECT min(ts) FROM ah_item_history) AS history_since
+                              (SELECT min(ts) FROM ah_item_history) AS history_since,
+                              (SELECT updated_at FROM ah_meta WHERE key = 'sales_since') AS sales_since
                        FROM ah_realm_groups""")
     return row or {}
 
@@ -253,3 +349,5 @@ def prune_history():
                         WHERE ts < NOW() - INTERVAL '{HOURLY_DAYS} days'
                           AND EXTRACT(HOUR FROM ts AT TIME ZONE 'UTC') <> 12""")
         cur.execute(f"DELETE FROM ah_realm_history WHERE day < CURRENT_DATE - {REALM_HISTORY_DAYS}")
+        cur.execute(f"DELETE FROM ah_sales WHERE day < CURRENT_DATE - {SALES_DAYS}")
+        cur.execute(f"DELETE FROM ah_commodity_sales WHERE day < CURRENT_DATE - {SALES_DAYS}")

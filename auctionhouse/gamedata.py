@@ -7,6 +7,7 @@ The game's own item tables, from wago.tools (like raidanalysis/gamedata.py), ref
 
 Some items have no icon in these tables; collector.resolve_icons asks Blizzard for the ones on sale.
 """
+import asyncio
 import csv
 import io
 import json
@@ -22,13 +23,23 @@ WAGO = 'https://wago.tools/db2/{table}/csv'
 REFRESH_DAYS = 7
 PET_CLASS = 17  # "Battle Pets": its families come from Blizzard's pet data, not these tables
 META_KEY = 'gamedata'
+FETCH_TRIES = 3  # wago.tools has the odd hiccup (and maintenance windows, which the next run simply tries again)
 
 
 async def _fetch(session, table):
-    async with session.get(WAGO.format(table=table)) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f'wago.tools {table}: HTTP {resp.status}')
-        return await resp.text()
+    for attempt in range(FETCH_TRIES):
+        try:
+            async with session.get(WAGO.format(table=table)) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+                error = f'HTTP {resp.status}'
+                if resp.status < 500 and resp.status != 429:
+                    break
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            error = str(e) or type(e).__name__
+        if attempt + 1 < FETCH_TRIES:
+            await asyncio.sleep(5 * (attempt + 1))
+    raise RuntimeError(f'wago.tools {table}: {error}')
 
 
 def stale():
@@ -47,20 +58,35 @@ def _int(value, default=0):
 
 
 def parse_items(sparse_csv, item_csv):
-    """-> rows for ah_items (without the icon url column)."""
+    """
+    -> rows for ah_items (without the icon url column). A reagent that comes in crafting quality ranks is several
+    items with one name (Mycobloom x3); each gets its rank (1, 2, 3 - by the item table's CraftingQualityID, in
+    order among the items sharing its name), so the pages can tell them apart.
+    """
     base = {}
     for r in csv.DictReader(io.StringIO(item_csv)):
-        base[r['ID']] = (_int(r.get('ClassID'), -1), _int(r.get('SubclassID'), -1), _int(r.get('IconFileDataID')))
+        base[r['ID']] = (_int(r.get('ClassID'), -1), _int(r.get('SubclassID'), -1), _int(r.get('IconFileDataID')),
+                         _int(r.get('CraftingQualityID')))
     rows = []
     for r in csv.DictReader(io.StringIO(sparse_csv)):
         name = (r.get('Display_lang') or '').strip()
         if not name:
             continue
-        cls, sub, icon = base.get(r['ID'], (-1, -1, 0))
-        rows.append((_int(r['ID']), name, _int(r.get('OverallQualityID'), 1), _int(r.get('ItemLevel')),
+        cls, sub, icon, quality_id = base.get(r['ID'], (-1, -1, 0, 0))
+        rows.append([_int(r['ID']), name, _int(r.get('OverallQualityID'), 1), _int(r.get('ItemLevel')),
                      _int(r.get('RequiredLevel')), cls, sub, _int(r.get('InventoryType')), _int(r.get('ExpansionID')),
-                     _int(r.get('SellPrice')), _int(r.get('Bonding')), icon))
-    return rows
+                     _int(r.get('SellPrice')), _int(r.get('Bonding')), icon, quality_id])
+    ranked = {}
+    for row in rows:
+        if row[12]:
+            ranked.setdefault(row[1], []).append(row)
+    for same in ranked.values():
+        for rank, row in enumerate(sorted(same, key=lambda r: (r[12], r[0])), 1):
+            row[12] = rank if len(same) > 1 else 0
+    for row in rows:
+        if row[1] not in ranked:
+            row[12] = 0
+    return [tuple(r) for r in rows]
 
 
 def parse_classes(class_csv, subclass_csv):
@@ -87,17 +113,17 @@ def _store(items, classes, bonus):
         cur.execute('CREATE TEMP TABLE ah_items_new (LIKE ah_items) ON COMMIT DROP')
         db.copy_rows(cur, 'ah_items_new', ('item_id', 'name', 'quality', 'ilvl', 'req_level', 'class_id',
                                            'subclass_id', 'inventory_type', 'expansion', 'vendor', 'binding',
-                                           'icon_file'), items)
+                                           'icon_file', 'craft_rank'), items)
         cur.execute("""INSERT INTO ah_items (item_id, name, quality, ilvl, req_level, class_id, subclass_id,
-                                             inventory_type, expansion, vendor, binding, icon_file)
+                                             inventory_type, expansion, vendor, binding, icon_file, craft_rank)
                        SELECT item_id, name, quality, ilvl, req_level, class_id, subclass_id, inventory_type,
-                              expansion, vendor, binding, icon_file FROM ah_items_new
+                              expansion, vendor, binding, icon_file, craft_rank FROM ah_items_new
                        ON CONFLICT (item_id) DO UPDATE SET
                            name = EXCLUDED.name, quality = EXCLUDED.quality, ilvl = EXCLUDED.ilvl,
                            req_level = EXCLUDED.req_level, class_id = EXCLUDED.class_id,
                            subclass_id = EXCLUDED.subclass_id, inventory_type = EXCLUDED.inventory_type,
                            expansion = EXCLUDED.expansion, vendor = EXCLUDED.vendor, binding = EXCLUDED.binding,
-                           icon_file = EXCLUDED.icon_file""")
+                           icon_file = EXCLUDED.icon_file, craft_rank = EXCLUDED.craft_rank""")
         cur.execute('DELETE FROM ah_item_classes WHERE class_id <> %s', (PET_CLASS,))
         db.copy_rows(cur, 'ah_item_classes', ('class_id', 'subclass_id', 'class_name', 'subclass_name'), classes)
         cur.execute('DELETE FROM ah_bonus')

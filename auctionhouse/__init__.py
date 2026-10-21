@@ -3,7 +3,9 @@ Auction house browser - every EU realm's auction house, compared.
 
 Search every item on sale in EU with the filters players expect (item level, required level, rarity, expansion,
 category, secondary and tertiary stats, socket, below vendor price), then open an item to see where it sells for
-the most and the least, each stat roll's price, every listing on your realm and the price history.
+the most and the least, each stat roll's price, every listing on your realm and the price history. Beside search:
+deals (rolls listed far under what they sell for), market movers, and a character's missing mounts, pets and toys
+on sale (collectibles.py maps each to what it teaches; the page reads the character's collection from Blizzard).
 
 Two halves, in two containers:
   - the collector (worker.py, collector.py) runs on its own - docker-compose.yml's ah-worker service,
