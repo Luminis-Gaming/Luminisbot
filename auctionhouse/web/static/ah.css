@@ -157,6 +157,21 @@ tbody tr.flagged td:not(:first-child) { opacity: 0.6; }
 .coin .g i { color: var(--coin-g); } .coin .s i { color: var(--coin-s); } .coin .c i { color: var(--coin-c); }
 .realm-tag { display: block; font-size: 12px; color: var(--faint); font-weight: 400; white-space: nowrap; }
 .realm-name { white-space: nowrap; }
+.all-eu { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; color: var(--gold);
+  background: var(--gold-soft); white-space: nowrap; }
+.hero .flavor { margin: 8px 0 0; color: var(--muted); font-style: italic; max-width: 70ch; }
+
+/* a commodity's page: cost to buy, and the price ladder */
+.buy-input { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.buy-input .input { width: 130px; height: 36px; }
+.buy-result { display: grid; gap: 6px; }
+.buy-total { font-size: 28px; font-weight: 700; }
+.ladder { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ladder li { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 6px 8px;
+  border-radius: var(--radius-sm); }
+.ladder li:hover { background: rgba(255,255,255,0.03); }
+.ladder .qty { text-align: right; min-width: 90px; }
+.ladder .qty small { display: block; font-size: 11.5px; color: var(--faint); }
 /* "?" / "+5" beside a realm group: the realms that share its auction house, on hover */
 .realms-q { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px;
   border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--muted);

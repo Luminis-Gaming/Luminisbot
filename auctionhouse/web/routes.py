@@ -118,7 +118,8 @@ def _snapshot():
 
 def _categories():
     names = _cached('classes', _class_names)
-    rows = db.fetch_all("""SELECT i.class_id, i.subclass_id, count(*) AS n FROM ah_item_summary s
+    rows = db.fetch_all("""SELECT i.class_id, i.subclass_id, count(*) AS n
+                           FROM (SELECT item_id FROM ah_item_summary UNION ALL SELECT item_id FROM ah_commodity_summary) s
                            JOIN ah_items i USING (item_id) GROUP BY i.class_id, i.subclass_id""")
     cats = {}
     for r in rows:
@@ -258,12 +259,34 @@ async def handle_search_page(request):
                  'Search every EU auction house and compare prices across all realms.')
 
 
+def _history(item_id):
+    return [[r['ts'].isoformat(), r['lo'], r['p25'], r['med'], r['p75'], r['realms']]
+            for r in db.fetch_all('SELECT ts, lo, p25, med, p75, realms FROM ah_item_history WHERE item_id = %s ORDER BY ts',
+                                  (item_id,))]
+
+
+def _commodity_data(item, base):
+    """A commodity's page: one auction house for all of EU, so its numbers, price ladder and history."""
+    s = db.fetch_one('SELECT * FROM ah_commodity_summary WHERE item_id = %s', (item['item_id'],))
+    book = [[r['price'], r['quantity']] for r in db.fetch_all(
+        'SELECT price, quantity FROM ah_commodity_book WHERE item_id = %s ORDER BY price LIMIT 400', (item['item_id'],))]
+    return {'page': 'item', 'kind': 'commodity', 'realms': _cached('realms', _realms),
+            'snapshot': _cached('snapshot', _snapshot), 'item': base,
+            'commodity': {k: s[k] for k in ('lo', 'p05', 'market', 'p30', 'quantity', 'listings', 'levels')},
+            'book': book, 'history': _history(item['item_id']), 'variants': [], 'listings': [], 'realm_history': {}}
+
+
 def _item_data(item_id):
     item = db.fetch_one('SELECT * FROM ah_items WHERE item_id = %s', (item_id,))
     if not item:
         return None
     names = _cached('classes', _class_names)
     cls, sub = names.get((item['class_id'], item['subclass_id']), ('', ''))
+    if item_id > 0 and db.fetch_one('SELECT 1 AS ok FROM ah_commodity_summary WHERE item_id = %s', (item_id,)):
+        return _commodity_data(item, {'id': item_id, 'name': item['name'], 'q': item['quality'], 'ilvl': item['ilvl'],
+                                      'req': item['req_level'], 'cls': cls, 'sub': sub,
+                                      'slot': SLOTS.get(item['inventory_type'], ''), 'bind': '',
+                                      'vendor': item['vendor'], 'icon': icon_url(item)})
     variants = db.fetch_all("""SELECT v.variant_id, v.sec, v.heavy, v.ter, v.sock, v.ilvl, v.bind, v.tooltip FROM ah_variants v
                                WHERE v.item_id = %s AND EXISTS (SELECT 1 FROM ah_listings l WHERE l.variant_id = v.variant_id)
                                ORDER BY v.variant_id""", (item_id,))
@@ -277,19 +300,21 @@ def _item_data(item_id):
     listings = [[r['cr'], index[r['variant_id']], r['buyout'], r['time_left']]
                 for r in db.fetch_all("""SELECT cr, variant_id, buyout, time_left FROM ah_listings WHERE item_id = %s
                                          ORDER BY buyout LIMIT 5000""", (item_id,)) if r['variant_id'] in index]
-    history = [[r['ts'].isoformat(), r['lo'], r['p25'], r['med'], r['p75'], r['realms']]
-               for r in db.fetch_all('SELECT ts, lo, p25, med, p75, realms FROM ah_item_history WHERE item_id = %s ORDER BY ts',
-                                     (item_id,))]
+    history = _history(item_id)
     realm_history = {}
     for r in db.fetch_all('SELECT cr, day, lo FROM ah_realm_history WHERE item_id = %s ORDER BY day', (item_id,)):
         realm_history.setdefault(str(r['cr']), []).append([r['day'].isoformat(), r['lo']])
     # what's on sale binds as its rolls say (a bonus id can make a "binds when picked up" item tradeable)
     overrides = [v['bind'] for v in variants if v['bind']]
     binding = max(set(overrides), key=overrides.count) if overrides else item['binding']
-    return {'page': 'item', 'realms': _cached('realms', _realms), 'snapshot': _cached('snapshot', _snapshot),
+    pet = item_id < 0
+    return {'page': 'item', 'kind': 'pet' if pet else 'item', 'realms': _cached('realms', _realms),
+            'snapshot': _cached('snapshot', _snapshot),
             'item': {'id': item_id, 'name': item['name'], 'q': item['quality'], 'ilvl': item['ilvl'],
-                     'req': item['req_level'], 'cls': cls, 'sub': sub, 'slot': SLOTS.get(item['inventory_type'], ''),
-                     'bind': BINDING.get(binding, ''), 'vendor': item['vendor'], 'icon': icon_url(item)},
+                     'req': item['req_level'], 'cls': cls, 'sub': sub,
+                     'slot': '' if pet else SLOTS.get(item['inventory_type'], ''),
+                     'bind': '' if pet else BINDING.get(binding, ''), 'vendor': item['vendor'], 'icon': icon_url(item),
+                     'description': item.get('description') or ''},
             'variants': out, 'listings': listings, 'history': history, 'realm_history': realm_history}
 
 
@@ -302,9 +327,10 @@ async def handle_item_page(request):
     data = await asyncio.to_thread(_item_data, item_id)
     if not data:
         raise web.HTTPNotFound(text='No such item')
-    items.offer(item_id, '')
-    for v in data['variants']:
-        items.offer(item_id, v['q'])
+    if item_id > 0:  # Wowhead tooltips (pets' are ours: _pet_tooltip)
+        items.offer(item_id, '')
+        for v in data['variants']:
+            items.offer(item_id, v['q'])
     name = data['item']['name']
     return _page(f'{name} · Luminis Auction House', '<main id="item-view"></main>', data,
                  f'{name}: prices on every EU realm, each stat roll, and where it sells best.')
@@ -376,20 +402,28 @@ def search(args):
                          (array_agg(cr ORDER BY lo))[1] AS lo_cr,
                          percentile_disc(0.5) WITHIN GROUP (ORDER BY lo) AS med,
                          max(lo) AS hi, (array_agg(cr ORDER BY lo DESC))[1] AS hi_cr,
-                         x.ilvl_min, x.ilvl_max, x.rolls, FALSE AS walls_only
+                         x.ilvl_min, x.ilvl_max, x.rolls, FALSE AS walls_only, FALSE AS commodity
                   FROM m JOIN x USING (item_id) GROUP BY m.item_id, x.ilvl_min, x.ilvl_max, x.rolls)"""
         here_source = 'lf'
     else:
-        ctes = """r AS (SELECT item_id, realms, listings, lo, lo_cr, med, hi, hi_cr, ilvl_min, ilvl_max, rolls, walls_only
-                        FROM ah_item_summary)"""
+        # commodities (one auction house for all of EU) sit beside them: on every realm, at one price
+        ctes = """r AS (SELECT item_id, realms, listings, lo, lo_cr, med, hi, hi_cr, ilvl_min, ilvl_max, rolls, walls_only,
+                               FALSE AS commodity
+                        FROM ah_item_summary
+                        UNION ALL
+                        SELECT item_id, (SELECT count(*) FROM ah_realm_groups)::smallint, listings, lo, NULL, market, NULL,
+                               NULL, NULL, NULL, 1, FALSE, TRUE
+                        FROM ah_commodity_summary)"""
         here_source = f'(SELECT l.item_id, l.cr, l.buyout FROM ah_listings l WHERE {NO_WALL})'
 
     realm = _int(args, 'realm', 1, 10 ** 6)
     if realm:
         p['realm'] = realm
+        # commodities are on every realm's auction house, at the one EU price
+        commodities_here = '' if vconds else ' UNION ALL SELECT item_id, lo, listings FROM ah_commodity_summary'
         ctes += f""",
             h AS (SELECT hs.item_id, min(hs.buyout) AS here, count(*)::int AS here_n FROM {here_source} hs
-                  WHERE hs.cr = %(realm)s GROUP BY hs.item_id)"""
+                  WHERE hs.cr = %(realm)s GROUP BY hs.item_id{commodities_here})"""
         join = 'LEFT JOIN h USING (item_id)' if args.get('oos') == '1' else 'JOIN h USING (item_id)'
         here_cols = 'h.here, h.here_n'
     else:
@@ -407,7 +441,7 @@ def search(args):
         SELECT i.item_id AS id, i.name, i.quality AS q, i.icon, i.icon_file, i.class_id, i.subclass_id,
                i.inventory_type, i.req_level AS req,
                r.realms, r.listings, r.lo, r.lo_cr, r.med, r.hi, r.hi_cr, r.ilvl_min, r.ilvl_max, r.rolls,
-               {here_cols}, count(*) OVER () AS total
+               r.commodity, i.ilvl AS base_ilvl, {here_cols}, count(*) OVER () AS total
         FROM r JOIN ah_items i USING (item_id) {join}
         WHERE {' AND '.join(where) or 'TRUE'}
         ORDER BY r.walls_only, {SORTS[sort]} {direction} NULLS LAST, i.name
@@ -420,8 +454,9 @@ def search(args):
         out.append({'id': r['id'], 'name': r['name'], 'q': r['q'], 'icon': icon_url(r), 'cls': cls, 'sub': sub,
                     'slot': SLOTS.get(r['inventory_type'], ''), 'req': r['req'], 'realms': r['realms'],
                     'listings': r['listings'], 'lo': r['lo'], 'lo_cr': r['lo_cr'], 'med': r['med'], 'hi': r['hi'],
-                    'hi_cr': r['hi_cr'], 'ilvl_min': r['ilvl_min'], 'ilvl_max': r['ilvl_max'], 'rolls': r['rolls'],
-                    'here': r['here'], 'here_n': r['here_n']})
+                    'hi_cr': r['hi_cr'], 'ilvl_min': r['ilvl_min'] if r['ilvl_min'] is not None else r['base_ilvl'],
+                    'ilvl_max': r['ilvl_max'] if r['ilvl_max'] is not None else r['base_ilvl'], 'rolls': r['rolls'],
+                    'commodity': r['commodity'], 'here': r['here'], 'here_n': r['here_n']})
     return out, (rows[0]['total'] if rows else 0)
 
 
@@ -429,13 +464,43 @@ async def handle_search_api(request):
     from raidanalysis import items
     rows, total = await asyncio.to_thread(search, request.query)
     for r in rows:
-        items.offer(r['id'], '')
+        if r['id'] > 0:
+            items.offer(r['id'], '')
     return web.json_response({'rows': rows, 'total': total}, headers={'Cache-Control': 'no-store', **_headers()})
 
 
 # ============================================================================
 # Tooltips and assets
 # ============================================================================
+
+BREED_NAMES = {'B': 'Balanced', 'P': 'Power', 'S': 'Speed', 'H': 'Health'}
+
+
+def _pet_tooltip(item_id, args):
+    """A battle pet's tooltip, built here from Blizzard's pet data: Wowhead's item tooltips don't cover pet cages."""
+    from .. import rolls
+    row = db.fetch_one("""SELECT i.name, i.icon, i.description, c.subclass_name AS family FROM ah_items i
+                          LEFT JOIN ah_item_classes c ON c.class_id = i.class_id AND c.subclass_id = i.subclass_id
+                          WHERE i.item_id = %s""", (item_id,))
+    if not row:
+        return None
+    breed, level, quality = _int(args, 'breed', 0, 30), _int(args, 'level', 1, 25), _int(args, 'quality', 0, 5)
+    shown = quality if quality is not None else 3
+    lines = [f'<b class="q{shown}">{esc(row["name"])}</b>',
+             'Battle Pet' + (f' · {esc(row["family"])}' if row['family'] else '')]
+    if level:
+        lines.append(f'<span class="q">Level {level}</span>')
+    if quality is not None:
+        lines.append(f'<span class="q{quality}">{esc(rolls.PET_QUALITY[quality])}</span>')
+    code = rolls.PET_BREEDS.get(breed if breed is None or breed < 13 else breed - 10) if breed else None
+    if code:
+        words = ' / '.join(dict.fromkeys(BREED_NAMES[c] for c in code.split('/')))
+        lines.append(f'Breed {esc(code)} ({esc(words)})')
+    if row['description']:
+        lines.append(f'<span class="q">"{esc(row["description"])}"</span>')
+    return {'name': row['name'], 'quality': shown, 'icon': row['icon'] or None,
+            'html': '<table><tr><td>' + '<br>'.join(lines) + '</td></tr></table>'}
+
 
 async def handle_tooltip(request):
     """An item's tooltip for one roll (bonus ids, crafted stats) - only for items and rolls our pages showed."""
@@ -444,6 +509,11 @@ async def handle_tooltip(request):
         item_id = int(request.match_info['item_id'])
     except ValueError:
         raise web.HTTPNotFound()
+    if item_id < 0:  # a battle pet species
+        info = await asyncio.to_thread(_pet_tooltip, item_id, request.query)
+        if not info:
+            raise web.HTTPNotFound()
+        return web.json_response(info, headers={'Cache-Control': 'public, max-age=86400', **_headers()})
     q = items.parse_query(request.query)
     if q is None:
         raise web.HTTPBadRequest()

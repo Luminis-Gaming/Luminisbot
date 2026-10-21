@@ -3,7 +3,10 @@ Auction house tables. Created idempotently by ensure_schema(), called from run_m
 (house convention).
 
 Sizes, measured on EU (October 2026): ~3.1M listings across 92 realm groups at any time (ah_listings, replaced per
-realm as Blizzard updates it), ~19k different items, ~200k rolls. History stays small on purpose:
+realm as Blizzard updates it), ~19k different items, ~200k rolls. Battle pets are in ah_listings too, each species
+as item -species (rolls.decode_pet). Commodities - one region-wide auction house - are a price ladder
+(ah_commodity_book, ~75k price levels for ~12k items) and a summary (ah_commodity_summary); their history shares
+ah_item_history (realms 0). History stays small on purpose:
   ah_item_history   one row per item per hour for 14 days, then one per day (the noon row), kept for good
   ah_realm_history  each realm's cheapest price per item per day, for 60 days
 """
@@ -141,7 +144,24 @@ def ensure_schema(cursor):
             PRIMARY KEY (item_id, cr, day)
         );
 
+        -- commodities: stackable goods, one auction house for the whole region
+        CREATE TABLE IF NOT EXISTS ah_commodity_book (
+            item_id INTEGER NOT NULL,
+            price BIGINT NOT NULL,
+            quantity INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ah_commodity_book_item ON ah_commodity_book (item_id, price);
+
+        CREATE TABLE IF NOT EXISTS ah_commodity_summary (
+            item_id INTEGER PRIMARY KEY,
+            lo BIGINT NOT NULL, p05 BIGINT NOT NULL, market BIGINT NOT NULL, p30 BIGINT NOT NULL,
+            quantity BIGINT NOT NULL,
+            listings INTEGER NOT NULL,
+            levels INTEGER NOT NULL
+        );
+
         -- columns added after the first version
+        ALTER TABLE ah_items ADD COLUMN IF NOT EXISTS description TEXT;
         ALTER TABLE ah_variants ADD COLUMN IF NOT EXISTS bind SMALLINT NOT NULL DEFAULT 0;
         ALTER TABLE ah_item_summary ADD COLUMN IF NOT EXISTS walls_only BOOLEAN NOT NULL DEFAULT FALSE;
     """)
@@ -219,7 +239,8 @@ def snapshot():
     """What the pages say about the data: when it was last updated, how many realms, listings and items."""
     row = fetch_one("""SELECT max(swept_at) AS swept_at, count(*) AS groups,
                               coalesce(sum(listings), 0) AS listings,
-                              (SELECT count(*) FROM ah_item_summary) AS items,
+                              (SELECT count(*) FROM ah_item_summary)
+                                + (SELECT count(*) FROM ah_commodity_summary) AS items,
                               (SELECT min(ts) FROM ah_item_history) AS history_since
                        FROM ah_realm_groups""")
     return row or {}

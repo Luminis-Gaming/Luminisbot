@@ -71,6 +71,40 @@ class RollTest(unittest.TestCase):
         self.assertEqual(rolls.item_level(roll, 219, {}), 219)
 
 
+class PetTest(unittest.TestCase):
+    def test_a_caged_pet_is_its_species_with_breed_level_and_quality(self):
+        """Living Sandling, as listed: a rare level 1 H/S."""
+        cage = {'id': 82800, 'modifiers': [{'type': 6, 'value': 47252}], 'pet_breed_id': 9, 'pet_level': 1,
+                'pet_quality_id': 3, 'pet_species_id': 1177}
+        self.assertEqual(rolls.pet_item_id(cage['pet_species_id']), -1177)
+        roll = rolls.decode_pet(cage)
+        self.assertEqual((roll.sec, roll.ter, roll.level_key), ('H/S', 'Rare', 'L1'))
+        self.assertEqual(rolls.item_level(roll, 0, {}), 1)
+        self.assertEqual(roll.tooltip, 'breed=9&level=1&quality=3')
+
+    def test_breeds_13_to_22_are_the_same_breeds(self):
+        a = rolls.decode_pet({'pet_breed_id': 8, 'pet_level': 25, 'pet_quality_id': 3})
+        b = rolls.decode_pet({'pet_breed_id': 18, 'pet_level': 25, 'pet_quality_id': 3})
+        self.assertEqual(a.sec, 'P/S')
+        self.assertEqual(a.key, b.key)
+
+
+class CommodityTest(unittest.TestCase):
+    def test_market_price_is_the_cheapest_15_percent(self):
+        # 1,000 on sale: 100 at 10g, 100 at 12g, 800 at 20g -> the cheapest 150 cost 100x10g + 50x12g
+        s = prices.commodity_stats([(10 * G, 100), (12 * G, 100), (20 * G, 800)])
+        self.assertEqual(s['lo'], 10 * G)
+        self.assertEqual(s['market'], round((100 * 10 + 50 * 12) * G / 150))
+        self.assertEqual(s['p05'], 10 * G)
+        self.assertEqual(s['p30'], 20 * G)
+        self.assertEqual((s['quantity'], s['levels']), (1000, 3))
+
+    def test_lottery_asks_at_the_cap_are_left_out(self):
+        s = prices.commodity_stats([(5 * G, 2), (9999999 * G, 1000)])
+        self.assertEqual((s['lo'], s['market'], s['quantity']), (5 * G, 5 * G, 2))
+        self.assertIsNone(prices.commodity_stats([(9999999 * G, 3)]))
+
+
 class PriceTest(unittest.TestCase):
     def test_people_pick_round_prices(self):
         for g in (3499999, 296000, 50000, 2900000, 499):

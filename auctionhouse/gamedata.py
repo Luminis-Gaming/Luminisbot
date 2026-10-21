@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 WAGO = 'https://wago.tools/db2/{table}/csv'
 REFRESH_DAYS = 7
+PET_CLASS = 17  # "Battle Pets": its families come from Blizzard's pet data, not these tables
 META_KEY = 'gamedata'
 
 
@@ -67,7 +68,7 @@ def parse_classes(class_csv, subclass_csv):
     rows = []
     for r in csv.DictReader(io.StringIO(subclass_csv)):
         cls = _int(r['ClassID'])
-        if cls in names:
+        if cls in names and cls != PET_CLASS:  # battle pets: one category per pet family (collector.resolve_pets)
             sub = (r.get('VerboseName_lang') or '').strip() or (r.get('DisplayName_lang') or '').strip()
             rows.append((cls, _int(r['SubClassID']), names[cls], sub or names[cls]))
     return rows
@@ -97,7 +98,7 @@ def _store(items, classes, bonus):
                            subclass_id = EXCLUDED.subclass_id, inventory_type = EXCLUDED.inventory_type,
                            expansion = EXCLUDED.expansion, vendor = EXCLUDED.vendor, binding = EXCLUDED.binding,
                            icon_file = EXCLUDED.icon_file""")
-        cur.execute('DELETE FROM ah_item_classes')
+        cur.execute('DELETE FROM ah_item_classes WHERE class_id <> %s', (PET_CLASS,))
         db.copy_rows(cur, 'ah_item_classes', ('class_id', 'subclass_id', 'class_name', 'subclass_name'), classes)
         cur.execute('DELETE FROM ah_bonus')
         db.copy_rows(cur, 'ah_bonus', ('bonus_id', 'effects'), bonus)

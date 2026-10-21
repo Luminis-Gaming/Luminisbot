@@ -328,15 +328,19 @@ function initSearch() {
       const spread = r.hi / Math.max(r.lo, 1);
       switch (k) {
         case 'name': return `<td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}${extra ? '?' + extra : ''}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>
-          ${r.rolls > 1 ? `<span class="rolls-badge">${r.rolls} rolls</span>` : ''}
+          ${r.rolls > 1 ? `<span class="rolls-badge">${r.rolls} ${r.id < 0 ? 'variants' : 'rolls'}</span>` : ''}
           <div class="item-sub">${esc(r.sub)}${r.slot ? ' · ' + esc(r.slot) : ''}</div></div></div></td>`;
         case 'ilvl': return `<td class="r num">${r.ilvl_min === r.ilvl_max ? r.ilvl_max : `${r.ilvl_min}–${r.ilvl_max}`}</td>`;
         case 'req': return `<td class="r num">${r.req || '<span class="faint">–</span>'}</td>`;
-        case 'lo': return `<td class="r">${coins(r.lo)}<span class="realm-tag">${esc(groupName(r.lo_cr))}</span></td>`;
-        case 'hi': return `<td class="r">${coins(r.hi)}<span class="realm-tag">${esc(groupName(r.hi_cr))}</span></td>`;
+        case 'lo': return `<td class="r">${coins(r.lo)}<span class="realm-tag">${r.commodity ? 'every realm' : esc(groupName(r.lo_cr))}</span></td>`;
+        case 'hi': return r.commodity ? '<td class="r faint">–</td>'
+          : `<td class="r">${coins(r.hi)}<span class="realm-tag">${esc(groupName(r.hi_cr))}</span></td>`;
         case 'med': return `<td class="r">${coins(r.med)}</td>`;
-        case 'realms': return `<td class="r num">${r.realms}<span class="faint"> / ${D.snapshot.groups}</span></td>`;
-        case 'spread': return `<td class="r"><span class="spread ${spread >= 10 ? 'hot' : ''}">×${spread < 10 ? spread.toFixed(1) : Math.round(spread).toLocaleString('en-GB')}</span></td>`;
+        case 'realms': return r.commodity
+          ? '<td class="r"><span class="all-eu" title="Stackable goods sell on one auction house for all of EU">All EU</span></td>'
+          : `<td class="r num">${r.realms}<span class="faint"> / ${D.snapshot.groups}</span></td>`;
+        case 'spread': if (r.commodity) return '<td class="r faint">–</td>';
+          return `<td class="r"><span class="spread ${spread >= 10 ? 'hot' : ''}">×${spread < 10 ? spread.toFixed(1) : Math.round(spread).toLocaleString('en-GB')}</span></td>`;
         case 'here': return `<td class="r">${r.here != null ? coins(r.here) : '<span class="faint">Not listed</span>'}</td>`;
         case 'vs': {
           if (r.here == null) return '<td class="r faint">–</td>';
@@ -402,10 +406,20 @@ function initItem() {
   let rollFilter = {sec: url.get('sec') || '', ter: url.get('ter') || '', sock: url.get('sock') || '', ilvl: url.get('ilvl') ? +url.get('ilvl') : null};
   let tableSort = {key: 'lo', dir: -1};
   let listRealm = null, listRealmName = null;  // the "Listings on" menu: a realm group, and the realm picked in it
+  // a battle pet's "roll" is its breed, level and quality; an item's its stats and item level
+  const pet = D.kind === 'pet';
+  const L = pet
+    ? {title: 'Breeds and levels', intro: 'Each breed, level and quality sells for its own price.', pair: 'Breed',
+       level: 'Level', ter: 'Quality', any: 'Any breed', none: 'Unknown breed', word: 'breed', count: 'kinds listed',
+       what: 'breed and level', ters: ['Poor', 'Common', 'Uncommon', 'Rare'], roll: 'Pet'}
+    : {title: 'Stat rolls', intro: 'This item drops with random stats, and each roll sells for its own price.',
+       pair: 'Secondary stats', level: 'Item level', ter: 'Tertiary', any: 'Any roll', none: 'No secondary stats',
+       word: 'roll', count: 'rolls listed', what: 'roll and item level', ters: TERTIARY, roll: 'Roll'};
 
   const pairLabel = sec => sec ? sec.split('/').map(s => SHORT[s] || s).join(' / ') : '';
   const rollLabel = v => {
     if (!it.hasVariants) return '';
+    if (pet) return `<span class="roll"><b>${esc([v.sec, v.ter].filter(Boolean).join(' · '))}</b> · level ${v.ilvl}</span>`;
     const parts = [];
     if (v.sec) parts.push(pairLabel(v.sec));
     if (v.ter) parts.push(v.ter);
@@ -493,7 +507,10 @@ function initItem() {
       : `This price (or one within 0.3% of it) is listed ${r.wallCount} times across realms and rolls: one seller or bot posting everywhere. Not counted in medians or rankings.`)
     : r.flag === 'high' ? 'Over 10× the typical price. Not counted in medians or rankings.' : '';
   const ilvlsOf = () => [...new Set(it.variants.map(v => v.ilvl))].sort((a, b) => a - b);
-  const pairsOf = () => PAIRS.filter(p => it.variants.some(v => v.sec === p)).concat(it.variants.some(v => !v.sec) ? [''] : []);
+  const pairsOf = () => {
+    const secs = [...new Set(it.variants.map(v => v.sec))];
+    return PAIRS.filter(p => secs.includes(p)).concat(secs.filter(s => s && !PAIRS.includes(s)).sort(), secs.includes('') ? [''] : []);
+  };
 
   function rankList(rows, color, scaleMax) {
     return `<ol class="rank">${rows.map((r, i) => `<li class="${r.cr === myRealm ? 'you' : ''}">
@@ -509,7 +526,7 @@ function initItem() {
     if (!it.hasVariants) return '';
     const f = rollFilter;
     const lvls = ilvlsOf(), pairs = pairsOf();
-    const ters = TERTIARY.filter(t => it.variants.some(v => v.ter === t));
+    const ters = L.ters.filter(t => it.variants.some(v => v.ter === t));
     const hasSock = it.variants.some(v => v.sock), noSock = it.variants.some(v => !v.sock);
     const real = s => s && !s.fellBack ? s.sane[0] : null;
     const base = {...f, sec: ''};
@@ -520,20 +537,21 @@ function initItem() {
     const cheapest = listed.length > 1 ? listed[0].p : null;
     const priced = patch => { const s = statsFor({...f, ...patch}), b = real(s); return b ? `from ${gold(b.lo)}` : s ? 'only bot listings' : 'none listed'; };
     const levelControl = lvls.length < 2 ? '' : lvls.length <= 6
-      ? `<div class="seg" role="group" aria-label="Item level"><span class="seg-label">Item level</span>
+      ? `<div class="seg" role="group" aria-label="${L.level}"><span class="seg-label">${L.level}</span>
           ${[[null, 'All'], ...lvls.map(l => [l, String(l)])].map(([l, t]) => `<button type="button" data-ilvl="${l ?? ''}" aria-pressed="${f.ilvl === l}">${t}</button>`).join('')}</div>`
-      : `<label class="inline-field"><span>Item level</span><select class="select" id="roll-ilvl">
+      : `<label class="inline-field"><span>${L.level}</span><select class="select" id="roll-ilvl">
           <option value="">All (${lvls[0]}–${lvls[lvls.length - 1]})</option>
           ${lvls.map(l => `<option value="${l}" ${f.ilvl === l ? 'selected' : ''}>${l} · ${priced({ilvl: l})}</option>`).join('')}
         </select></label>`;
     const menu = (id, label, options, value) => `<label class="inline-field"><span>${label}</span><select class="select" id="${id}">
       ${options.map(([v, t]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`;
-    const terMenu = ters.length ? menu('roll-ter', 'Tertiary', [['', 'Any'], ['none', `None · ${priced({ter: 'none'})}`],
+    const terMenu = ters.length ? menu('roll-ter', L.ter, [['', 'Any'],
+      ...(it.variants.some(v => !v.ter) ? [['none', `None · ${priced({ter: 'none'})}`]] : []),
       ...ters.map(t => [t, `${t} · ${priced({ter: t})}`])], f.ter) : '';
     const sockMenu = hasSock && noSock ? menu('roll-sock', 'Socket', [['', 'Any'], ['yes', `With socket · ${priced({sock: 'yes'})}`],
       ['no', `No socket · ${priced({sock: 'no'})}`]], f.sock) : '';
     const row = (p, name, sub, s, best, tag) => {
-      const note = best ? `${p ? esc(pairLabel(p)) : 'Cheapest roll'} · cheapest on <b>${esc(groupName(best.cr))}</b>` : '';
+      const note = best ? `${p ? esc(pairLabel(p)) : `Cheapest ${L.word}`} · cheapest on <b>${esc(groupName(best.cr))}</b>` : '';
       return `<button type="button" class="roll-row ${p ? '' : 'all'}" role="radio" aria-checked="${f.sec === p}" data-sec="${esc(p)}">
         <span class="radio" aria-hidden="true"></span>
         ${best ? tipIcon(it, best.v.tt, note, false) : '<span></span>'}
@@ -543,25 +561,25 @@ function initItem() {
         <span class="r num muted">${s ? s.n : 0}</span>
         <span class="r">${best ? coins(s.med) : '<span class="faint">–</span>'}</span></button>`;
     };
-    const sub = best => best ? `${esc(groupName(best.cr))} · item level ${best.v.ilvl}` : 'Only bot listings';
+    const sub = best => best ? `${esc(groupName(best.cr))} · ${L.level.toLowerCase()} ${best.v.ilvl}` : 'Only bot listings';
     const allBest = real(all);
     const active = f.sec || f.ilvl != null || f.ter || f.sock;
     return `<section class="card rolls" aria-labelledby="rolls-title">
       <div class="rolls-head">
-        <div><h3 id="rolls-title">Stat rolls</h3>
-          <p>This item drops with random stats, and each roll sells for its own price.
-          ${cheapest ? `Right now <b>${esc(cheapest.replace('/', ' / '))}</b> is the cheapest to buy.` : ''} Pick a roll and the whole page follows it.</p></div>
+        <div><h3 id="rolls-title">${L.title}</h3>
+          <p>${L.intro}
+          ${cheapest ? `Right now <b>${esc(cheapest.replace('/', ' / '))}</b> is the cheapest to buy.` : ''} Pick a ${L.word} and the whole page follows it.</p></div>
         <div class="roll-tools">${levelControl}${terMenu}${sockMenu}</div>
       </div>
-      <div class="roll-list" role="radiogroup" aria-label="Secondary stats">
-        <div class="roll-row head" aria-hidden="true"><span></span><span></span><span>Secondary stats</span><span>Cheapest in EU</span><span class="r">Realms</span><span class="r">EU median</span></div>
-        ${all ? row('', 'Any roll', allBest ? `${it.variants.filter(v => matches(v, base)).length} rolls listed` : 'Only bot listings', all, allBest, '') : ''}
-        ${listed.map(r => row(r.p, esc(r.p ? r.p.replace('/', ' / ') : 'No secondary stats'), sub(r.best), r.s, r.best,
+      <div class="roll-list" role="radiogroup" aria-label="${L.pair}">
+        <div class="roll-row head" aria-hidden="true"><span></span><span></span><span>${L.pair}</span><span>Cheapest in EU</span><span class="r">Realms</span><span class="r">EU median</span></div>
+        ${all ? row('', L.any, allBest ? `${it.variants.filter(v => matches(v, base)).length} ${L.count}` : 'Only bot listings', all, allBest, '') : ''}
+        ${listed.map(r => row(r.p, esc(r.p ? r.p.replace('/', ' / ') : L.none), sub(r.best), r.s, r.best,
           r.p === cheapest ? '<span class="cheap-tag">Cheapest</span>' : '')).join('')}
-        ${walled.map(r => row(r.p, esc(r.p ? r.p.replace('/', ' / ') : 'No secondary stats'), 'Only bot listings', r.s, null, '')).join('')}
+        ${walled.map(r => row(r.p, esc(r.p ? r.p.replace('/', ' / ') : L.none), 'Only bot listings', r.s, null, '')).join('')}
       </div>
-      <div class="roll-foot"><span>Bars compare each roll's cheapest real listing. Bot price walls are left out. Hover an icon for the roll's tooltip.</span>
-        ${active ? '<button type="button" class="link-btn" id="roll-clear">Show every roll</button>' : ''}</div>
+      <div class="roll-foot"><span>Bars compare each ${L.word}'s cheapest real listing. Bot price walls are left out. Hover an icon for its tooltip.</span>
+        ${active ? `<button type="button" class="link-btn" id="roll-clear">Show every ${L.word}</button>` : ''}</div>
     </section>`;
   }
 
@@ -594,9 +612,9 @@ function initItem() {
       r.cr === myRealm && r.name === myRealmName() ? ' (your realm)' : ''}</option>`).join('');
     return `<section class="card listings" aria-labelledby="list-title">
       <div class="card-head"><div><h3 id="list-title">Listings on ${esc(name)}</h3>
-        <p>Every ${esc(it.name)} on ${esc(name)}'s auction house${shared.length ? ` (shared with ${esc(shared.join(', '))})` : ''}, cheapest first. Each price is compared with the same ${it.hasVariants ? 'roll and item level' : 'item'} across EU.</p></div>
+        <p>Every ${esc(it.name)} on ${esc(name)}'s auction house${shared.length ? ` (shared with ${esc(shared.join(', '))})` : ''}, cheapest first. Each price is compared with the same ${it.hasVariants ? L.what : 'item'} across EU.</p></div>
         <label class="inline-field"><span>Realm</span><select class="select" id="list-realm">${options}</select></label></div>
-      ${shown.length ? `<div class="table-wrap"><table><thead><tr><th class="plain">${it.hasVariants ? 'Roll' : 'Item'}</th><th class="plain r">Price</th><th class="plain r">vs ${it.hasVariants ? 'same roll' : 'the rest of'} EU</th><th class="plain">Time left</th></tr></thead>
+      ${shown.length ? `<div class="table-wrap"><table><thead><tr><th class="plain">${it.hasVariants ? L.roll : 'Item'}</th><th class="plain r">Price</th><th class="plain r">vs ${it.hasVariants ? `same ${L.word}` : 'the rest of'} EU</th><th class="plain">Time left</th></tr></thead>
         <tbody>${rows}</tbody></table></div>` : `<div class="empty">${here.length ? 'No listings here match the roll you picked.'
           : `Nobody on ${esc(name)} has ${esc(it.name)} listed right now.`}</div>`}
       ${hidden ? `<div class="roll-foot"><span>${hidden} more listing${hidden === 1 ? '' : 's'} here with other rolls.</span>
@@ -611,8 +629,7 @@ function initItem() {
     const myRank = mine && !mine.flag ? S.sane.slice().reverse().findIndex(r => r.cr === myRealm) + 1 : null;
     const heroTip = S ? S.lo.v.tt : `${it.id}|`;
     const ilv = ilvlsOf();
-    const back = document.referrer && new URL(document.referrer).origin === location.origin && new URL(document.referrer).pathname === '/ah'
-      ? new URL(document.referrer).pathname + new URL(document.referrer).search : '/ah';
+    const back = backHref();
     const head = `
       <a class="back" href="${esc(back)}">← Back to search</a>
       <section class="hero q-${qkey(it.q)}">
@@ -621,12 +638,13 @@ function initItem() {
           <div class="eyebrow">${esc(it.cls)} · ${esc(it.sub)}</div>
           <h2>${esc(it.name)}</h2>
           <ul class="meta">
-            <li class="qtext">${QNAME[it.q] || ''}</li>
+            <li class="qtext">${pet ? 'Battle Pet' : QNAME[it.q] || ''}</li>
             ${it.slot ? `<li>${esc(it.slot)}</li>` : ''}
-            <li>Item level ${ilv.length > 1 ? `${ilv[0]}–${ilv[ilv.length - 1]}` : (ilv[0] ?? it.ilvl)}</li>
+            <li>${L.level} ${ilv.length > 1 ? `${ilv[0]}–${ilv[ilv.length - 1]}` : (ilv[0] ?? it.ilvl)}</li>
             ${it.req ? `<li>Requires level ${it.req}</li>` : ''}
             ${it.bind ? `<li>${esc(it.bind)}</li>` : ''}
           </ul>
+          ${pet && it.description ? `<p class="flavor">“${esc(it.description)}”</p>` : ''}
         </div>
         <label class="field your-realm"><span>Your realm</span>
           <select class="select" id="my-realm"><option value="">Pick your realm</option>
@@ -645,8 +663,11 @@ function initItem() {
     const walls = S.rows.filter(r => r.flag === 'wall').length, highs = S.rows.filter(r => r.flag === 'high').length;
     const flagNote = S.flagged ? `Leaves out ${[walls && `${walls} price-wall listing${walls === 1 ? '' : 's'}`, highs && `${highs} far above the typical price`].filter(Boolean).join(' and ')}.` : '';
     const flip = bestFlip(f);
-    const mixHint = it.hasVariants && (!f.sec || (ilv.length > 1 && f.ilvl == null))
-      ? `<p class="sell-hint"><b>Selling one?</b> This list mixes ${!f.sec ? 'stat rolls' : 'item levels'}. Pick your item's ${!f.sec ? 'secondary stats' : ''}${!f.sec && ilv.length > 1 && f.ilvl == null ? ' and ' : ''}${ilv.length > 1 && f.ilvl == null ? 'item level' : ''} under Stat rolls to compare the exact same item.</p>` : '';
+    const mixPair = !f.sec, mixLevel = ilv.length > 1 && f.ilvl == null;
+    const mixHint = it.hasVariants && (mixPair || mixLevel)
+      ? `<p class="sell-hint"><b>Selling one?</b> This list mixes ${mixPair ? (pet ? 'breeds' : 'stat rolls') : `${L.level.toLowerCase()}s`}.
+         Pick your ${pet ? 'pet' : 'item'}'s ${[mixPair && L.pair.toLowerCase(), mixLevel && L.level.toLowerCase()].filter(Boolean).join(' and ')}
+         under ${L.title} to compare the exact same thing.</p>` : '';
     $('#item-view').innerHTML = head + `
       <div class="kpis">
         <div class="kpi"><div class="eyebrow">Cheapest in EU</div><div class="val">${coins(S.lo.lo)}</div><div class="sub">${esc(groupName(S.lo.cr))}</div></div>
@@ -664,7 +685,7 @@ function initItem() {
         <span>Buy on <b>${esc(groupName(flip.s.lo.cr))}</b> for ${coins(flip.s.lo.lo)}</span><span class="faint" aria-hidden="true">→</span>
         <span>sell on <b>${esc(groupName(flip.s.target.cr))}</b> at ${coins(flip.s.target.lo)}</span>
         <span class="gain">≈ +${gold(flip.s.gain)}</span>
-        <span class="note">${it.hasVariants ? 'Same item, same stat roll and item level on both sides. ' : ''}After the 5% auction cut. The sell side is a typical realm's price (the median), not the priciest ask, which often never sells. These are asking prices, not sales.</span>
+        <span class="note">${it.hasVariants ? (pet ? 'Same pet, same breed, level and quality on both sides. ' : 'Same item, same stat roll and item level on both sides. ') : ''}After the 5% auction cut. The sell side is a typical realm's price (the median), not the priciest ask, which often never sells. These are asking prices, not sales.</span>
       </div>` : ''}
 
       ${listingsCard(f, S)}
@@ -758,7 +779,7 @@ function initItem() {
 
   function renderRealmTable(S) {
     const f = ($('#realm-filter').value || '').trim().toLowerCase();
-    const cols = [['name', 'Realm group'], ['lang', 'Language'], ['pop', 'Population'], ...(it.hasVariants ? [['roll', 'Cheapest roll']] : []),
+    const cols = [['name', 'Realm group'], ['lang', 'Language'], ['pop', 'Population'], ...(it.hasVariants ? [['roll', `Cheapest ${L.word}`]] : []),
                   ['lo', 'Lowest', 'r'], ['n', 'Listings', 'r'], ['vs', 'vs EU median', 'r']];
     const v = (r, k) => ({name: groupName(r.cr), lang: (realmGroups[r.cr] || {}).locale || '', pop: (realmGroups[r.cr] || {}).pop || '',
                           roll: (r.v.sec || '') + r.v.ilvl, lo: r.lo, n: r.n, vs: r.lo / S.med}[k]);
@@ -839,7 +860,7 @@ function initItem() {
   }
 
   // Real history: the item's hourly EU numbers (one a day after two weeks), and your realm's cheapest price per day
-  function drawHistory() {
+  function drawHistory(labels = {line: 'EU median', band: 'Middle 50%'}) {
     const box = $('#history');
     const pts = (D.history || []).map(([t, lo, p25, med, p75]) => ({t: Date.parse(t), lo, p25, med, p75})).filter(p => p.med > 0);
     if (pts.length < 2) {
@@ -884,14 +905,100 @@ function initItem() {
       const m = mine.length ? mine.reduce((best, q) => Math.abs(q.t - t) < Math.abs(best.t - t) ? q : best, mine[0]) : null;
       hx.setAttribute('x1', x(p.t)); hx.setAttribute('x2', x(p.t)); hx.setAttribute('visibility', 'visible');
       const when = new Date(p.t).toLocaleString('en-GB', {weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
-      showTip(`<b>${when}</b>EU median ${coins(p.med)}<br><span class="muted">Middle 50%: ${gold(p.p25)} – ${gold(p.p75)} · cheapest ${gold(p.lo)}</span>
+      showTip(`<b>${when}</b>${labels.line} ${coins(p.med)}<br><span class="muted">${labels.band}: ${gold(p.p25)} – ${gold(p.p75)} · cheapest ${gold(p.lo)}</span>
         ${m && Math.abs(m.t - p.t) < 864e5 ? `<br>Your realm that day ${coins(m.v)}` : ''}`, e.clientX, e.clientY);
     });
     svg.querySelector('#hhit').addEventListener('pointerleave', () => { hx.setAttribute('visibility', 'hidden'); hideTip(); });
   }
 
+  function backHref() {
+    const ref = document.referrer && new URL(document.referrer);
+    return ref && ref.origin === location.origin && ref.pathname === '/ah' ? ref.pathname + ref.search : '/ah';
+  }
+
+  // A commodity sells on one auction house for all of EU: no realms to compare, so what it costs to buy how many,
+  // the cheapest listings (the price ladder) and the history.
+  let buyQty = null;
+  function renderCommodity() {
+    const c = D.commodity, book = D.book || [];
+    const shown = book.reduce((a, [, q]) => a + q, 0);
+    if (buyQty == null) buyQty = Math.min(c.quantity, 100);
+    const quick = [1, 20, 100, 1000, 5000].filter(n => n <= c.quantity);
+    const top = book.slice(0, 15), maxQ = Math.max(1, ...top.map(([, q]) => q));
+    let running = 0;
+    $('#item-view').innerHTML = `
+      <a class="back" href="${esc(backHref())}">← Back to search</a>
+      <section class="hero q-${qkey(it.q)}">
+        ${icon(it, 'lg', `${it.id}|`)}
+        <div style="min-width:0">
+          <div class="eyebrow">${esc(it.cls)} · ${esc(it.sub)}</div>
+          <h2>${esc(it.name)}</h2>
+          <ul class="meta">
+            <li class="qtext">${QNAME[it.q] || ''}</li>
+            ${it.ilvl > 1 ? `<li>Item level ${it.ilvl}</li>` : ''}
+            ${it.req > 1 ? `<li>Requires level ${it.req}</li>` : ''}
+            <li>Sold on one auction house for all of EU</li>
+          </ul>
+        </div>
+      </section>
+      <div class="kpis">
+        <div class="kpi"><div class="eyebrow">Cheapest</div><div class="val">${coins(c.lo)}</div><div class="sub">per unit, on every realm</div></div>
+        <div class="kpi"><div class="eyebrow">Market price</div><div class="val">${coins(c.market)}</div><div class="sub">average of the cheapest 15% on sale</div></div>
+        <div class="kpi"><div class="eyebrow">On sale</div><div class="val num">${c.quantity.toLocaleString('en-GB')}</div><div class="sub">${c.listings.toLocaleString('en-GB')} listings</div></div>
+        <div class="kpi"><div class="eyebrow">${it.vendor ? 'Vendor buys for' : 'Price levels'}</div><div class="val">${it.vendor ? coins(it.vendor) : `<span class="num">${c.levels.toLocaleString('en-GB')}</span>`}</div>
+          <div class="sub">${it.vendor ? (c.lo < it.vendor ? 'More than the cheapest listing!' : 'per unit') : 'different prices listed'}</div></div>
+      </div>
+      <div class="two">
+        <section class="card"><div class="card-head"><div><h3>Cost to buy</h3>
+          <p>What it costs to buy from the cheapest listings up, the way the auction house fills a purchase.</p></div></div>
+          <div class="buy-input">
+            <label class="inline-field" for="buy-qty"><span>How many</span></label>
+            <input class="input" id="buy-qty" type="number" min="1" max="${c.quantity}" value="${buyQty}">
+            ${quick.map(n => `<button type="button" class="btn-ghost buy-quick" data-n="${n}">${n.toLocaleString('en-GB')}</button>`).join('')}
+          </div>
+          <div id="buy-result" class="buy-result" aria-live="polite"></div></section>
+        <section class="card"><div class="card-head"><div><h3>Cheapest listings</h3>
+          <p>How many are on sale at each price, cheapest first.</p></div></div>
+          <ol class="ladder">${top.map(([p, q]) => { running += q; return `<li>
+            <span class="price">${coins(p)}</span>
+            <span class="bar-track"><span class="bar" style="width:${Math.max(1, q / maxQ * 100).toFixed(1)}%"></span></span>
+            <span class="qty num">${q.toLocaleString('en-GB')}<small>${running.toLocaleString('en-GB')} in total</small></span></li>`; }).join('')}</ol>
+          ${book.length > top.length ? `<div class="roll-foot"><span>${(c.levels - top.length).toLocaleString('en-GB')} more prices above these.</span></div>` : ''}</section>
+      </div>
+      <div class="stack">
+        <section class="card"><div class="card-head"><div><h3>Price history</h3>
+          <p>The market price (the average of the cheapest 15% on sale), with the band from 5% to 30% of the way up the supply.</p></div></div>
+          <div class="legend"><span><i style="--c:var(--arcane-mark)"></i>Market price</span><span><i class="band" style="--c:var(--arcane-mark)"></i>5% – 30% into the supply</span></div>
+          <div class="chart-box" id="history"></div></section>
+      </div>`;
+    const input = $('#buy-qty');
+    const share = x => x < 0.0001 ? 'under 0.01%' : `${(x * 100).toFixed(x < 0.01 ? 2 : 1)}%`;
+    const update = () => {
+      const want = Math.max(1, Math.min(Math.floor(+input.value || 1), c.quantity));
+      buyQty = want;
+      let left = want, total = 0, last = 0;
+      for (const [p, q] of book) {
+        const take = Math.min(q, left);
+        total += take * p; left -= take; last = p;
+        if (!left) break;
+      }
+      const got = want - left;
+      $('#buy-result').innerHTML = got ? `
+        <div class="buy-total">${coins(total)}</div>
+        <div class="muted">${got.toLocaleString('en-GB')} for an average of ${coins(total / got)} each; the last ones cost ${coins(last)}.
+        That's ${share(want / c.quantity)} of everything on sale.</div>
+        ${left ? `<div class="sell-hint">Only the cheapest ${shown.toLocaleString('en-GB')} are counted here; the other ${left.toLocaleString('en-GB')} cost more than the last price shown.</div>` : ''}`
+        : '<div class="muted">Enter how many you want to buy.</div>';
+    };
+    input.oninput = update;
+    $('#item-view').querySelectorAll('.buy-quick').forEach(b => { b.onclick = () => { input.value = b.dataset.n; update(); }; });
+    update();
+    drawHistory({line: 'Market price', band: '5% – 30% into the supply'});
+  }
+
+  const draw = D.kind === 'commodity' ? renderCommodity : render;
   let rz;
-  window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(render, 150); });
-  render();
+  window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(draw, 150); });
+  draw();
 }
 })();

@@ -23,6 +23,7 @@ WALL_MIN = 3             # an odd-priced cluster this big is a wall
 FAR_ABOVE = 10           # x the typical price
 AH_CUT = 0.95            # the auction house keeps 5%
 PRICE_CAP = 9_990_000 * 10000  # at or near the 9,999,999g maximum: a lottery ticket, not a price
+MARKET_SHARE = 0.15      # a commodity's market price: the average of the cheapest 15% of its supply
 
 
 def _sig_digits(n):
@@ -83,6 +84,38 @@ def find_walls(prices):
         if p >= PRICE_CAP:
             walls[p] = c
     return walls
+
+
+def commodity_stats(levels):
+    """
+    One commodity's numbers from its price ladder: [(unit price, quantity)], cheapest first. Stackable goods sell on
+    one auction house for the whole region, so there are no realms to compare - what matters is how much you pay
+    for how many. The market price is the average unit price of the cheapest 15% of the supply (what a reasonable
+    purchase costs, not the one cheapest unit); p05 / p30 are the unit prices 5% and 30% of the way into the supply.
+    Asks at the price cap are left out. None when nothing real is listed.
+    """
+    levels = [(p, q) for p, q in levels if p < PRICE_CAP and q > 0]
+    total = sum(q for _, q in levels)
+    if not total:
+        return None
+
+    def price_at(fraction):
+        need, seen = max(1, fraction * total), 0
+        for p, q in levels:
+            seen += q
+            if seen >= need:
+                return p
+        return levels[-1][0]
+
+    want, cost, got = max(1, round(total * MARKET_SHARE)), 0, 0
+    for p, q in levels:
+        take = min(q, want - got)
+        cost += take * p
+        got += take
+        if got >= want:
+            break
+    return {'lo': levels[0][0], 'p05': price_at(0.05), 'market': round(cost / got), 'p30': price_at(0.30),
+            'quantity': total, 'levels': len(levels)}
 
 
 def typical_price(realm_lows, walls):
