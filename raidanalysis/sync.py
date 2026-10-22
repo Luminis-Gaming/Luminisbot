@@ -312,13 +312,18 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
         in_pull = {p['name'] for p in roster}
         ids = [aid for aid, name in names_by_id.items() if name in in_pull]
         tracked = gamedata.tracked_ids()
-        per_player, resource_events, procs, proc_events = {}, [], [], []
+        per_player, resource_events, procs, proc_events, hot_events = {}, [], [], [], []
         if detail:
-            # Healers' HoTs (and Augmentation's buffs) are kept on others: one more table each
+            # Healers' HoTs (and Augmentation's buffs) are kept on others: one more table each - and their
+            # buff events, one request for all of them, to count how many are out (throughput.hots_out)
             keep_up = {p['name'] for p in roster if throughput.wants_on_others(p)}
             others = [aid for aid in ids if names_by_id.get(aid) in keep_up]
             per_player = await wcl.get_player_tables(session, code, fight['id'], ids, extras['boss_ids'], casts=True,
                                                      others=others)
+            hots = throughput.hot_candidates(per_player, fight['endTime'] - fight['startTime'])
+            if hots:
+                hot_events = await wcl.get_events(session, code, fight['id'], 'Buffs', throughput.hots_filter(
+                    hots, {a['id'] for found in hots.values() for a in found}))
             resource_events = await wcl.get_events(session, code, fight['id'], 'Resources', "type = 'resourcechange'")
             procs = throughput.proc_candidates(per_player, tracked)
         if procs:  # only the self-buffs worth checking: the whole raid's are ~30k events a pull
@@ -338,7 +343,7 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
             except Exception as e:  # the website is best effort
                 logger.info(f"[RAIDS] Wipe parses for {code}#{fight['id']} not scraped: {e}")
         return throughput.build_extras(fight, roster, names_by_id, extras, per_player, parses,
-                                       resource_events, proc_events, tracked, detail=detail)
+                                       resource_events, proc_events, tracked, detail=detail, hot_events=hot_events)
     except wcl.WCLRateLimited:
         raise
     except wcl.WCLError as e:
@@ -552,7 +557,7 @@ async def sync_guild(limit=10, force_codes=(), extra_codes=(), full_budget=False
                     await _backfill_realms(session)
                     await _backfill_zones(session)
                     await _backfill_healer_parses(session)
-                    await _backfill_applied_hots(session)
+                    await _backfill_hot_counts(session)
                     await _backfill_prepull_buffs(session)
                 except wcl.WCLRateLimited as e:
                     errors.append(_rate_limited(e))
@@ -626,37 +631,43 @@ async def _backfill_realms(session):
         db.save_realms(code, {a['name']: a.get('server') for a in actors if a.get('type') == 'Player'})
 
 
-APPLIED_HOTS_PER_RUN = 6
+HOT_COUNTS_PER_RUN = 6
 
 
-async def _backfill_applied_hots(session):
+async def _backfill_hot_counts(session):
     """
-    Pulls synced before buffs put out under another name than the cast were kept (throughput.APPLIES: a Merithra's
-    Blessing Evoker's Reversions): just those players' buffs-on-others table again, a few pulls per run.
+    Pulls synced before the HoTs on others were counted from the buff events (throughput.hots_out - WCL's uptime in
+    their place was neither a count nor on others only: a monk's own Mana Tea showed as out on the raid): the
+    healers' buffs-on-others tables and their buff events again, a few pulls per run, newest first. Buffs put out
+    under another name than the cast (throughput.APPLIES: a Merithra's Blessing Evoker's Reversions) come with it.
     """
     from . import throughput
-    for pull in db.pulls_missing_applied_hots(sorted(throughput.APPLIES), APPLIED_HOTS_PER_RUN):
+    for pull in db.pulls_missing_hot_counts(HOT_COUNTS_PER_RUN):
         if not await _budget_ok(session):
             return
         code, fight_id, extras = pull['report_code'], pull['fight_id'], pull['extras'] or {}
         players = extras.get('players') or {}
-        who = [n for n, row in players.items() if set(row.get('casts') or {}) & set(throughput.APPLIES)]
-        if who:
-            try:
-                ids = await wcl.get_actor_ids(session, code)
-                aids = [ids[n] for n in who if n in ids]
-                tables = await wcl.get_player_tables(session, code, fight_id, aids, others=aids)
-            except wcl.WCLRateLimited:
-                raise
-            except wcl.WCLError as e:
-                logger.info(f"[RAIDS] Buffs on others for {code}#{fight_id} not fetched again: {e}")
-                continue
-            duration = extras.get('duration') or (pull['end_ms'] - pull['start_ms'])
-            for n in who:
-                table = (tables.get(ids.get(n)) or {}).get('on_others')
-                if table is not None:
-                    players[n]['on_others'] = throughput.on_others(table, duration, players[n].get('casts') or {})
-        extras['applied_hots'] = True
+        duration = extras.get('duration') or (pull['end_ms'] - pull['start_ms'])
+        who = [n for n, row in players.items() if row.get('on_others') is not None]
+        try:
+            ids = await wcl.get_actor_ids(session, code)
+            aids = [ids[n] for n in who if n in ids]
+            tables = await wcl.get_player_tables(session, code, fight_id, aids, others=aids) if aids else {}
+            hots = {ids[n]: found for n in who if n in ids
+                    for found in [throughput.on_others((tables.get(ids[n]) or {}).get('on_others'), duration,
+                                                       players[n].get('casts') or {})] if found}
+            events = await wcl.get_events(session, code, fight_id, 'Buffs', throughput.hots_filter(
+                hots, {a['id'] for found in hots.values() for a in found})) if hots else []
+        except wcl.WCLRateLimited:
+            raise
+        except wcl.WCLError as e:
+            logger.info(f"[RAIDS] Buffs on others for {code}#{fight_id} not counted: {e}")
+            continue
+        for n in who:
+            if n in ids and (tables.get(ids[n]) or {}).get('on_others') is not None:
+                players[n]['on_others'] = throughput.hots_out(events, ids[n], hots.get(ids[n], []), set(ids.values()),
+                                                              pull['start_ms'], pull['end_ms'])
+        extras.update(hots_counted=True, applied_hots=True)
         db.set_pull_extras(code, fight_id, extras)
 
 

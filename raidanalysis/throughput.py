@@ -140,7 +140,11 @@ def auras(table, fight_start, duration, kind, keep=()):
 
 
 ON_OTHERS_SPECS = {'Augmentation'}  # besides healers: specs whose key buffs go on others (Ebon Might, Prescience)
-MIN_ON_OTHERS = 0.1                 # a buff on others covering less of the raid than this on average isn't kept
+MIN_ON_OTHERS = 0.1                 # WCL's table: a buff up less than this (a share - see on_others) isn't looked at
+# Counted from the events (hots_out): a buff of yours that lands on fewer other players than this is one on yourself
+# (Mana Tea, Thunder Focus Tea - the table mixes them in), and one with fewer out than this on average isn't kept out
+MIN_OTHER_TARGETS = 2
+MIN_OUT_ON_OTHERS = 0.3
 
 
 def wants_on_others(player):
@@ -150,10 +154,10 @@ def wants_on_others(player):
 
 def on_others(table, duration, cast):
     """
-    The buffs a player kept on anyone (their own spells only: cast = their Casts table's names) ->
-    [{'id', 'name', 'uptime'}]: WCL's uptime averaged over every player in the fight, so uptime / duration is the
-    share of the raid that had it - times the raid's size, how many were out on average (WowAnalyzer's "average
-    Renewing Mists": 13.6 out on 20 players shows here as 0.68 - checked against a raw combat log).
+    The buffs a player put on anyone, themselves included (their own spells only: cast = their Casts table's
+    names) -> [{'id', 'name', 'uptime'}]: the candidates hots_out() counts from the events. WCL's uptime here is
+    neither a count nor on others only (13.6 Renewing Mists out on 20 players shows as 0.68, and Mana Tea - on the
+    monk alone - is in it too), so it only picks which buffs to look at.
     """
     best = {}
     own = own_auras(cast)  # their own spells - and what they apply under another name (APPLIES)
@@ -165,6 +169,51 @@ def on_others(table, duration, cast):
         if uptime / duration >= MIN_ON_OTHERS and uptime > best.get(name, {}).get('uptime', 0):
             best[name] = {'id': a['guid'], 'name': name, 'uptime': uptime}
     return sorted(best.values(), key=lambda a: -a['uptime'])
+
+
+def hots_filter(caster_ids, candidates):
+    """The Buffs events filter for hots_out(): these players' applications and removals of their candidate buffs."""
+    return (f"source.id in ({','.join(str(int(i)) for i in sorted(caster_ids))}) "
+            f"and ability.id in ({','.join(str(int(i)) for i in sorted(candidates))}) "
+            f'and type in ("applybuff", "removebuff")')
+
+
+def hots_out(events, caster_id, candidates, player_ids, start, end):
+    """
+    A player's buffs on players, counted from their applybuff / removebuff events (candidates: on_others()) ->
+    [{'id', 'name', 'out', 'others'}]: out - how many were up on average over the pull, on anyone, themselves too
+    (WowAnalyzer's "average Renewing Mists"); others - how many other players it landed on. Only the ones that
+    really go out on others: on at least MIN_OTHER_TARGETS other players, MIN_OUT_ON_OTHERS out on average. Pets
+    don't count (player_ids: the report's players), and a buff up before the pull counts from its start.
+    """
+    from .analyzer import _event_ability
+    names = {c['id']: c['name'] for c in candidates}
+    since, up_ms, others = {}, {}, {}
+    for e in sorted(events, key=lambda e: e.get('timestamp') or 0):
+        ability, target = _event_ability(e), e.get('targetID')
+        if e.get('sourceID') != caster_id or ability not in names or target not in player_ids:
+            continue
+        name, t = names[ability], min(max(e.get('timestamp') or start, start), end)
+        if e.get('type') == 'applybuff':
+            since.setdefault((ability, target), t)
+        elif e.get('type') == 'removebuff':
+            up_ms[name] = up_ms.get(name, 0) + t - since.pop((ability, target), start)
+        else:
+            continue
+        if target != caster_id:
+            others.setdefault(name, set()).add(target)
+    for (ability, _), t in since.items():
+        up_ms[names[ability]] = up_ms.get(names[ability], 0) + end - t
+    duration = end - start
+    if duration <= 0:
+        return []
+    first_id = {}
+    for c in candidates:
+        first_id.setdefault(c['name'], c['id'])
+    rows = [{'id': first_id[name], 'name': name, 'out': ms / duration, 'others': len(others.get(name, ()))}
+            for name, ms in up_ms.items()]
+    return sorted((r for r in rows if r['others'] >= MIN_OTHER_TARGETS and r['out'] >= MIN_OUT_ON_OTHERS),
+                  key=lambda r: -r['out'])
 
 
 def boss_debuffs(tables, fight_start, duration):
@@ -317,13 +366,20 @@ def kept_buffs(table, start, duration, cast, tracked):
             if _worth_keeping(a, cast, tracked, prepull)]
 
 
+def hot_candidates(per_player, duration):
+    """{actor id: on_others() candidates} of the players whose buffs-on-others table was fetched (healers...)."""
+    return {aid: found for aid, tables in per_player.items() if tables.get('on_others') is not None
+            for found in [on_others(tables['on_others'], duration, cast_counts(tables.get('casts')))] if found}
+
+
 def build_extras(fight, roster, names_by_id, extras, per_player, parses, resource_events=(), proc_events=(),
-                 tracked=frozenset(), detail=True):
+                 tracked=frozenset(), detail=True, hot_events=()):
     """
     analysis['extras'] for one pull. roster: analysis['players']; extras: wcl.get_fight_extras();
     per_player: wcl.get_player_tables() by actor id; parses: {name: {'rank', 'bracket', 'amount'}};
     resource_events: the pull's resourcechange events; proc_events: self-buff events of proc_candidates();
-    tracked: the Cooldown Manager's buff ids (gamedata.py) - procs, enchants and others' buffs aren't kept.
+    tracked: the Cooldown Manager's buff ids (gamedata.py) - procs, enchants and others' buffs aren't kept;
+    hot_events: the Buffs events of hot_candidates() (hots_filter) - the HoTs on others are counted from them.
     """
     start = fight['startTime']
     duration = fight['endTime'] - start
@@ -351,7 +407,8 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
             'casts': cast,
             'resources': gained.get(name),
             'procs': procs.get(name) or {},
-            'on_others': (on_others(tables['on_others'], duration, cast or {})
+            'on_others': (hots_out(hot_events, ids_by_name.get(name), on_others(tables['on_others'], duration, cast or {}),
+                                   set(names_by_id), start, fight['endTime'])
                           if tables.get('on_others') is not None else None),
         }
     raid = {}
@@ -363,8 +420,9 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
     # healer_parses: healers' parses are their healing parse (older pulls: their damage one, fixed by a backfill)
     # applied_hots: buffs on others under another name than the cast (APPLIES) are in (older pulls: backfilled)
     # prepull_buffs: self-buffs cast before the pull are in (older pulls: backfilled - Moonkin Form showed 0%)
+    # hots_counted: buffs on others are counted from the events, on others only (older pulls: WCL's uptime - backfilled)
     return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'healer_parses': True, 'applied_hots': True,
-            'prepull_buffs': True, 'duration': duration,
+            'prepull_buffs': True, 'hots_counted': True, 'duration': duration,
             'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 
@@ -554,8 +612,9 @@ def uptime(numbered, name, top, tracked=frozenset(), talents=None):
     for p in top:
         spells.update((p.get('cast_names') or {}).keys())
     # A HoT like Renewing Mist is about how many are out on the raid (on_others_rows), not the one on you.
-    on_raid = {a['name'] for p in top for a in p.get('on_others') or []}
-    on_raid |= {a['name'] for _, _, me, _ in mine for a in me.get('on_others') or []}
+    # Counted ones only: WCL's table had the monk's own Mana Tea in it too (hots_out)
+    on_raid = {a['name'] for p in top if p.get('hots_counted') for a in p.get('on_others') or []}
+    on_raid |= {a['name'] for _, _, me, ex in mine if ex.get('hots_counted') for a in me.get('on_others') or []}
     seen = {}
     for i, p in enumerate(top):
         if not p.get('duration'):
@@ -663,29 +722,28 @@ def on_others_rows(numbered, name, top, talents=None):
     HoTs and buffs kept on others, as the average number out over the fight, next to the top players
     (median of those who use it): [{'id', 'name', 'ours', 'top', 'top_users', 'verdict', 'not_taken'}] -
     not_taken: never out, and a talent you didn't take (see uptime()) - no verdict, listed last.
-    The stored uptimes are shares of the raid (on_others()): times each fight's number of players, a count.
-    Top players fetched before their raid's size was kept don't count until they're fetched again.
+    Counted from the buff events (hots_out): pulls and top players from before that (WCL's uptime: neither a count
+    nor on others only) don't count until they're fetched again.
     """
-    mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None]
-    top = [p for p in top or [] if p.get('on_others') is not None and p.get('duration') and p.get('raid_size')]
+    mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None and m[3].get('hots_counted')]
+    top = [p for p in top or [] if p.get('on_others') is not None and p.get('hots_counted')]
     if not mine:
         return []
     need = min(3, len(top))
     total = sum(ex.get('duration') or 0 for _, _, _, ex in mine)
     ours, ids = {}, {}
     for _, _, me, ex in mine:
-        players = len(ex.get('players') or {}) or 1  # the pull's whole roster (build_extras)
         for a in me['on_others']:
             if a['name'] in RAID_WIDE_AURAS:
                 continue
-            ours[a['name']] = ours.get(a['name'], 0) + a['uptime'] * players
+            ours[a['name']] = ours.get(a['name'], 0) + a['out'] * (ex.get('duration') or 0)
             ids.setdefault(a['name'], a['id'])
     tops = {}
     for p in top:
         for a in p['on_others']:
             if a['name'] in RAID_WIDE_AURAS:
                 continue
-            tops.setdefault(a['name'], []).append(a['uptime'] / p['duration'] * p['raid_size'])
+            tops.setdefault(a['name'], []).append(a['out'])
             ids.setdefault(a['name'], a['id'])
     our_casts = _cast_names(mine)
     rows = []

@@ -61,8 +61,10 @@ CATEGORY_LABELS = {THROUGHPUT: 'Damage / healing cooldowns', POTION: 'Combat pot
 CATEGORY_ORDER = (THROUGHPUT, POTION, 'personal', TRINKET, 'external', 'raid', 'utility', ROTATIONAL)
 POTION_GROUP = 'Combat potion'  # any combat potion counts - which one is a stat choice
 VERDICT_RANK = ['off', 'ok', 'mostly', 'good']  # worst first
-# Verdicts only for what a player controls alone; externals and raid cooldowns depend on the raid's plan.
-JUDGED = (THROUGHPUT, POTION, 'personal', TRINKET, ROTATIONAL)
+# Verdicts only for what a player controls alone; raid cooldowns depend on the raid's plan. Externals (Life
+# Cocoon, Ironbark, Power Infusion) are judged on how often they're used - when depends on who needs one (RATE_ONLY).
+JUDGED = (THROUGHPUT, POTION, 'personal', TRINKET, ROTATIONAL, 'external')
+RATE_ONLY = ('external',)
 
 # Major or rotational (ability_kind): a damage / healing ability is rotational when the top players
 # cast it more often than its cooldown allows (procs and resets: Crimson Scourge, charges), or when
@@ -74,8 +76,9 @@ ALWAYS_MAJOR_MS = 90000
 OVER_COOLDOWN_USAGE = 1.15
 MIN_AGREED_SHARE = 0.5
 MIN_CASTS_TO_SORT = 6        # fewer top-player casts than this: too little to tell, stays major
-# Rotational whatever the numbers say, for every spec (officers can still override per spec).
-ROTATIONAL_NAMES = {'Immolation Aura', 'Consuming Fire', 'Death and Decay'}
+# Rotational whatever the numbers say, for every spec (officers can still override per spec) - Mana Tea too, which
+# has no cooldown to find it by (it's drunk on stacks) but is kept rolling all the same.
+ROTATIONAL_NAMES = {'Immolation Aura', 'Consuming Fire', 'Death and Decay', 'Mana Tea'}
 # Rotational verdicts: your casts per minute as a share of the top players'.
 ROTATIONAL_GOOD, ROTATIONAL_OK = 0.85, 0.65
 
@@ -161,6 +164,8 @@ def category(spell_id, info):
         return cooldowns.COOLDOWNS[name]
     if name in NOT_MAJOR:
         return None
+    if name in ROTATIONAL_NAMES:
+        return THROUGHPUT  # whatever its cooldown (Mana Tea has none): ability_kind() makes it rotational
     meta = (info or {}).get('meta') or ''
     cd = cooldown_ms(meta)
     if not cd or cd < MAJOR_COOLDOWN_MS:
@@ -255,10 +260,10 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
                         'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
-                        'raid_size': fight.get('raid_size'),
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
                         'lust': cooldowns.lust_bands(fight.get('lust'), fight['start'], fight['end'], fight.get('actor_id')),
-                        'resources': resources, 'procs': procs, 'on_others': on_others, 'targets': targets})
+                        'resources': resources, 'procs': procs, 'on_others': on_others, 'hots_counted': True,
+                        'targets': targets})
     who = f"{hero + ' ' if hero else ''}{spec} {class_name}"
     if wrong_spec:
         logger.warning(f"[RAIDS] Top {who} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
@@ -276,8 +281,9 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
 async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
     """
     A top player's self-buffs, debuffs on the bosses, casts per ability, resources and wasted procs
-    and for healers / Augmentation the buffs they keep on others (throughput.py): (auras, cast names,
-    resources, procs, on_others, damage by target) - empty ones when WCL won't say.
+    and for healers / Augmentation the buffs they keep on others, counted from their buff events
+    (throughput.hots_out): (auras, cast names, resources, procs, on_others, damage by target) - empty ones
+    when WCL won't say.
     """
     from . import gamedata, throughput, wcl
     aid = fight.get('actor_id')
@@ -289,6 +295,11 @@ async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
         tables = (await wcl.get_player_tables(session, code, fight_id, [aid], fight.get('boss_ids') or [],
                                               casts=True, others=others, targets=True)).get(int(aid)) or {}
         auras, cast_names, on_others = throughput.top_auras(tables, fight['start'], duration)
+        if on_others:  # the candidates: counted from their events, on players only (not pets)
+            hot_events = await wcl.get_events(session, code, fight_id, 'Buffs',
+                                              throughput.hots_filter([aid], {a['id'] for a in on_others}))
+            player_ids = set((await wcl.get_actor_ids(session, code)).values())
+            on_others = throughput.hots_out(hot_events, aid, on_others, player_ids, fight['start'], fight['end'])
         events = await wcl.get_events(session, code, fight_id, 'Resources',
                                       f'type = "resourcechange" and target.name = "{name}"')
         resources = throughput.resources(events, {int(aid): ranking['name']}, fight['end']).get(ranking['name'])
@@ -542,8 +553,8 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
         if kind == HIDE:
             continue
         cat = ROTATIONAL if kind == ROTATIONAL else g['category']
-        if kind == ROTATIONAL:
-            wins = []  # pressed whenever it's ready: there are no moments to line up with
+        if kind == ROTATIONAL or cat in RATE_ONLY:
+            wins = []  # pressed whenever it's ready (or needed): there are no moments to line up with
         for w in wins:
             w['tolerance'] = tolerance(w['spread'], effect, cooldown)
             w.update(considered=0, hits=0, deltas=[], skipped=0)
@@ -706,6 +717,8 @@ def notes(rows, spec_label, limit=3):
         elif r['verdict'] == 'off':
             bad.append(f"{r['name']}: {r['ours_per_min'] * 5:.1f}× per 5 min - the top {spec_label} "
                        f"{r['top_per_min'] * 5:.1f}×")
+        elif r['verdict'] == 'good' and r['category'] in RATE_ONLY:
+            good.append(f"{r['name']}: used as often as the top {spec_label}")
         elif r['verdict'] == 'good':
             good.append(f"{r['name']}: lined up with the top {spec_label}"
                         + (f" ({share} of the time)" if r['considered'] >= 2 else ''))

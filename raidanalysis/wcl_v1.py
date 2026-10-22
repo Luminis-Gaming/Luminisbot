@@ -273,7 +273,5 @@ async def get_player_fight(session, code, fight_id, name):
     entry = wcl._details_entry({'playerDetails': details}, name) or {}
     return {'start': start, 'end': end,
             'phases': [{'id': p['id'], 'start': p['startTime'] - start} for p in fight.get('phases') or []],
-            'casts': casts, 'lust': lust, 'spec': wcl._spec_in_details({'playerDetails': details}, name),
-            'raid_size': wcl.players_in_details({'playerDetails': details}),
-            'actor_id': entry.get('id'),
+            'casts': casts, 'lust': lust, 'spec': wcl._spec_in_details({'playerDetails': details}, name),            'actor_id': entry.get('id'),
             'boss_ids': wcl.boss_ids(await _table(session, code, 'damage-taken', start, end, hostility=1))}

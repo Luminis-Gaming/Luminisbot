@@ -1381,6 +1381,31 @@ class TestSpecSwap(unittest.TestCase):
                          [(50, 'Annihilator'), (51, 'Void-Scarred'), (60, 'Annihilator'), (61, 'Void-Scarred')])
 
 
+class TestMonkCooldowns(unittest.TestCase):
+    """Life Cocoon is judged on how often it's used (not when); Mana Tea - no cooldown, drunk on stacks - is kept rolling."""
+
+    def test_external_on_rate_and_mana_tea_rolling(self):
+        from raidanalysis import benchmarks
+        spells = {116849: {'name': 'Life Cocoon', 'meta': '2.4% of base mana · 40 yd range · Instant · 2 min cooldown'},
+                  115294: {'name': 'Mana Tea', 'meta': ''}}
+        self.assertEqual(benchmarks.category(115294, spells[115294]), benchmarks.THROUGHPUT)
+        cocoons = [[30000, 116849], [130000, 116849], [230000, 116849]]
+        teas = [[t, 115294] for t in range(20000, 300000, 45000)]
+        top = [{'duration': 300000, 'phases': [], 'casts': sorted(cocoons + teas)} for _ in range(5)]
+        pull = {'number': 1, 'duration': 300000, 'phases': [], 'casts': sorted([[31000, 116849]] + teas),
+                'cast_ids': {116849, 115294}}
+        rows = {r['name']: r for r in benchmarks.compare([pull], top, spells)}
+        cocoon, tea = rows['Life Cocoon'], rows['Mana Tea']
+        self.assertEqual((cocoon['category'], cocoon['verdict'], cocoon['windows'], cocoon['considered']),
+                         ('external', 'off', [], 0))  # once where they cocoon three times - whenever it was
+        self.assertEqual((tea['category'], tea['verdict']), (benchmarks.ROTATIONAL, 'good'))
+        notes = [n['text'] for n in benchmarks.notes(list(rows.values()), 'Mistweaver Monks')]
+        self.assertIn('Life Cocoon: 1.0× per 5 min - the top Mistweaver Monks 3.0×', notes)
+        pull['casts'] = sorted(cocoons + teas)
+        good = benchmarks.notes(benchmarks.compare([pull], top, spells), 'Mistweaver Monks')
+        self.assertIn('Life Cocoon: used as often as the top Mistweaver Monks', [n['text'] for n in good])
+
+
 class TestTimingMargin(unittest.TestCase):
     """12 s early on a 15 s buff the top players press within a second of each other is not 'in line'."""
 
@@ -1523,10 +1548,10 @@ class TestTalents(unittest.TestCase):
         from raidanalysis.gamedata import Talents
         me = {'auras': [], 'casts': {'Vivify': 50}, 'on_others': []}
         numbered = [(1, {'fight_id': 1, 'start_ms': 0, 'end_ms': 300000,
-                         'analysis': {'extras': {'duration': 300000, 'players': {'Boops': me}}}})]
+                         'analysis': {'extras': {'duration': 300000, 'hots_counted': True, 'players': {'Boops': me}}}})]
         top = [{'duration': 300000, 'auras': [{'id': 1, 'name': 'Healing Elixir', 'kind': 'buff', 'uptime': 200000}],
-                'cast_names': {'Healing Elixir': 5}, 'on_others': [{'id': 2, 'name': 'Spiritfont', 'uptime': 30000}],
-                'raid_size': 20}
+                'cast_names': {'Healing Elixir': 5}, 'on_others': [{'id': 2, 'name': 'Spiritfont', 'out': 2.0}],
+                'hots_counted': True}
                for _ in range(5)]
         # Talents unknown: never up and never cast - most likely not talented, no verdict
         up = throughput.uptime(numbered, 'Boops', top)
@@ -1862,37 +1887,51 @@ class TestHotsOnOthers(unittest.TestCase):
 
     def test_average_active_and_not_self_uptime(self):
         """
-        WCL's uptime of a buff on others is averaged over the raid's players: 13.6 Renewing Mists out on 20 players is
-        0.68 (a raw combat log said 13.6) - shown as the count, for us and for the top players alike.
+        Counted from the buff events: Renewing Mists out on anyone, the monk too - and Mana Tea, on the monk alone,
+        isn't a buff on others at all (WCL's table mixes it in, and its uptime there is no count either).
         """
         from raidanalysis import throughput
         roster = [{'name': 'Boops', 'role': 'healer'}] + [{'name': f'P{i}', 'role': 'dps'} for i in range(19)]
+        names_by_id = {1: 'Boops', **{i + 2: f'P{i}' for i in range(19)}}
         tables = {'damageDone': {'entries': []}, 'healing': {'entries': [{'name': 'Boops', 'total': 1, 'activeTime': 1}]}}
         per_player = {1: {'buffs': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 180000}]},
-                          'debuffs': [], 'casts': {'entries': [{'name': 'Renewing Mist', 'total': 50}]},
+                          'debuffs': [], 'casts': {'entries': [{'name': 'Renewing Mist', 'total': 50},
+                                                                {'name': 'Mana Tea', 'total': 6}]},
                           'on_others': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 0.3 * 300000},
+                                                  {'guid': 115867, 'name': 'Mana Tea', 'totalUptime': 0.4 * 300000},
                                                   {'guid': 2, 'name': 'Power Infusion', 'totalUptime': 60000}]}}}
+        self.assertEqual(sorted(c['id'] for c in throughput.hot_candidates(per_player, 300000)[1]), [115867, 119611])
+
+        def buff(t, kind, target, ability=119611, source=1):
+            return {'timestamp': t, 'type': kind, 'sourceID': source, 'targetID': target, 'abilityGameID': ability}
+        events = [buff(100000, 'removebuff', 2)]                          # on P0 since before the pull: 100 s
+        for target in range(3, 9):                                        # six more for the whole fight: 6 x 300 s
+            events.append(buff(0, 'applybuff', target))
+        events += [buff(50000, 'applybuff', 1), buff(110000, 'removebuff', 1),   # on the monk: 60 s
+                   buff(0, 'applybuff', 50), buff(300000, 'removebuff', 50),     # a pet: doesn't count
+                   buff(0, 'applybuff', 5, source=9),                            # someone else's
+                   buff(0, 'applybuff', 1, 115867), buff(120000, 'removebuff', 1, 115867)]  # Mana Tea, on the monk
         fight = {'id': 1, 'startTime': 0, 'endTime': 300000, 'kill': True}
-        extras = throughput.build_extras(fight, roster, {1: 'Boops'}, tables, per_player, {})
+        extras = throughput.build_extras(fight, roster, names_by_id, tables, per_player, {}, hot_events=events)
         self.assertTrue(throughput.wants_on_others(roster[0]))
-        self.assertEqual([a['name'] for a in extras['players']['Boops']['on_others']], ['Renewing Mist'])  # own spells
+        self.assertTrue(extras['hots_counted'])
+        mine = extras['players']['Boops']['on_others']
+        self.assertEqual([(a['name'], a['others'], round(a['out'], 6)) for a in mine],
+                         [('Renewing Mist', 7, round((100 + 6 * 300 + 60) / 300, 6))])  # not Mana Tea, not the trinket
         numbered = [(1, {'fight_id': 1, 'kill': True, 'start_ms': 0, 'end_ms': 300000,
                          'analysis': {'players': roster, 'extras': extras}})]
-        top = [{'duration': 300000, 'on_others': [{'id': 119611, 'name': 'Renewing Mist', 'uptime': 0.4 * 300000}],
+        top = [{'duration': 300000, 'on_others': [{'id': 119611, 'name': 'Renewing Mist', 'out': 8.0, 'others': 19}],
                 'auras': [{'id': 119611, 'name': 'Renewing Mist', 'kind': 'buff', 'uptime': 150000}],
-                'cast_names': {'Renewing Mist': 55}, 'raid_size': 20}] * 5
+                'cast_names': {'Renewing Mist': 55}, 'hots_counted': True}] * 5
         row = throughput.on_others_rows(numbered, 'Boops', top)[0]
-        self.assertEqual((row['name'], round(row['ours'], 6), round(row['top'], 6), row['verdict']),
-                         ('Renewing Mist', 6.0, 8.0, 'ok'))
+        self.assertEqual((row['name'], round(row['ours'], 2), row['top'], row['verdict']),
+                         ('Renewing Mist', 6.53, 8.0, 'ok'))
         self.assertEqual(throughput.uptime(numbered, 'Boops', top), [])  # no "uptime on you" tile for it
-        # Top players fetched before their raid's size was kept: no count to compare with until fetched again
-        old = [{k: v for k, v in p.items() if k != 'raid_size'} for p in top]
+        # Top players and pulls from before the counting: WCL's uptime, nothing to compare until fetched again
+        old = [{k: v for k, v in p.items() if k != 'hots_counted'} for p in top]
         self.assertIsNone(throughput.on_others_rows(numbered, 'Boops', old)[0]['top'])
-        details = {'data': {'playerDetails': {'tanks': [{'name': 'T'}], 'healers': [{'name': 'H'}],
-                                              'dps': [{'name': 'D1'}, {'name': 'D2'}]}}}
-        from raidanalysis import wcl
-        self.assertEqual(wcl.players_in_details(details), 4)
-        self.assertIsNone(wcl.players_in_details({}))
+        del extras['hots_counted']
+        self.assertEqual(throughput.on_others_rows(numbered, 'Boops', top), [])
 
     def test_raid_buff_missing(self):
         """Nobody of the class kept the raid buff up: every one of them hears it. Two priests sharing it is fine."""
@@ -1983,10 +2022,11 @@ class TestHotsOnOthers(unittest.TestCase):
         rows = throughput.uptime(numbered, 'Boops', top)
         self.assertEqual([r['name'] for r in rows], ['Voidform'])                   # your own buffs still count
         # ...and the same in "HoTs & buffs on others": the priest who didn't cast it isn't "Low"
-        extras['players']['Boops']['on_others'] = [{'id': 21562, 'name': 'Power Word: Fortitude', 'uptime': 0},
-                                                   {'id': 17, 'name': 'Power Word: Shield', 'uptime': 300000}]
+        extras['hots_counted'] = True
+        extras['players']['Boops']['on_others'] = [{'id': 21562, 'name': 'Power Word: Fortitude', 'out': 0},
+                                                   {'id': 17, 'name': 'Power Word: Shield', 'out': 1.0}]
         for p in top:
-            p['on_others'] = [{'id': 21562, 'name': 'Power Word: Fortitude', 'uptime': 300000}]
+            p.update(on_others=[{'id': 21562, 'name': 'Power Word: Fortitude', 'out': 20.0}], hots_counted=True)
         self.assertEqual([r['name'] for r in throughput.on_others_rows(numbered, 'Boops', top)], ['Power Word: Shield'])
         self.assertNotIn("Hunter's Mark", throughput.RAID_WIDE_AURAS)               # one per hunter: still theirs
 
@@ -3384,12 +3424,12 @@ class TestUpgradedHots(unittest.TestCase):
 
     def test_graded_separately(self):
         from raidanalysis import throughput
-        top = [{'duration': self.DUR, 'on_others': [{'id': 366155, 'name': 'Reversion', 'uptime': 0.8 * self.DUR},
-                                                    {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.7 * self.DUR}],
-                'raid_size': 1} for _ in range(3)]
-        mine = [{'id': 367364, 'name': 'Reversion', 'uptime': 0.75 * self.DUR},
-                {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.72 * self.DUR}]
-        pull = (1, {'analysis': {'extras': {'detail': True, 'duration': self.DUR, 'players': {
+        top = [{'duration': self.DUR, 'on_others': [{'id': 366155, 'name': 'Reversion', 'out': 0.8},
+                                                    {'id': 1256579, 'name': "Merithra's Blessing", 'out': 0.7}],
+                'hots_counted': True} for _ in range(3)]
+        mine = [{'id': 367364, 'name': 'Reversion', 'out': 0.75},
+                {'id': 1256579, 'name': "Merithra's Blessing", 'out': 0.72}]
+        pull = (1, {'analysis': {'extras': {'detail': True, 'duration': self.DUR, 'hots_counted': True, 'players': {
             'Boopsproops': {'on_others': mine, 'casts': {"Merithra's Blessing": 30}}}}}})
         rows = {r['name']: r for r in throughput.on_others_rows([pull], 'Boopsproops', top)}
         self.assertEqual(set(rows), {'Reversion', "Merithra's Blessing"})
@@ -3398,7 +3438,8 @@ class TestUpgradedHots(unittest.TestCase):
         self.assertFalse(rows['Reversion']['not_taken'])  # never cast by that name, but theirs
         self.assertNotEqual(rows['Reversion']['verdict'], 'off')
 
-    def test_backfill_fetches_the_table_again(self):
+    def test_backfill_counts_the_hots_again(self):
+        """Pulls from before the counting: the healers' table and buff events again - Reversions included."""
         import asyncio
         from unittest import mock
         from raidanalysis import db, sync, wcl
@@ -3406,7 +3447,7 @@ class TestUpgradedHots(unittest.TestCase):
             'Boopsproops': {'casts': {"Merithra's Blessing": 30},
                             'on_others': [{'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.72 * self.DUR}]},
             'Futhark': {'casts': {'Aimed Shot': 50}, 'on_others': None}}}
-        saved = []
+        saved, filters = [], []
         table = {'auras': [{'guid': 367364, 'name': 'Reversion', 'totalUptime': 0.75 * self.DUR},
                            {'guid': 1256579, 'name': "Merithra's Blessing", 'totalUptime': 0.72 * self.DUR}]}
 
@@ -3414,20 +3455,27 @@ class TestUpgradedHots(unittest.TestCase):
             return True
 
         async def actor_ids(session, code):
-            return {'Boopsproops': 7, 'Futhark': 8}
+            return {'Boopsproops': 7, 'Futhark': 8, 'Tank': 9, 'Healer': 10}
 
         async def player_tables(session, code, fight_id, aids, bosses=(), casts=False, others=(), targets=False):
             self.assertEqual(aids, [7])  # only the Evoker
             return {7: {'on_others': table}}
-        with mock.patch.object(db, 'pulls_missing_applied_hots', lambda casts, limit: [
+
+        async def events(session, code, fight_id, data_type, expression, **kwargs):
+            filters.append(expression)
+            return [{'timestamp': 0, 'type': 'applybuff', 'sourceID': 7, 'targetID': t, 'abilityGameID': ability}
+                    for t in (8, 9, 10) for ability in (367364, 1256579)]
+        with mock.patch.object(db, 'pulls_missing_hot_counts', lambda limit: [
                 {'report_code': 'C', 'fight_id': 14, 'start_ms': 0, 'end_ms': self.DUR, 'extras': extras}]), \
                 mock.patch.object(db, 'set_pull_extras', lambda code, fid, ex: saved.append(ex)), \
                 mock.patch.object(sync, '_budget_ok', ok), mock.patch.object(wcl, 'get_actor_ids', actor_ids), \
-                mock.patch.object(wcl, 'get_player_tables', player_tables):
-            asyncio.run(sync._backfill_applied_hots(None))
-        names = {a['name'] for a in saved[0]['players']['Boopsproops']['on_others']}
-        self.assertEqual(names, {'Reversion', "Merithra's Blessing"})
-        self.assertTrue(saved[0]['applied_hots'])
+                mock.patch.object(wcl, 'get_player_tables', player_tables), mock.patch.object(wcl, 'get_events', events):
+            asyncio.run(sync._backfill_hot_counts(None))
+        self.assertEqual(filters, ['source.id in (7) and ability.id in (367364,1256579) '
+                                   'and type in ("applybuff", "removebuff")'])
+        counted = {a['name']: (a['out'], a['others']) for a in saved[0]['players']['Boopsproops']['on_others']}
+        self.assertEqual(counted, {'Reversion': (3.0, 3), "Merithra's Blessing": (3.0, 3)})
+        self.assertTrue(saved[0]['hots_counted'] and saved[0]['applied_hots'])
 
 
 class TestIcons(unittest.TestCase):

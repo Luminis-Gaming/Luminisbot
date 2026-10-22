@@ -551,27 +551,28 @@ def save_healer_parses(code, fight_id, parses):
          (Json(analysis), code, fight_id))
 
 
-_BEFORE_APPLIED_HOTS = """
+_BEFORE_HOT_COUNTS = """
     p.analysis ? 'extras' AND NOT p.analysis ? 'archived'
-    AND NOT COALESCE((p.analysis->'extras'->>'applied_hots')::boolean, false)
+    AND NOT COALESCE((p.analysis->'extras'->>'hots_counted')::boolean, false)
 """
 
 
-def pulls_missing_applied_hots(casts, limit):
+def pulls_missing_hot_counts(limit):
     """
-    Kept pulls synced before buffs put out under another name (throughput.APPLIES) were kept, where someone cast
-    one of casts: {'report_code', 'fight_id', 'start_ms', 'end_ms', 'extras'}, newest first. The ones where nobody
-    did are just marked done, so they aren't looked through again.
+    Kept pulls synced before the HoTs on others were counted from the buff events (throughput.hots_out), where
+    someone has them (a healer's buffs-on-others): {'report_code', 'fight_id', 'start_ms', 'end_ms', 'extras'},
+    newest first. The ones where nobody does are just marked done, so they aren't looked through again.
     """
-    likes = ['%"' + c + '"%' for c in casts]
     _run(f"""
-        UPDATE raid_pulls p SET analysis = jsonb_set(p.analysis, '{{extras,applied_hots}}', 'true'::jsonb)
-        WHERE {_BEFORE_APPLIED_HOTS} AND NOT ((p.analysis->'extras'->'players')::text LIKE ANY(%s))
-    """, (likes,))
+        UPDATE raid_pulls p SET analysis = jsonb_set(p.analysis, '{{extras,hots_counted}}', 'true'::jsonb)
+        WHERE {_BEFORE_HOT_COUNTS} AND NOT EXISTS (
+            SELECT 1 FROM jsonb_each(COALESCE(p.analysis->'extras'->'players', '{{}}'::jsonb)) x
+            WHERE jsonb_typeof(x.value->'on_others') = 'array')
+    """)
     return _run(f"""
         SELECT p.report_code, p.fight_id, p.start_ms, p.end_ms, p.analysis->'extras' AS extras
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
-        WHERE {_BEFORE_APPLIED_HOTS}
+        WHERE {_BEFORE_HOT_COUNTS}
         ORDER BY r.start_time DESC, p.fight_id LIMIT %s
     """, (limit,), fetch='all') or []
 
@@ -1362,12 +1363,12 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                   OR (b.status NOT IN ('error', 'empty') AND b.fetched_at > NOW() - make_interval(days => %s)
                       -- fetched before every top parse's spec was checked, or before their auras and
                       -- casts were kept (uptime / casts per minute), or the lust on them (the cooldowns
-                      -- timeline), or - healers' HoTs on others - before their raid's size was (to count the HoTs
-                      -- out): fetch again
+                      -- timeline), or - healers' HoTs on others - before they were counted from the buff events
+                      -- (throughput.hots_out): fetch again
                       AND (jsonb_array_length(b.players) = 0
                            OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras' AND b.players -> 0 ? 'lust'
                                AND (jsonb_typeof(b.players -> 0 -> 'on_others') IS DISTINCT FROM 'array'
-                                    OR b.players -> 0 ? 'raid_size')))))
+                                    OR b.players -> 0 ? 'hots_counted')))))
         )
         ORDER BY c.last_played DESC
         LIMIT %s
