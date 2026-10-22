@@ -688,7 +688,7 @@ function initCrafting() {
         <td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>${rankPill(r.rank)}
           <div class="item-sub">${esc(r.prof)}${r.per > 1 ? ` · makes ${r.per}` : ''} · <span class="craft-toggle">${open ? 'Hide' : 'Show'} reagents</span></div></div></div></td>
         <td class="r">${coins(r.cost)}</td>
-        <td class="r" data-col="sell">${coins(r.sell * r.per)}${r.per > 1 ? `<span class="realm-tag">${r.per} × ${gold(r.sell)}</span>` : ''}${r.asked ? '<span class="realm-tag">asked, not seen selling</span>' : ''}</td>
+        <td class="r" data-col="sell">${coins(r.sell * r.per)}${r.per > 1 ? `<span class="realm-tag">${r.per} × ${gold(r.sell)}</span>` : ''}${r.asked ? `<span class="realm-tag">asking price · ${r.sold_7d ? `only ${r.sold_7d} sold this week` : 'not seen selling'}</span>` : ''}</td>
         <td class="r"><span class="${r.profit > 0 ? 'gain-text' : 'loss-text'}">${r.profit > 0 ? '+' : '−'}${coins(Math.abs(r.profit))}</span></td>
         <td class="r num" data-col="margin">${r.cost ? `<span class="${margin > 0 ? 'gain-text' : 'loss-text'}">${pct(margin)}</span>` : ''}</td>
         ${sales ? `<td class="r num" data-col="sold">${r.sold_7d ? perDay(r.sold_7d) : '<span class="faint">–</span>'}</td>` : ''}</tr>
@@ -1058,7 +1058,7 @@ function initItem() {
   };
 
   // estimated sales of each roll on each realm over the last 7 days: [roll, realm, sold, revenue]
-  const sales = (D.sales || []).map(([vi, cr, n, rev]) => ({v: it.variants[vi], cr, n, rev})).filter(s => s.v);
+  const sales = (D.sales || []).map(([vi, cr, n, rev]) => ({v: it.variants[vi], cr, n: +n, rev: +rev})).filter(s => s.v);
   function salesFor(f) {
     const byCr = {};
     let n = 0, rev = 0;

@@ -363,7 +363,7 @@ def _item_data(item_id):
     history = _history(item_id)
     from datetime import date, timedelta
     sales = [[index[r['variant_id']], r['cr'], r['sold'], r['revenue']] for r in db.fetch_all(
-        """SELECT variant_id, cr, sum(sold)::int AS sold, sum(revenue) AS revenue FROM ah_sales
+        """SELECT variant_id, cr, sum(sold)::int AS sold, sum(revenue)::bigint AS revenue FROM ah_sales
            WHERE item_id = %s AND day > %s GROUP BY variant_id, cr""", (item_id, date.today() - timedelta(days=7)))
         if r['variant_id'] in index]
     realm_history = {}
@@ -885,7 +885,7 @@ CRAFTING_BODY = """
       <div class="filter-foot">
         <div class="seg" role="group" aria-label="Reagent and result quality" id="cr-mode"></div>
         <div class="checks">
-          <label class="check"><input type="checkbox" id="cr-sells"> Only what sells (seen selling this week)</label>
+          <label class="check"><input type="checkbox" id="cr-sells"> Only what sells (3 or more sold this week)</label>
           <label class="check"><input type="checkbox" id="cr-profit"> Only profitable</label>
         </div>
       </div>
@@ -953,7 +953,12 @@ def _crafts():
 
 
 def crafting(args):
+    """
+    "Only what sells" and the sale price share one bar: seen selling DEAL_PROVEN_SALES times this week. Below it
+    gear is priced at what's asked (labelled so on the page), and the filter leaves it out.
+    """
     from ..crafting import PROFESSIONS
+    from ..prices import DEAL_PROVEN_SALES
     rows, skipped = _cached('crafts', _crafts)
     mode = 'top' if args.get('mode') == 'top' else 'basic'
     tiers = sorted({r['tier'] for r in rows[mode]}, reverse=True)
@@ -962,7 +967,8 @@ def crafting(args):
     if tier is None and tiers:
         tier = tiers[0]  # the newest expansion unless asked
     picked = [r for r in rows[mode] if (not prof or r['prof'] == prof) and (not tier or r['tier'] == tier)
-              and (args.get('sells') != '1' or r['sold_7d'] > 0) and (args.get('profit') != '1' or r['profit'] > 0)]
+              and (args.get('sells') != '1' or (not r['asked'] and r['sold_7d'] >= DEAL_PROVEN_SALES))
+              and (args.get('profit') != '1' or r['profit'] > 0)]
     picked.sort(key=CRAFT_SORTS.get(args.get('sort'), CRAFT_SORTS['profit']))
     offset = _int(args, 'offset', 0, 100000) or 0
     page = picked[offset:offset + PAGE_SIZE]
