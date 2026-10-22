@@ -97,34 +97,46 @@ async def refresh_if_stale():
 # Talents
 # ============================================================================
 
+CHOICE_NODE = '2'  # TraitNode.Type of a choice node: one of its talents or the other (Revival / Restoral)
+
+
 def talent_rows(entry_csv, definition_csv, node_entry_csv, node_csv, spell_name_csv):
-    """The DB2 tables -> [(entry id, tree id, ability name, name of the ability it replaces or None)]."""
+    """
+    The DB2 tables -> [(entry id, tree id, ability name, name of the ability it replaces or None, choice node id or
+    None)] - the choice node when the talent is one of a choice's options (Invoke Yu'lon / Invoke Chi-Ji).
+    """
     definitions = {}
     for row in csv.DictReader(io.StringIO(definition_csv)):
         if row.get('ID', '').isdigit():
             definitions[row['ID']] = (int(row.get('SpellID') or 0), int(row.get('OverridesSpellID') or 0),
                                       row.get('OverrideName_lang') or '')
-    tree_of_node = {row['ID']: int(row['TraitTreeID']) for row in csv.DictReader(io.StringIO(node_csv))
-                    if row.get('TraitTreeID', '').isdigit()}
-    tree_of_entry = {}
+    tree_of_node, choice_nodes = {}, set()
+    for row in csv.DictReader(io.StringIO(node_csv)):
+        if row.get('TraitTreeID', '').isdigit():
+            tree_of_node[row['ID']] = int(row['TraitTreeID'])
+            if row.get('Type') == CHOICE_NODE:
+                choice_nodes.add(row['ID'])
+    tree_of_entry, node_of_entry = {}, {}
     for row in csv.DictReader(io.StringIO(node_entry_csv)):
         if row.get('TraitNodeID') in tree_of_node:
             tree_of_entry.setdefault(row['TraitNodeEntryID'], tree_of_node[row['TraitNodeID']])
-    entries = {}  # entry id -> (tree, spell id, overridden spell id, display name)
+            node_of_entry.setdefault(row['TraitNodeEntryID'], row['TraitNodeID'])
+    entries = {}  # entry id -> (tree, choice node, spell id, overridden spell id, display name)
     for row in csv.DictReader(io.StringIO(entry_csv)):
         tree, definition = tree_of_entry.get(row.get('ID')), definitions.get(row.get('TraitDefinitionID'))
         if tree and definition and (definition[0] or definition[2]):
-            entries[int(row['ID'])] = (tree, *definition)
-    wanted = {i for _, spell, over, _ in entries.values() for i in (spell, over) if i}
+            node = node_of_entry.get(row['ID'])
+            entries[int(row['ID'])] = (tree, int(node) if node in choice_nodes else None, *definition)
+    wanted = {i for _, _, spell, over, _ in entries.values() for i in (spell, over) if i}
     names = {}
     for row in csv.DictReader(io.StringIO(spell_name_csv)):  # every spell in the game: keep the talents' only
         if row.get('ID', '').isdigit() and int(row['ID']) in wanted:
             names[int(row['ID'])] = row.get('Name_lang') or ''
     out = []
-    for entry, (tree, spell, over, display) in sorted(entries.items()):
+    for entry, (tree, choice, spell, over, display) in sorted(entries.items()):
         name = names.get(spell) or display
         if name:
-            out.append((entry, tree, name, names.get(over) or None))
+            out.append((entry, tree, name, names.get(over) or None, choice))
     return out
 
 
@@ -146,13 +158,21 @@ def hero_rows(entry_csv, node_entry_csv, node_csv, subtree_csv):
 def catalog_from(rows, heroes=None):
     """
     raid_talents rows (+ raid_hero_trees: {entry id: hero tree}) -> {'entries': {entry id: (tree, name, replaces)},
-    'trees': {tree: {ability names}}, 'heroes': {entry id: hero tree}}.
+    'trees': {tree: {ability names}}, 'heroes': {entry id: hero tree}, 'choices': {ability name: the names of every
+    option of a choice node it's on, itself too}} - Revival: {Revival, Restoral}.
     """
-    entries, trees = {}, {}
+    entries, trees, nodes = {}, {}, {}
     for r in rows:
         entries[r['entry_id']] = (r['tree_id'], r['name'], r['overrides'])
         trees.setdefault(r['tree_id'], set()).add(r['name'])
-    return {'entries': entries, 'trees': trees, 'heroes': dict(heroes or {})}
+        if r.get('choice'):
+            nodes.setdefault(r['choice'], set()).add(r['name'])
+    choices = {}
+    for options in nodes.values():
+        if len(options) > 1:  # the same talent can sit on several nodes (spec trees): every choice it's in
+            for name in options:
+                choices[name] = choices.get(name, frozenset()) | frozenset(options)
+    return {'entries': entries, 'trees': trees, 'heroes': dict(heroes or {}), 'choices': choices}
 
 
 class Talents(NamedTuple):
@@ -210,6 +230,12 @@ def not_taken(numbered, name, catalog=None):
         if found is not None:
             out = found if out is None else Talents(out.missing & found.missing, out.known | found.known)
     return out
+
+
+def choices(catalog=None):
+    """{ability name: every option of the talent choice it's on} (Revival: {Revival, Restoral}) - {} without data."""
+    catalog = catalog if catalog is not None else _talent_catalog()
+    return (catalog or {}).get('choices') or {}
 
 
 def hero_tree(entries, catalog=None):

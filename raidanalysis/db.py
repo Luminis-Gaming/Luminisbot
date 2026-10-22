@@ -246,6 +246,8 @@ def ensure_guide_schema(cursor):
             fetched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
     """)
+    # ...and the choice node it's an option of (Revival / Restoral: one row in the cooldown comparison)
+    cursor.execute("ALTER TABLE raid_talents ADD COLUMN IF NOT EXISTS choice BIGINT")
     # Which hero tree each talent entry belongs to (gamedata.hero_rows): the choice node's entries and the tree's talents
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS raid_hero_trees (
@@ -1330,7 +1332,8 @@ def benchmarks_needed(limit, refresh_days, difficulties):
     """
     (boss, difficulty, class, spec, hero tree) combos played in the logs we keep (prune_reports: the latest
     KEEP_LATEST_LOGS guild / raid-event logs, plus imports from the last KEEP_IMPORTED_DAYS) that have no
-    benchmark yet, a stale one, or a failed one from over a day ago - most recently played first.
+    benchmark yet, a stale one, or a failed one from a while ago - most recently played first. And the whole
+    spec's (hero '') wherever a hero tree has no top players: its pages fall back on that one (benchmarks.py).
     """
     from .throughput import HOTS_COUNTED
     return _run("""
@@ -1338,8 +1341,7 @@ def benchmarks_needed(limit, refresh_days, difficulties):
             SELECT r.code FROM raid_reports r
             WHERE r.source <> 'manual' AND EXISTS (SELECT 1 FROM raid_pulls p WHERE p.report_code = r.code)
             ORDER BY r.start_time DESC LIMIT %s
-        )
-        SELECT c.* FROM (
+        ), played AS (
             SELECT encounter_id, difficulty, class, spec, hero, MAX(role) AS role, MAX(played) AS last_played
             FROM (
                 SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec, x->>'role' AS role,
@@ -1351,18 +1353,33 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                 WHERE (r.code IN (SELECT code FROM latest)
                        OR (r.source = 'manual' AND COALESCE(r.created_at, NOW()) >= NOW() - make_interval(days => %s)))
                   AND p.difficulty = ANY(%s) AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
-            ) played
+            ) pulls
             GROUP BY 1, 2, 3, 4, 5
-        ) c
+        ), c AS (
+            SELECT * FROM played
+            UNION ALL
+            -- a hero tree without top players (its fetch failed, or WCL ranks none of it): the whole spec's
+            SELECT h.encounter_id, h.difficulty, h.class, h.spec, '' AS hero, MAX(h.role), MAX(h.last_played)
+            FROM played h JOIN raid_benchmarks b
+                 ON b.encounter_id = h.encounter_id AND b.difficulty = h.difficulty AND b.class = h.class
+                AND b.spec = h.spec AND b.hero = h.hero
+            WHERE h.hero <> '' AND jsonb_array_length(b.players) = 0
+              AND NOT EXISTS (SELECT 1 FROM played w WHERE w.encounter_id = h.encounter_id
+                              AND w.difficulty = h.difficulty AND w.class = h.class AND w.spec = h.spec AND w.hero = '')
+            GROUP BY 1, 2, 3, 4
+        )
+        SELECT c.* FROM c
         WHERE NOT EXISTS (
             SELECT 1 FROM raid_benchmarks b
             WHERE b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
               AND b.class = c.class AND b.spec = c.spec AND b.hero = c.hero
               AND (
-                  -- failed lately: wait a day, whatever top players it kept (otherwise a failing combo
-                  -- with old-format players would top this list again right away, every batch). Empty
-                  -- too: a new boss (or difficulty) gets ranked parses within a day, not a week.
-                  (b.status IN ('error', 'empty') AND b.fetched_at > NOW() - INTERVAL '1 day')
+                  -- failed lately: wait a few hours, whatever top players it kept (otherwise a failing combo
+                  -- with old-format players would top this list again right away, every batch) - WCL being down
+                  -- for a while is the usual reason. Empty: a day - a new boss (or difficulty) gets ranked
+                  -- parses within a day, not a week.
+                  (b.status = 'error' AND b.fetched_at > NOW() - INTERVAL '3 hours')
+                  OR (b.status = 'empty' AND b.fetched_at > NOW() - INTERVAL '1 day')
                   OR (b.status NOT IN ('error', 'empty') AND b.fetched_at > NOW() - make_interval(days => %s)
                       -- fetched before every top parse's spec was checked, or before their auras and
                       -- casts were kept (uptime / casts per minute), or the lust on them (the cooldowns
@@ -1383,11 +1400,11 @@ def boss_benchmarks(encounter_id, difficulty):
     """
     Every spec + hero tree we ever played on one boss + difficulty (any team, any night) with its benchmark's
     state, whatever its age: [{'encounter_id', 'difficulty', 'class', 'spec', 'hero', 'role', 'status', 'error',
-    'fetched_at', 'top'}] - status None when never fetched. The boss page's re-fetch button.
+    'fetched_at', 'top'}] - status None when never fetched. The boss page's re-fetch button. Like benchmarks_needed,
+    the whole spec's (hero '') too wherever a hero tree has no top players: its pages fall back on that one.
     """
     return _run("""
-        SELECT c.*, b.status, b.error, b.fetched_at, jsonb_array_length(COALESCE(b.players, '[]'::jsonb)) AS top
-        FROM (
+        WITH played AS (
             SELECT encounter_id, difficulty, class, spec, hero, MAX(role) AS role
             FROM (
                 SELECT p.encounter_id, p.difficulty, x->>'class' AS class, x->>'spec' AS spec, x->>'role' AS role,
@@ -1395,9 +1412,22 @@ def boss_benchmarks(encounter_id, difficulty):
                 FROM raid_pulls p, jsonb_array_elements(COALESCE(p.players, '[]'::jsonb)) x
                 WHERE p.encounter_id = %s AND p.difficulty = %s
                   AND COALESCE(x->>'spec', '') <> '' AND COALESCE(x->>'class', '') <> ''
-            ) played
+            ) pulls
             GROUP BY 1, 2, 3, 4, 5
-        ) c
+        ), c AS (
+            SELECT * FROM played
+            UNION ALL
+            SELECT h.encounter_id, h.difficulty, h.class, h.spec, '' AS hero, MAX(h.role)
+            FROM played h JOIN raid_benchmarks b
+                 ON b.encounter_id = h.encounter_id AND b.difficulty = h.difficulty AND b.class = h.class
+                AND b.spec = h.spec AND b.hero = h.hero
+            WHERE h.hero <> '' AND jsonb_array_length(b.players) = 0
+              AND NOT EXISTS (SELECT 1 FROM played w WHERE w.encounter_id = h.encounter_id
+                              AND w.difficulty = h.difficulty AND w.class = h.class AND w.spec = h.spec AND w.hero = '')
+            GROUP BY 1, 2, 3, 4
+        )
+        SELECT c.*, b.status, b.error, b.fetched_at, jsonb_array_length(COALESCE(b.players, '[]'::jsonb)) AS top
+        FROM c
         LEFT JOIN raid_benchmarks b ON b.encounter_id = c.encounter_id AND b.difficulty = c.difficulty
                                     AND b.class = c.class AND b.spec = c.spec AND b.hero = c.hero
         ORDER BY c.class, c.spec, c.hero
@@ -1467,22 +1497,26 @@ def get_tracked_spells(kind):
 
 
 def talents_stale(days):
-    """A week old - or without the hero trees (kept since): fetched again."""
+    """A week old - or without the hero trees or the choice nodes (kept since): fetched again."""
     row = _run("""
-        SELECT MAX(fetched_at) > NOW() - make_interval(days => %s) AND EXISTS (SELECT 1 FROM raid_hero_trees) AS fresh
+        SELECT MAX(fetched_at) > NOW() - make_interval(days => %s) AND EXISTS (SELECT 1 FROM raid_hero_trees)
+               AND bool_or(choice IS NOT NULL) AS fresh
         FROM raid_talents
     """, (days,), fetch='one')
     return not (row and row['fresh'])
 
 
 def replace_talents(rows, heroes):
-    """rows: [(entry id, tree id, ability name, name of the ability it replaces or None)]; heroes: [(entry id, hero tree)]."""
+    """
+    rows: [(entry id, tree id, ability name, name of the ability it replaces or None, choice node or None)];
+    heroes: [(entry id, hero tree)].
+    """
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM raid_talents")
-            cur.executemany("INSERT INTO raid_talents (entry_id, tree_id, name, overrides) VALUES (%s, %s, %s, %s)",
-                            rows)
+            cur.executemany("INSERT INTO raid_talents (entry_id, tree_id, name, overrides, choice) "
+                            "VALUES (%s, %s, %s, %s, %s)", rows)
             cur.execute("DELETE FROM raid_hero_trees")
             cur.executemany("INSERT INTO raid_hero_trees (entry_id, name) VALUES (%s, %s)", heroes)
         conn.commit()
@@ -1491,7 +1525,7 @@ def replace_talents(rows, heroes):
 
 
 def get_talents():
-    return _run("SELECT entry_id, tree_id, name, overrides FROM raid_talents", fetch='all')
+    return _run("SELECT entry_id, tree_id, name, overrides, choice FROM raid_talents", fetch='all')
 
 
 def get_hero_trees():

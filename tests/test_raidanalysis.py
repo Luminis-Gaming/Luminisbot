@@ -1431,6 +1431,43 @@ class TestMonkCooldowns(unittest.TestCase):
         self.assertIn('Life Cocoon: used as often as the top Mistweaver Monks', [n['text'] for n in good])
 
 
+class TestTalentChoices(unittest.TestCase):
+    """
+    Revival or Restoral, Invoke Yu'lon or Invoke Chi-Ji: one talent choice, one row - and a cooldown of yours the
+    top players mostly skip (Nature's Swiftness on a rare hero tree) still shows, as info.
+    """
+
+    def test_choices_merge_and_own_cooldowns_show(self):
+        from raidanalysis import benchmarks
+        yulon, chiji = "Invoke Yu'lon, the Jade Serpent", 'Invoke Chi-Ji, the Red Crane'
+        spells = {115310: {'name': 'Revival', 'meta': 'Instant · 3 min cooldown'},
+                  388615: {'name': 'Restoral', 'meta': 'Instant · 3 min cooldown'},
+                  322118: {'name': yulon, 'meta': 'Instant · 2 min cooldown'},
+                  325197: {'name': chiji, 'meta': 'Instant · 2 min cooldown'},
+                  132158: {'name': "Nature's Swiftness", 'meta': 'Instant · 1 min cooldown'}}
+        choices = {n: frozenset(pair) for pair in (('Revival', 'Restoral'), (yulon, chiji)) for n in pair}
+
+        def top_player(i):
+            casts = [[90000 + 500 * i, 388615 if i < 3 else 115310], [60000 + 300 * i, 322118], [180000 + 300 * i, 322118]]
+            return {'duration': 300000, 'phases': [], 'casts': casts + ([[30000, 132158]] if i == 0 else [])}
+        top = [top_player(i) for i in range(5)]
+        pull = {'number': 1, 'duration': 300000, 'phases': [], 'cast_ids': set(spells),
+                'casts': sorted([[90000, 115310], [61000, 325197], [181000, 325197],
+                                 [20000, 132158], [90000, 132158], [160000, 132158]])}
+        rows = {r['name']: r for r in benchmarks.compare([pull], top, spells, choices=choices)}
+        self.assertEqual(set(rows), {'Restoral / Revival', f'{yulon} / {chiji}', "Nature's Swiftness"})
+        invoke = rows[f'{yulon} / {chiji}']
+        self.assertEqual((invoke['top_users'], invoke['hits'], invoke['considered'], invoke['verdict'], invoke['icon_id']),
+                         (5, 2, 2, 'good', 325197))  # Chi-Ji at the moments they Yu'lon: in line, with Chi-Ji's icon
+        self.assertEqual((rows['Restoral / Revival']['top_users'], rows['Restoral / Revival']['ours_casts']), (5, 1))
+        ns = rows["Nature's Swiftness"]
+        self.assertEqual((ns['few_top'], ns['top_users'], ns['ours_casts'], ns['verdict']), (True, 1, 3, None))
+        # Without the talent data: as before - their pick, "not talented?" for you; yours too few to show... as info
+        plain = {r['name']: r for r in benchmarks.compare([pull], top, spells)}
+        self.assertEqual(plain[yulon]['verdict'], 'not_taken')
+        self.assertTrue(plain[chiji]['few_top'])
+
+
 class TestTimingMargin(unittest.TestCase):
     """12 s early on a 15 s buff the top players press within a second of each other is not 'in line'."""
 
@@ -1534,19 +1571,26 @@ class TestTalents(unittest.TestCase):
     def catalog(self):
         from raidanalysis import gamedata
         entries = ('ID,TraitDefinitionID,MaxRanks,NodeEntryType,TraitSubTreeID\n'
-                   '1,11,1,1,0\n2,12,1,1,0\n3,13,1,1,0\n5,15,1,1,0\n9,19,1,1,0\n')
+                   '1,11,1,1,0\n2,12,1,1,0\n3,13,1,1,0\n5,15,1,1,0\n9,19,1,1,0\n30,40,1,1,0\n31,41,1,1,0\n')
         definitions = ('OverrideName_lang,OverrideSubtext_lang,OverrideDescription_lang,ID,SpellID,OverrideIcon,'
                        'OverridesSpellID,VisibleSpellID\n'
                        ',,,11,107428,0,0,0\n,,,12,467307,0,107428,0\n,,,13,122281,0,0,0\n,,,15,1260511,0,0,0\n'
-                       ',,,19,191427,0,0,0\n')
-        node_entries = 'ID,TraitNodeID,TraitNodeEntryID,_Index\n1,101,1,0\n2,102,2,0\n3,103,3,0\n4,105,5,0\n5,109,9,0\n'
+                       ',,,19,191427,0,0,0\n,,,40,115310,0,0,0\n,,,41,388615,0,0,0\n')
+        node_entries = ('ID,TraitNodeID,TraitNodeEntryID,_Index\n1,101,1,0\n2,102,2,0\n3,103,3,0\n4,105,5,0\n5,109,9,0\n'
+                        '6,130,30,0\n7,130,31,1\n')
+        # 130: a choice node (Type 2) - Revival or Restoral
         nodes = 'ID,TraitTreeID,PosX,PosY,Type,Flags,TraitSubTreeID\n101,1000,0,0,0,0,0\n102,1000,0,0,0,0,0\n' \
-                '103,1000,0,0,0,0,0\n105,1000,0,0,0,0,0\n109,2000,0,0,0,0,0\n'
+                '103,1000,0,0,0,0,0\n105,1000,0,0,0,0,0\n109,2000,0,0,0,0,0\n130,3000,0,0,2,0,0\n'
         names = ('ID,Name_lang\n107428,Rising Sun Kick\n467307,Rushing Wind Kick\n122281,Healing Elixir\n'
-                 '1260511,Spiritfont\n191427,Metamorphosis\n116670,Vivify\n')
+                 '1260511,Spiritfont\n191427,Metamorphosis\n116670,Vivify\n115310,Revival\n388615,Restoral\n')
         rows = gamedata.talent_rows(entries, definitions, node_entries, nodes, names)
-        self.assertIn((2, 1000, 'Rushing Wind Kick', 'Rising Sun Kick'), rows)
-        return gamedata.catalog_from([dict(zip(('entry_id', 'tree_id', 'name', 'overrides'), r)) for r in rows])
+        self.assertIn((2, 1000, 'Rushing Wind Kick', 'Rising Sun Kick', None), rows)
+        self.assertIn((31, 3000, 'Restoral', None, 130), rows)
+        catalog = gamedata.catalog_from([dict(zip(('entry_id', 'tree_id', 'name', 'overrides', 'choice'), r))
+                                         for r in rows])
+        self.assertEqual(gamedata.choices(catalog), {'Revival': {'Revival', 'Restoral'},
+                                                     'Restoral': {'Revival', 'Restoral'}})
+        return catalog
 
     def test_talents_from_combatantinfo(self):
         events = [{'type': 'combatantinfo', 'sourceID': 1,

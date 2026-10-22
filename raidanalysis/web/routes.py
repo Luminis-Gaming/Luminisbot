@@ -2181,7 +2181,7 @@ def _benchmark_status(data):
         why = f" ({esc(bench['error'])} - tried again daily)" if bench.get('error') else ''
         return f"Warcraft Logs has no public top parses for {esc(data['label'])} on this boss yet{why}."
     if bench['status'] == 'error' and not bench['players']:
-        return f"Fetching the top {esc(data['label'])} failed ({esc(bench['error'] or '')}) - it's retried tomorrow."
+        return f"Fetching the top {esc(data['label'])} failed ({esc(bench['error'] or '')}) - it's tried again in a few hours."
     return ''
 
 

@@ -25,7 +25,7 @@ def hero_hint(data):
         return ''
     who = esc(benchmarks.spec_label(data['player'], data['hero']))
     why = {'empty': f"Warcraft Logs has no public top parses of {who} on this boss yet (tried again daily)",
-           'error': f"Fetching the top {who} on this boss failed (tried again tomorrow)"}.get(
+           'error': f"Fetching the top {who} on this boss failed (tried again in a few hours)"}.get(
         data.get('hero_status'), f"The top {who} on this boss haven't been fetched yet (the sync gets them within a "
                                  f"day or so)")
     return (f'<p class="small warn-text">⚠️ {why}, so these are the top of the whole spec, on either hero tree - '
@@ -47,8 +47,18 @@ def _verdict_pill(verdict, known=True):
 
 
 def judged(r):
-    """Judged against the top players: what you control alone, and not a talent you didn't take."""
-    return r['category'] in benchmarks.JUDGED and r.get('verdict') != 'not_taken'
+    """
+    Judged against the top players: what you control alone, not a talent you didn't take, and something enough of
+    them press to compare with (few_top: one of your cooldowns they mostly don't take - shown, not judged).
+    """
+    return r['category'] in benchmarks.JUDGED and r.get('verdict') != 'not_taken' and not r.get('few_top')
+
+
+def _few_top(r, data):
+    """A cooldown of yours too few of the top players press to judge: says so in place of a verdict."""
+    tip = (f"Fewer than {benchmarks.MIN_AGREE} of the top {len(data['top'])} use it, so there's nothing to line it "
+           f"up with - shown so you can see your own use, not judged")
+    return f'<span class="muted small" title="{esc(tip)}">only {r["top_users"]} of top {len(data["top"])}</span>'
 
 
 def _ability(row, spells):
@@ -139,7 +149,7 @@ def summary(data, back=None):
                 <td class="small">{top_when}</td>
                 <td class="num">{moments}</td>
                 <td class="small{' bad-text' if benchmarks.timing_text(r['offset']) not in ('', 'on time') and r['verdict'] in ('off', 'ok') else ''}">{benchmarks.timing_text(r['offset']) or '<span class="muted">—</span>'}</td>
-                <td>{_verdict_pill(r['verdict'], r['known']) if r['category'] in benchmarks.JUDGED else '<span class="muted small">info</span>'}</td>
+                <td>{_few_top(r, data) if r.get('few_top') else _verdict_pill(r['verdict'], r['known']) if r['category'] in benchmarks.JUDGED else '<span class="muted small">info</span>'}</td>
             </tr>""")
     return f"""<div class="table-wrapper"><table class="compact">
         <tr><th data-sort>Ability</th><th>Kind</th>

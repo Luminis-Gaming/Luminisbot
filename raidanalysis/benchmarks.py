@@ -340,7 +340,7 @@ async def refresh(session, budget_ok, limit=SPECS_PER_RUN, combos=None, progress
             # Which of their spells are major cooldowns comes from Wowhead's text: look it up now, not
             # whenever the general backlog gets there (a spell without it silently drops out).
             await ensure_spells({sid for p in players for _, sid in p['casts']})
-        except Exception as e:  # retried after a day
+        except Exception as e:  # retried after a few hours (db.benchmarks_needed)
             from .wcl import WCLRateLimited
             if isinstance(e, WCLRateLimited):
                 raise  # not this spec's fault: stop, and let the sync pause
@@ -445,6 +445,27 @@ def top_groups(top, spell_info):
     return groups
 
 
+def merge_choices(groups, choices):
+    """
+    top_groups() with the options of one talent choice (Revival / Restoral, Invoke Yu'lon / Invoke Chi-Ji -
+    gamedata.choices()) as one group named after them all, most top players' pick first: whichever one a player
+    took counts, theirs and ours. Every group gets 'members': the ability names in it.
+    """
+    out, done = {}, set()
+    for name in sorted(groups, key=lambda n: (-len(groups[n]['users']), n)):
+        if name in done:
+            continue
+        others = sorted(n for n in (choices or {}).get(name, ()) if n in groups and n != name and n not in done)
+        members = [name] + others
+        done.update(members)
+        parts = [groups[n] for n in members]
+        out[' / '.join(members)] = {'ids': set().union(*(g['ids'] for g in parts)),
+                                    'users': set().union(*(g['users'] for g in parts)),
+                                    'category': parts[0]['category'], 'members': members,
+                                    'counts': sum((g['counts'] for g in parts), Counter())}
+    return out
+
+
 def agreed_share(top, ids, wins):
     """Share of the top players' casts of `ids` that fall on one of the moments (windows) most of them agree on."""
     moments = {}
@@ -494,7 +515,7 @@ def _texts(ids, spell_info):
     return effect, cooldown
 
 
-def compare(pulls, top, spell_info, overrides=None, talents=None):
+def compare(pulls, top, spell_info, overrides=None, talents=None, choices=None):
     """
     How one player's pulls line up with the top players, per major ability.
 
@@ -502,11 +523,14 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
     top: benchmark players. spell_info: {id: {'name', 'meta', ...}} (Wowhead).
     overrides: {ability name: MAJOR / ROTATIONAL / HIDE} - officers' calls for this spec.
     talents: gamedata.not_taken() - which abilities their talents didn't give them; None when unknown.
+    choices: gamedata.choices() - the options of a talent choice are one row (Revival / Restoral).
     -> [{'name', 'ids', 'icon_id', 'category', 'top_users', 'top_per_min', 'ours_per_min', 'ours_casts',
-         'windows', 'hits', 'considered', 'verdict', 'known', 'kind', 'auto_kind'}], most important first.
+         'windows', 'hits', 'considered', 'verdict', 'known', 'kind', 'auto_kind', 'few_top'}], most important first.
        Rotational abilities have category ROTATIONAL, no windows, and a verdict on how often alone.
        Never pressed: 'not_taken' (a talent you didn't take - not judged), 'not_equipped' (a trinket),
        'missing' (a combat potion, or an ability you had).
+       few_top: one of your cooldowns too few of the top players press to compare with (fewer than MIN_AGREE) -
+       shown so it isn't missing, not judged.
     """
     pulls = [p for p in pulls if p['duration'] >= MIN_PULL_MS]
     if not top or not pulls:
@@ -518,18 +542,26 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
     rows = []
     minutes = sum(p['duration'] for p in pulls) / 60000
     # Every potion we drank counts for the potion group, not just the ones the top players picked -
-    # and an ability our log records under another spell ID than theirs still counts (same name).
-    for sid in {sid for p in pulls for _, sid in p['casts']}:
+    # and an ability our log records under another spell ID than theirs still counts (same name). One
+    # the top players never pressed is still one of ours: a row of its own.
+    our_ids = {sid for p in pulls for _, sid in p['casts']}
+    for sid in our_ids:
         info = spell_info.get(sid) or {}
-        if category(sid, info) == POTION and POTION_GROUP in groups:
+        cat = category(sid, info)
+        if cat == POTION and POTION_GROUP in groups:
             groups[POTION_GROUP]['ids'].add(sid)
         elif info.get('name') in groups:
             groups[info['name']]['ids'].add(sid)
-    for name, g in groups.items():
-        if len(g['users']) < need:
-            continue
+        elif cat and cat != POTION and info.get('name'):
+            groups[info['name']] = {'ids': {sid}, 'users': set(), 'category': cat, 'counts': Counter()}
+    for name, g in merge_choices(groups, choices).items():
         ids = g['ids']
-        top_per_min = sum(g['counts'][i] / (top[i]['duration'] / 60000) for i in g['users']) / len(g['users'])
+        few = len(g['users']) < need
+        if few and not ids & our_ids:
+            continue
+        override = next((overrides[n] for n in [name] + g['members'] if n in overrides), None)
+        top_per_min = (sum(g['counts'][i] / (top[i]['duration'] / 60000) for i in g['users']) / len(g['users'])
+                       if g['users'] else 0)
         # Pulls where we fetched these spells at all. Analyses from before the comparison only kept
         # the tracked cooldowns (cooldowns.py) and consumables - for anything else they can't tell
         # "never pressed" from "not recorded", so those pulls don't count until re-analyzed.
@@ -547,9 +579,9 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
         ours_casts = sum(len(c) for c in ours)
         # The effect's duration and the cooldown, from Wowhead, cap each moment's margin.
         effect, cooldown = _texts(ids, spell_info)
-        wins = windows(top, ids)
-        auto_kind = ability_kind(name, g, top, wins, cooldown)
-        kind = ability_kind(name, g, top, wins, cooldown, overrides.get(name))
+        wins = [] if few else windows(top, ids)
+        auto_kind = MAJOR if few else ability_kind(name, g, top, wins, cooldown)
+        kind = (HIDE if override == HIDE else MAJOR) if few else ability_kind(name, g, top, wins, cooldown, override)
         if kind == HIDE:
             continue
         cat = ROTATIONAL if kind == ROTATIONAL else g['category']
@@ -586,7 +618,7 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
         # moments but half as often isn't "in line", and neither is pressing it often but off-beat.
         verdict = None
         timing = considered >= 2
-        if not known:
+        if not known or few:
             verdict = None
         elif not ours_casts:
             # Never pressed all night: a trinket you don't have on, or a talent you didn't take (Rushing Wind
@@ -594,7 +626,7 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
             # pulls from before talents were kept can't tell, so a class ability gets the benefit of the doubt.
             if cat == TRINKET:
                 verdict = 'not_equipped'
-            elif cat != POTION and (talents is None or name in talents.missing):
+            elif cat != POTION and (talents is None or all(n in talents.missing for n in g['members'])):
                 verdict = 'not_taken'
             else:
                 verdict = 'missing'
@@ -613,13 +645,15 @@ def compare(pulls, top, spell_info, overrides=None, talents=None):
             verdict = min(verdicts, key=VERDICT_RANK.index) if verdicts else None
         offset = sorted(offsets)[len(offsets) // 2] if offsets else None  # shown from one moment on
         weak = weak_moments(wins, ref) if considered and ours_casts else []  # nothing to work on if never used
-        rows.append({'name': name, 'ids': sorted(ids), 'icon_id': min(ids), 'category': cat,
+        pressed = Counter(sid for p in pulls for _, sid in p['casts'] if sid in ids)  # your pick's icon
+        rows.append({'name': name, 'ids': sorted(ids), 'category': cat, 'few_top': few,
+                     'icon_id': pressed.most_common(1)[0][0] if pressed else min(ids),
                      'top_users': len(g['users']), 'top_per_min': top_per_min, 'ours_per_min': ours_per_min,
                      'ours_casts': ours_casts, 'windows': [dict(w, ref_at=ref.get(w['segment'], 0) + w['at'])
                                                            for w in wins],
                      'hits': hits, 'considered': considered, 'verdict': verdict, 'known': bool(known),
                      'offset': offset, 'effect_ms': effect, 'weak': weak, 'cooldown_ms': cooldown,
-                     'kind': kind, 'auto_kind': auto_kind, 'overridden': name in overrides})
+                     'kind': kind, 'auto_kind': auto_kind, 'overridden': override is not None})
     order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
     return sorted(rows, key=lambda r: (order.get(r['category'], 9), -r['top_users'], r['name']))
 
@@ -901,10 +935,10 @@ def for_player(numbered, name):
     ids = {sid for p in top for _, sid in p['casts']} | {sid for p in pulls for _, sid in p['casts']}
     spells = db.get_spells(ids) if ids else {}
     overrides = db.get_spec_overrides().get((player['class'], player['spec']), {})
-    from .gamedata import not_taken
+    from .gamedata import choices, not_taken
     talents = not_taken(numbered, name)
     # Named after the top players it really is: their hero tree's, or the whole spec's until those are fetched
     label = spec_label(player, benchmark.get('hero') if benchmark else hero)
     return {'player': player, 'hero': hero, 'hero_status': hero_status, 'benchmark': benchmark, 'top': top,
             'pulls': pulls, 'talents': talents,
-            'rows': compare(pulls, top, spells, overrides, talents), 'spells': spells, 'label': label}
+            'rows': compare(pulls, top, spells, overrides, talents, choices()), 'spells': spells, 'label': label}
