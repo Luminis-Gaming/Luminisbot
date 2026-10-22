@@ -198,9 +198,8 @@ tbody tr.flagged td:not(:first-child) { opacity: 0.6; }
 .realms-q.more:hover, .realms-q.more:focus-visible { color: var(--text); background: var(--surface-2); }
 #tip .realm-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; color: var(--muted); }
 .delta-up { color: var(--good); } .delta-down { color: var(--bad); }
-.spread { display: inline-block; min-width: 46px; padding: 1px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
-  background: var(--surface-2); color: var(--muted); text-align: center; }
-.spread.hot { background: var(--gold-soft); color: var(--gold); }
+.spread-x { font-variant-numeric: tabular-nums; }
+.spread-x.hot { color: var(--gold); font-weight: 600; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
 
 /* Item view */
@@ -377,12 +376,10 @@ footer { margin-top: 30px; font-size: 12.5px; color: var(--faint); text-align: c
 
 /* Phones: the columns that matter, no sideways scrolling for the rest */
 @media (max-width: 640px) {
-  #results [data-col="req"], #results [data-col="hi"], #results [data-col="realms"], #results [data-col="spread"],
-  #results [data-col="qty"], .listings .col-time { display: none; }
+  .listings .col-time { display: none; }
   .item-cell { min-width: 0; }
   .opp-gain { font-size: 16px; }
 }
-@media (max-width: 480px) { #results [data-col="ilvl"] { display: none; } }
 
 /* The auction house's own tabs, along the bottom of its title bar */
 .ah-tabs { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px; margin: 2px -18px -12px; padding: 0 10px;
@@ -506,4 +503,83 @@ a.back { text-decoration: none; }
   #crafts td:first-child, #crafts th:first-child { padding-left: 12px; }
   #crafts .item-icon { width: 32px; height: 32px; }
   .craft-detail td { padding-left: 12px; }
+}
+
+/* Collection: character name suggestions */
+.field > label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.suggest { position: relative; }
+.suggest-pop { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; right: 0; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  box-shadow: 0 14px 36px rgba(0,0,0,.5); }
+.suggest-list { list-style: none; margin: 0; padding: 4px; max-height: min(360px, 55vh); overflow-y: auto; }
+.suggest-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
+.suggest-item:hover, .suggest-item.active { background: var(--surface-3); }
+.suggest-item img, .suggest-ph { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line-strong); }
+.suggest-text { display: grid; min-width: 0; }
+.suggest-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-meta { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-foot { padding: 7px 12px; font-size: 12px; color: var(--faint); border-top: 1px solid var(--line); }
+.suggest-list[hidden] + .suggest-foot { border-top: 0; }
+.suggest-foot a { color: var(--muted); }
+.cls-death-knight { color: #c41e3a; } .cls-demon-hunter { color: #a330c9; } .cls-druid { color: #ff7c0a; }
+.cls-evoker { color: #33937f; } .cls-hunter { color: #aad372; } .cls-mage { color: #3fc7eb; } .cls-monk { color: #00ff98; }
+.cls-paladin { color: #f48cba; } .cls-priest { color: #ffffff; } .cls-rogue { color: #fff468; } .cls-shaman { color: #2a8cff; }
+.cls-warlock { color: #8788ee; } .cls-warrior { color: #c69b6d; }
+
+/* Search: one search bar up front, every other filter folded into a panel under it */
+.search-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 230px) auto; gap: 10px; align-items: center; }
+.search-bar .search-q { height: 50px; font-size: 16.5px; padding-left: 44px; background-position: 16px 50%; }
+.search-bar .select.big { height: 50px; }
+.btn-filters { display: inline-flex; align-items: center; gap: 8px; height: 50px; padding: 0 16px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--line-strong); color: var(--text); font: inherit; font-weight: 600;
+  cursor: pointer; transition: border-color .15s, background-color .15s; }
+.btn-filters:hover { border-color: var(--muted); }
+.btn-filters:focus-visible { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
+.btn-filters.open { background: var(--surface-3); border-color: var(--gold-mark); }
+.filter-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--gold); color: #1a1405;
+  font-size: 12px; font-weight: 800; line-height: 20px; text-align: center; }
+.filter-panel { display: grid; gap: 12px; padding: 14px; border-radius: var(--radius-sm); background: var(--bg);
+  border: 1px solid var(--line); animation: ah-fade .18s ease-out both; }
+@media (max-width: 700px) {
+  .search-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .search-bar .search-q { grid-column: 1 / -1; }
+}
+.result-tools { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; }
+.sort-by { display: inline-flex; align-items: center; gap: 8px; }
+.sort-by .select { width: auto; height: 32px; padding: 0 30px 0 10px; font-size: 13px; }
+.link-btn { padding: 0; border: 0; background: none; color: var(--arcane); font: inherit; cursor: pointer; text-decoration: underline;
+  text-underline-offset: 2px; }
+.link-btn:hover { color: var(--text); }
+
+/* Search results: a table that fits (narrow screens drop columns, never scroll sideways) and reads as columns */
+#search-view .panel { container: results / inline-size; }
+#search-view .table-wrap { overflow: visible; }
+#results { font-size: 14px; }
+#results thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); border-bottom-color: var(--line-strong); }
+#results thead th:first-child { border-top-left-radius: 0; }
+#results th .sort { padding: 11px 12px; }
+#results td { padding: 10px 12px; }
+#results td.num, #results td.r { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#results tbody tr:nth-child(even) td { background: rgba(255,255,255,0.016); }
+#results th.price, #results td.price { background: rgba(240,199,94,0.035); }
+#results tbody tr:nth-child(even) td.price { background: rgba(240,199,94,0.05); }
+#results th.price { background: color-mix(in srgb, var(--surface-2) 92%, var(--gold)); }
+#results th.g, #results td.g { border-left: 1px solid var(--line-strong); }
+#results tbody tr.link:hover td { background: rgba(154,166,255,0.07); }
+#results tbody tr.link:hover td:first-child { box-shadow: inset 3px 0 0 var(--arcane-mark); }
+#results .item-cell { min-width: 0; }
+#results .item-cell a { font-size: 14.5px; }
+#results .realm-tag { font-size: 11.5px; }
+@container results (max-width: 880px) { #results [data-col="realms"] { display: none; } }
+@container results (max-width: 840px) { #results [data-col="hi"], #results [data-col="vs"] { display: none; } }
+@container results (max-width: 640px) { #results [data-col="ilvl"] { display: none; } }
+@container results (max-width: 500px) {
+  #results [data-col="med"] { display: none; }
+  #results td, #results th .sort { padding-left: 8px; padding-right: 8px; }
+  #results .item-icon { width: 32px; height: 32px; }
+  #results .item-cell { gap: 9px; }
+  #results th { white-space: normal; letter-spacing: 0.03em; }
+  #results td.r, #results .realm-tag { white-space: normal; }
+  #results .coin { white-space: nowrap; }
 }

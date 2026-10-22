@@ -8,6 +8,7 @@ The public auction house pages:
   GET /ah/movers                what rose, fell or ran low in about a day (/ah/api/movers)
   GET /ah/crafting              every recipe's reagent cost against what it makes sells for (/ah/api/crafting)
   GET /ah/collection            a character's missing mounts, pets and toys that are on sale (/ah/api/collection)
+  GET /ah/api/characters?q=     EU characters whose name starts so, for the collection page's name box (Raider.IO)
   GET /ah/tooltip/{id}?bonus=   an item's tooltip for one roll (raidanalysis.items: Wowhead, sanitized)
   GET /ah/static/...            the stylesheet and script (static/), cached for a year under a content hash
 
@@ -80,6 +81,7 @@ def register_routes(app):
     app.router.add_get('/ah/api/crafting', handle_crafting_api)
     app.router.add_get('/ah/collection', handle_collection_page)
     app.router.add_get('/ah/api/collection', handle_collection_api)
+    app.router.add_get('/ah/api/characters', handle_characters_api)
     app.router.add_get('/ah/item/{item_id}', handle_item_page)
     app.router.add_get('/ah/tooltip/{item_id}', handle_tooltip)
     app.router.add_get(CSS_URL, handle_css)
@@ -93,6 +95,18 @@ def _headers():
 
 def esc(value):
     return html.escape(str(value if value is not None else ''), quote=True)
+
+
+def _offer(pairs):
+    """
+    Tooltips a page is about to show: (item id, roll query) pairs. raidanalysis.items only fetches a tooltip that
+    was offered (the endpoint is public), so every page with item icons offers its own. Battle pets need nothing:
+    their tooltips are built from our own tables.
+    """
+    from raidanalysis import items
+    for item_id, q in pairs:
+        if item_id > 0:
+            items.offer(item_id, q or '')
 
 
 def icon_url(row):
@@ -243,11 +257,16 @@ SEARCH_BODY = """
     </details>
     <section class="panel" aria-label="Search results">
       <form class="search-head" id="search-form" role="search">
-        <div class="search-row">
-          <label class="field"><span>Item name</span>
-            <input class="input big" id="q" type="search" placeholder="Search items, e.g. Greaves" autocomplete="off"></label>
-          <label class="field"><span>Realm</span><select class="select big" id="realm"></select></label>
+        <div class="search-bar">
+          <input class="input big search-q" id="q" type="search" placeholder="Search every EU auction house, e.g. Greaves"
+                 autocomplete="off" aria-label="Item name">
+          <select class="select big" id="realm" aria-label="Realm"></select>
+          <button type="button" class="btn-filters" id="filters-toggle" aria-expanded="false" aria-controls="filter-panel">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" aria-hidden="true"><path d="M2 4h12M4.5 8h7M7 12h2"/></svg>
+            Filters<span class="filter-count" id="filter-count" hidden></span></button>
         </div>
+        <div class="filter-panel" id="filter-panel" hidden>
         <div class="filters">
           <div class="field"><span>Item level</span>
             <div class="range"><input class="input" id="ilvl-min" type="number" min="0" placeholder="Min" aria-label="Minimum item level">
@@ -267,12 +286,16 @@ SEARCH_BODY = """
             <label class="check"><input type="checkbox" id="f-sock"> Has a socket</label>
             <label class="check"><input type="checkbox" id="below-vendor"> Only below vendor price</label>
             <label class="check"><input type="checkbox" id="out-of-stock"> Include items not listed on this realm</label>
-            <label class="check"><input type="checkbox" id="median-col" checked> EU median column</label>
           </div>
           <button class="btn-ghost" type="reset" id="reset">Clear filters</button>
         </div>
+        </div>
       </form>
-      <div class="result-meta"><span id="result-count"></span><span id="result-mode"></span></div>
+      <div class="result-meta">
+        <span><span id="result-count"></span><span id="filters-on"></span></span>
+        <span class="result-tools"><span id="result-mode"></span>
+          <label class="sort-by"><span>Sort by</span><select class="select" id="sort-by"></select></label></span>
+      </div>
       <div class="table-wrap"><table id="results"><thead></thead><tbody></tbody></table></div>
       <div class="more"><button type="button" class="btn-ghost" id="more" hidden>Show more</button></div>
     </section>
@@ -288,6 +311,7 @@ def _search_page_data():
 
 async def handle_search_page(request):
     data = await asyncio.to_thread(_search_page_data)
+    _offer((o['item']['id'], o['roll']['tooltip'] if o['roll'] else '') for o in data['opps'])
     return _page('Luminis Auction House · EU', SEARCH_BODY, data,
                  'Search every EU auction house and compare prices across all realms.')
 
@@ -585,6 +609,7 @@ def deals(args):
 
 async def handle_deals_api(request):
     rows, total = await asyncio.to_thread(deals, request.query)
+    _offer((r['id'], r['roll']['tooltip']) for r in rows)
     return web.json_response({'rows': rows, 'total': total}, headers={'Cache-Control': 'no-store', **_headers()})
 
 
@@ -630,6 +655,7 @@ def movers(args):
 
 async def handle_movers_api(request):
     data = await asyncio.to_thread(movers, request.query)
+    _offer((r['id'], '') for rows in data.values() for r in rows)
     return web.json_response(data, headers={'Cache-Control': 'no-store', **_headers()})
 
 
@@ -645,9 +671,16 @@ COLLECTION_BODY = """
   <section class="panel">
     <form class="search-head" id="c-form">
       <div class="search-row coll-lookup">
-        <label class="field"><span>Character</span>
-          <input class="input big" id="c-name" type="text" placeholder="Character name" autocomplete="off"
-                 spellcheck="false" maxlength="12" required></label>
+        <div class="field"><label for="c-name">Character</label>
+          <div class="suggest">
+            <input class="input big" id="c-name" type="text" placeholder="Start typing a name" autocomplete="off"
+                   spellcheck="false" maxlength="12" required role="combobox" aria-autocomplete="list"
+                   aria-expanded="false" aria-controls="c-suggest">
+            <div class="suggest-pop" id="c-suggest-pop" hidden>
+              <ul class="suggest-list" id="c-suggest" role="listbox" aria-label="Characters"></ul>
+              <div class="suggest-foot" id="c-suggest-foot"></div>
+            </div>
+          </div></div>
         <label class="field"><span>Realm</span><select class="select big" id="c-realm" required></select></label>
         <button class="btn" type="submit" id="c-go">Look up</button>
       </div>
@@ -674,6 +707,23 @@ PROFILE_SECONDS = 600
 PROFILES_KEPT = 500
 _profiles = {}
 _blizzard = None
+_http = None
+SUGGEST_URL = 'https://raider.io/api/search'
+SUGGEST_SECONDS = 600
+SUGGEST_KEPT = 2000
+SUGGEST_SHOWN = 12
+SUGGEST_AT_ONCE = asyncio.Semaphore(4)  # Raider.IO is doing us a favour: never more than a few questions at a time
+USER_AGENT = 'LuminisAuctionHouse/1.0 (+https://luminisbot.flipflix.no/ah)'
+_suggestions = {}
+
+
+def _session():
+    """One HTTP session for the pages' outside calls (Blizzard's profile API, Raider.IO's search)."""
+    global _http
+    if _http is None or _http.closed:
+        import aiohttp
+        _http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), headers={'User-Agent': USER_AGENT})
+    return _http
 
 
 async def handle_collection_page(request):
@@ -692,9 +742,8 @@ async def _collected(slug, name):
     if hit and time.monotonic() - hit[0] < PROFILE_SECONDS:
         return hit[1], None
     if _blizzard is None:
-        import aiohttp
         from ..blizzard import Blizzard
-        _blizzard = Blizzard(aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)))
+        _blizzard = Blizzard(_session())
 
     async def one(kind):
         plural, entry = COLLECTIONS[kind]
@@ -754,8 +803,65 @@ async def handle_collection_api(request):
         return web.json_response({'error': "Blizzard's armory didn't answer. Try again in a moment."}, status=502,
                                  headers=headers)
     rows = await asyncio.to_thread(collection, cr, owned)
+    _offer((r['id'], '') for r in rows)
     return web.json_response({'cr': cr, 'owned': {kind: len(ids) for kind, ids in owned.items()}, 'rows': rows},
                              headers=headers)
+
+
+async def _suggest(prefix):
+    """
+    -> [{name, realm, slug, cls, faction, avatar}]: EU characters on realms we know whose name starts with prefix,
+    from Raider.IO's site search (the one raider.io's own search box uses - it isn't in their documented API, so
+    it may change: then this is just empty and the page works as before). Kept ten minutes per prefix.
+    """
+    import aiohttp
+    hit = _suggestions.get(prefix)
+    if hit and time.monotonic() - hit[0] < SUGGEST_SECONDS:
+        return hit[1]
+    groups = await asyncio.to_thread(_cached, 'realms', _realms)
+    known = {slug: name for g in groups.values() for name, slug in zip(g['names'], g['slugs'])}
+    try:
+        async with SUGGEST_AT_ONCE:
+            async with _session().get(SUGGEST_URL, params={'term': prefix},
+                                      timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f'HTTP {resp.status}')
+                matches = (await resp.json(content_type=None)).get('matches') or []
+    except Exception as e:
+        logger.info(f'[AH] Character suggestions for {prefix!r} unavailable: {e}')
+        return None
+    out, seen = [], set()
+    for m in matches:
+        d = m.get('data') or {}
+        realm = d.get('realm') or {}
+        slug = next((s for s in (realm.get('slug'), realm.get('altSlug')) if s in known), None)
+        name = m.get('name') or d.get('name') or ''
+        if m.get('type') != 'character' or (d.get('region') or {}).get('slug') != 'eu' or not slug:
+            continue
+        if not name.lower().startswith(prefix) or (name.lower(), slug) in seen:
+            continue
+        seen.add((name.lower(), slug))
+        avatar = (d.get('thumbnail_url') or '').split('?')[0]
+        out.append({'name': name, 'realm': known[slug], 'slug': slug, 'cls': (d.get('class') or {}).get('name') or '',
+                    'faction': d.get('faction') or '',
+                    'avatar': 'https:' + avatar if avatar.startswith('//render.worldofwarcraft.com/') else ''})
+        if len(out) >= SUGGEST_SHOWN:
+            break
+    if len(_suggestions) >= SUGGEST_KEPT:
+        _suggestions.clear()
+    _suggestions[prefix] = (time.monotonic(), out)
+    return out
+
+
+async def handle_characters_api(request):
+    headers = {'Cache-Control': 'public, max-age=300', **_headers()}
+    prefix = (request.query.get('q') or '').strip().lower()
+    if not CHARACTER_NAME.match(prefix):  # 2 to 12 letters, like a name
+        return web.json_response({'rows': []}, headers=headers)
+    rows = await _suggest(prefix)
+    if rows is None:
+        return web.json_response({'rows': [], 'unavailable': True}, headers={**headers, 'Cache-Control': 'no-store'})
+    return web.json_response({'rows': rows}, headers=headers)
 
 
 # ============================================================================
@@ -885,15 +991,13 @@ async def handle_crafting_page(request):
 
 async def handle_crafting_api(request):
     data = await asyncio.to_thread(crafting, request.query)
+    _offer((i['id'], '') for r in data['rows'] for i in [r] + r['reagents'])
     return web.json_response(data, headers={'Cache-Control': 'no-store', **_headers()})
 
 
 async def handle_search_api(request):
-    from raidanalysis import items
     rows, total = await asyncio.to_thread(search, request.query)
-    for r in rows:
-        if r['id'] > 0:
-            items.offer(r['id'], '')
+    _offer((r['id'], '') for r in rows)
     return web.json_response({'rows': rows, 'total': total}, headers={'Cache-Control': 'no-store', **_headers()})
 
 

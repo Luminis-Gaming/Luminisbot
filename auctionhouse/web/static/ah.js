@@ -122,7 +122,10 @@ const loadTip = key => {
   if (!tips.has(key)) {
     const [id, q] = key.split('|');
     tips.set(key, fetch(`/ah/tooltip/${id}${q ? '?' + q : ''}`).then(r => (r.ok ? r.json() : null)).catch(() => null)
-      .then(data => { tips.set(key, data); return data; }));
+      .then(data => {
+        if (data) tips.set(key, data); else tips.delete(key);  // not now (Wowhead busy, say): the next hover asks again
+        return data;
+      }));
   }
   return tips.get(key);
 };
@@ -135,7 +138,13 @@ function placeItemTip() {
 }
 function renderItemTip(el, data) {
   if (ttEl !== el) return;
-  if (!data) { itemtip.hidden = true; return; }
+  if (!data) {  // say so instead of flashing "Loading" and vanishing
+    itemtip.className = '';
+    itemtip.innerHTML = '<div class="it-body"><span class="muted">No tooltip for this one right now.</span></div>';
+    itemtip.hidden = false;
+    placeItemTip();
+    return;
+  }
   const note = el.dataset.ttNote;
   itemtip.className = data.quality != null ? `q-${qkey(data.quality)}` : '';
   itemtip.innerHTML = `${data.icon ? `<span class="it-icon"><img src="${esc(data.icon)}" alt=""></span>` : ''}
@@ -249,7 +258,7 @@ function initSearch() {
   const form = $('#search-form');
   const els = {q: $('#q'), realm: $('#realm'), ilvlMin: $('#ilvl-min'), ilvlMax: $('#ilvl-max'), reqMin: $('#req-min'),
     reqMax: $('#req-max'), qMin: $('#q-min'), qMax: $('#q-max'), exp: $('#exp'), sec: $('#f-sec'), ter: $('#f-ter'),
-    sock: $('#f-sock'), below: $('#below-vendor'), oos: $('#out-of-stock'), medCol: $('#median-col')};
+    sock: $('#f-sock'), below: $('#below-vendor'), oos: $('#out-of-stock'), sortBy: $('#sort-by')};
   els.realm.innerHTML = '<option value="">All EU realms</option>' + realmList.map(r => `<option value="${r.cr}|${esc(r.name)}">${esc(r.name)}</option>`).join('');
   const qOpts = QNAME.slice(0, 6).map((q, i) => `<option value="${i}">${q}</option>`).join('');
   els.qMin.innerHTML = qOpts; els.qMax.innerHTML = qOpts;
@@ -295,6 +304,54 @@ function initSearch() {
     return p;
   }
   const statFilter = () => !!(els.sec.value || els.ter.value || els.sock.checked);
+  // the filters that are on, by name: the Filters button counts them and the results line names them
+  const filtersOn = () => [
+    [els.ilvlMin.value || els.ilvlMax.value, 'item level'], [els.reqMin.value || els.reqMax.value, 'required level'],
+    [els.qMin.value !== '0' || els.qMax.value !== '5', 'rarity'], [els.exp.value, 'expansion'],
+    [els.sec.value, 'secondary stats'], [els.ter.value, 'tertiary stat'], [els.sock.checked, 'socket'],
+    [els.below.checked, 'below vendor price'], [els.oos.checked, 'not listed here'],
+  ].filter(([on]) => on).map(([, name]) => name);
+
+  // ---------- filters fold away under the search bar ----------
+  const panel = $('#filter-panel'), toggle = $('#filters-toggle');
+  function showFilters(open) {
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.classList.toggle('open', open);
+    store.set('ah-filters-open', open ? '1' : '');
+  }
+  toggle.addEventListener('click', () => showFilters(panel.hidden));
+  showFilters(store.get('ah-filters-open') === '1');
+  function renderFilterState() {
+    const on = filtersOn();
+    $('#filter-count').hidden = !on.length;
+    $('#filter-count').textContent = on.length;
+    $('#filters-on').innerHTML = on.length && panel.hidden
+      ? ` · filtered by ${esc(on.join(', '))} · <button type="button" class="link-btn" id="filters-clear">Clear</button>` : '';
+  }
+  $('#filters-on').addEventListener('click', e => { if (e.target.id === 'filters-clear') $('#reset').click(); });  // (form.reset is shadowed by the #reset button)
+  toggle.addEventListener('click', renderFilterState);
+
+  // ---------- sorting: the column headers, and a menu that reaches the columns a narrow screen hides ----------
+  const SORT_CHOICES = [['listings', 'desc', 'Most listed'], ['sold', 'desc', 'Sells the most'], ['lo', 'asc', 'Cheapest price'],
+    ['lo', 'desc', 'Most expensive'], ['med', 'desc', 'Highest EU median'], ['spread', 'desc', 'Biggest price spread'],
+    ['realms', 'desc', 'On the most realms'], ['ilvl', 'desc', 'Highest item level'], ['req', 'asc', 'Lowest required level'],
+    ['name', 'asc', 'Name A to Z']];
+  const REALM_SORTS = [['here', 'asc', 'Cheapest here'], ['vs', 'asc', 'Furthest under EU median'], ['qty', 'desc', 'Most listed here']];
+  const SORT_NAMES = {listings: 'Listings', sold: 'Sold/day', lo: 'Cheapest', med: 'EU median', hi: 'Highest', spread: 'Spread',
+    realms: 'Realms', ilvl: 'Item level', req: 'Required level', name: 'Name', here: 'Price here', vs: 'vs EU median', qty: 'Listings here'};
+  function renderSortMenu(realm) {
+    const choices = (realm ? REALM_SORTS : []).concat(SORT_CHOICES).filter(([k]) => k !== 'sold' || salesDays());
+    const current = `${state.sort}:${state.dir}`;
+    if (!choices.some(([k, d]) => `${k}:${d}` === current))
+      choices.push([state.sort, state.dir, `${SORT_NAMES[state.sort] || state.sort}, ${state.dir === 'asc' ? 'low to high' : 'high to low'}`]);
+    els.sortBy.innerHTML = choices.map(([k, d, label]) => `<option value="${k}:${d}">${label}</option>`).join('');
+    els.sortBy.value = current;
+  }
+  els.sortBy.addEventListener('change', () => {
+    [state.sort, state.dir] = els.sortBy.value.split(':');
+    search();
+  });
 
   function renderCats() {
     const cats = D.categories || [];
@@ -352,15 +409,19 @@ function initSearch() {
 
   function renderResults() {
     const realm = els.realm.value ? +els.realm.value.split('|')[0] : null;
-    const showMed = els.medCol.checked;
+    // [key, heading, classes]: "g" starts a column group (prices, then market activity) - drawn as a divider
     const cols = realm
-      ? [['name', 'Item'], ['ilvl', 'Item level', 'r'], ['req', 'Req.', 'r'], ['here', 'Price here', 'r'], ...(showMed ? [['med', 'EU median', 'r']] : []),
-         ['vs', 'vs EU median', 'r'], ['qty', 'Listings here', 'r'], ...(salesDays() ? [['sold', 'Sold/day', 'r']] : [])]
-      : [['name', 'Item'], ['ilvl', 'Item level', 'r'], ['req', 'Req.', 'r'], ['lo', 'Cheapest', 'r'], ...(showMed ? [['med', 'EU median', 'r']] : []),
-         ['hi', 'Highest', 'r'], ['realms', 'Realms', 'r'], ...(salesDays() ? [['sold', 'Sold/day', 'r']] : []), ['spread', 'Spread', 'r']];
+      ? [['name', 'Item'], ['ilvl', 'Item level', 'r'], ['here', 'Price here', 'r g price'], ['med', 'EU median', 'r price'],
+         ['vs', 'vs EU median', 'r price'], ...(salesDays() ? [['sold', 'Sold/day', 'r g']] : [])]
+      : [['name', 'Item'], ['ilvl', 'Item level', 'r'], ['lo', 'Cheapest', 'r g price'], ['med', 'EU median', 'r price'],
+         ['hi', 'Highest', 'r price'], ['realms', 'Realms', 'r g'], ...(salesDays() ? [['sold', 'Sold/day', 'r']] : [])];
+    const classOf = {};
+    for (const [k, , cls] of cols) classOf[k] = cls || '';
     $('#results thead').innerHTML = '<tr>' + cols.map(([k, label, cls]) =>
       `<th class="${cls || ''}" data-col="${k}" ${k === state.sort ? `aria-sort="${state.dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>
         <button type="button" class="sort" data-sort="${k}">${label}</button></th>`).join('') + '</tr>';
+    renderSortMenu(realm);
+    renderFilterState();
     const extra = rollQuery({sec: els.sec.value, ter: els.ter.value, sock: els.sock.checked});
     const cell = (r, k) => {
       const spread = r.hi / Math.max(r.lo, 1);
@@ -368,31 +429,31 @@ function initSearch() {
         case 'name': return `<td><div class="item-cell">${icon(r, '', `${r.id}|`)}<div><a href="/ah/item/${r.id}${extra ? '?' + extra : ''}" class="qtext q-${qkey(r.q)}">${esc(r.name)}</a>${rankPill(r.rank)}
           ${r.rolls > 1 ? `<span class="rolls-badge">${r.rolls} ${r.id < 0 ? 'variants' : 'rolls'}</span>` : ''}
           <div class="item-sub">${esc(r.sub)}${r.slot ? ' · ' + esc(r.slot) : ''}</div></div></div></td>`;
-        case 'ilvl': return `<td class="r num">${r.ilvl_min === r.ilvl_max ? r.ilvl_max : `${r.ilvl_min}–${r.ilvl_max}`}</td>`;
-        case 'req': return `<td class="r num">${r.req || '<span class="faint">–</span>'}</td>`;
+        case 'ilvl': return `<td class="r num">${r.ilvl_min === r.ilvl_max ? r.ilvl_max : `${r.ilvl_min}–${r.ilvl_max}`}${
+          r.req ? `<span class="realm-tag">needs level ${r.req}</span>` : ''}</td>`;
         case 'lo': return `<td class="r">${coins(r.lo)}<span class="realm-tag">${r.commodity ? 'every realm' : esc(groupName(r.lo_cr))}</span></td>`;
         case 'hi': return r.commodity ? '<td class="r faint">–</td>'
-          : `<td class="r">${coins(r.hi)}<span class="realm-tag">${esc(groupName(r.hi_cr))}</span></td>`;
+          : `<td class="r">${coins(r.hi)}<span class="realm-tag">${esc(groupName(r.hi_cr))} · <span class="spread-x${spread >= 10 ? ' hot' : ''}" title="Highest is ${
+            spread < 10 ? spread.toFixed(1) : Math.round(spread).toLocaleString('en-GB')} times the cheapest">×${
+            spread < 10 ? spread.toFixed(1) : Math.round(spread).toLocaleString('en-GB')}</span></span></td>`;
         case 'med': return `<td class="r">${coins(r.med)}</td>`;
         case 'realms': return r.commodity
           ? '<td class="r"><span class="all-eu" title="Stackable goods sell on one auction house for all of EU">All EU</span></td>'
           : `<td class="r num">${r.realms}<span class="faint"> / ${D.snapshot.groups}</span></td>`;
-        case 'spread': if (r.commodity) return '<td class="r faint">–</td>';
-          return `<td class="r"><span class="spread ${spread >= 10 ? 'hot' : ''}">×${spread < 10 ? spread.toFixed(1) : Math.round(spread).toLocaleString('en-GB')}</span></td>`;
-        case 'here': return `<td class="r">${r.here != null ? coins(r.here) : '<span class="faint">Not listed</span>'}</td>`;
+        case 'here': return `<td class="r">${r.here != null ? `${coins(r.here)}<span class="realm-tag">${r.here_n} listed</span>` : '<span class="faint">Not listed</span>'}</td>`;
         case 'vs': {
           if (r.here == null) return '<td class="r faint">–</td>';
           const d = r.here / r.med - 1;
           return `<td class="r num ${d < -0.05 ? 'delta-down' : d > 0.05 ? 'delta-up' : 'muted'}">${pct(d)}</td>`;
         }
-        case 'qty': return `<td class="r num">${r.here_n || '<span class="faint">0</span>'}</td>`;
         case 'sold': return `<td class="r num${r.sold_7d ? '' : ' faint'}" title="Estimated sales per day in EU, over ${salesSpan()}">${perDay(r.sold_7d)}</td>`;
       }
       return '<td></td>';
     };
     $('#results tbody').innerHTML = state.rows.length
       ? state.rows.map(r => `<tr class="link ${realm && r.here == null ? 'dim' : ''}" data-href="/ah/item/${r.id}${extra ? '?' + extra : ''}">${
-          cols.map(c => cell(r, c[0]).replace('<td', `<td data-col="${c[0]}"`)).join('')}</tr>`).join('')
+          cols.map(c => cell(r, c[0]).replace('<td class="', `<td data-col="${c[0]}" class="${classOf[c[0]].replace(/\br\b/, '')} `)
+            .replace('<td>', `<td data-col="${c[0]}">`)).join('')}</tr>`).join('')
       : `<tr><td colspan="${cols.length}"><div class="empty">${D.snapshot.swept_at ? 'No items match these filters. Clear a filter or pick another category.'
           : 'The first snapshot of every EU auction house is still being collected. Check back in a few minutes.'}</div></td></tr>`;
     $('#result-count').textContent = `${state.total.toLocaleString('en-GB')} item${state.total === 1 ? '' : 's'}`
@@ -409,7 +470,7 @@ function initSearch() {
   let debounce;
   form.addEventListener('input', e => {
     clearTimeout(debounce);
-    if (e.target === els.medCol) { renderResults(); return; }
+    renderFilterState();
     debounce = setTimeout(() => search(), e.target === els.q || e.target.type === 'number' ? 300 : 0);
   });
   form.addEventListener('submit', e => { e.preventDefault(); search(); });
@@ -786,7 +847,79 @@ function initCollection() {
     state.shown = COLL_PAGE;
     render();
   }
-  els.form.addEventListener('submit', e => { e.preventDefault(); lookup(); });
+  els.form.addEventListener('submit', e => { e.preventDefault(); closeSuggest(); lookup(); });
+
+  // ---------- name suggestions as you type (/ah/api/characters, from Raider.IO): pick one, realm and all ----------
+  const sug = {pop: $('#c-suggest-pop'), list: $('#c-suggest'), foot: $('#c-suggest-foot'), rows: [], active: -1,
+               timer: 0, ticket: 0, cache: new Map()};
+  const CREDIT = 'Suggestions from <a href="https://raider.io" target="_blank" rel="noopener">Raider.IO</a>';
+  function closeSuggest() {
+    sug.pop.hidden = true;
+    sug.active = -1;
+    els.name.setAttribute('aria-expanded', 'false');
+    els.name.removeAttribute('aria-activedescendant');
+  }
+  function drawSuggest(foot) {
+    sug.list.innerHTML = sug.rows.map((c, i) => `<li role="option" id="c-sug-${i}" data-i="${i}" aria-selected="${i === sug.active}"
+        class="suggest-item${i === sug.active ? ' active' : ''}">
+        ${c.avatar ? `<img src="${esc(c.avatar)}" alt="" width="34" height="34" loading="lazy">` : '<span class="suggest-ph" aria-hidden="true"></span>'}
+        <span class="suggest-text"><span class="suggest-name cls-${esc(c.cls.toLowerCase().replace(/\s+/g, '-'))}">${esc(c.name)}</span>
+          <span class="suggest-meta">${esc(c.cls)}${c.cls ? ' · ' : ''}${esc(c.realm)}</span></span></li>`).join('');
+    sug.list.hidden = !sug.rows.length;
+    sug.foot.innerHTML = foot || CREDIT;
+    sug.pop.hidden = false;
+    els.name.setAttribute('aria-expanded', 'true');
+    if (sug.active >= 0) els.name.setAttribute('aria-activedescendant', `c-sug-${sug.active}`);
+    else els.name.removeAttribute('aria-activedescendant');
+    const on = sug.list.querySelector('.active');
+    if (on) on.scrollIntoView({block: 'nearest'});
+  }
+  async function suggest() {
+    const q = els.name.value.trim().toLowerCase();
+    if (q.length < 2 || !/^\p{L}+$/u.test(q)) { closeSuggest(); return; }
+    const t = ++sug.ticket;
+    let data = sug.cache.get(q);
+    if (!data) {
+      if (sug.pop.hidden || !sug.rows.length) { sug.rows = []; sug.active = -1; drawSuggest('Searching…'); }
+      try { const r = await fetch('/ah/api/characters?' + new URLSearchParams({q})); data = r.ok ? await r.json() : null; } catch {}
+      if (data && !data.unavailable) sug.cache.set(q, data);
+    }
+    if (t !== sug.ticket || document.activeElement !== els.name) return;
+    if (!data || data.unavailable) { closeSuggest(); return; }  // Raider.IO not answering: name + realm by hand, as before
+    sug.rows = data.rows;
+    sug.active = -1;
+    drawSuggest(sug.rows.length ? '' : `No EU characters found named “${esc(els.name.value.trim())}…”. Pick the realm yourself. · ${CREDIT}`);
+  }
+  function pick(i) {
+    const c = sug.rows[i];
+    if (!c) return;
+    els.name.value = c.name;
+    els.realm.value = c.slug;
+    closeSuggest();
+    lookup();
+  }
+  els.name.addEventListener('input', () => { clearTimeout(sug.timer); sug.timer = setTimeout(suggest, 180); });
+  els.name.addEventListener('focus', () => { if (sug.rows.length && els.name.value.trim().length >= 2) drawSuggest(); });
+  els.name.addEventListener('blur', () => setTimeout(closeSuggest, 120));
+  els.name.addEventListener('keydown', e => {
+    if (sug.pop.hidden || !sug.rows.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = sug.rows.length;
+      sug.active = e.key === 'ArrowDown' ? (sug.active + 1) % n : (sug.active <= 0 ? n - 1 : sug.active - 1);
+      drawSuggest();
+    } else if (e.key === 'Enter' && sug.active >= 0) {
+      e.preventDefault();
+      pick(sug.active);
+    } else if (e.key === 'Escape') {
+      closeSuggest();
+    }
+  });
+  sug.list.addEventListener('pointerdown', e => e.preventDefault());  // keep focus in the box while picking
+  sug.list.addEventListener('click', e => { const li = e.target.closest('li[data-i]'); if (li) pick(+li.dataset.i); });
+  sug.list.addEventListener('error', e => {  // an avatar Blizzard no longer has
+    if (e.target.tagName === 'IMG') e.target.replaceWith(Object.assign(document.createElement('span'), {className: 'suggest-ph'}));
+  }, true);
   $('#c-kind').addEventListener('click', e => { const b = e.target.closest('button[data-kind]'); if (b) setKind(b.dataset.kind); });
   $('#c-summary').addEventListener('click', e => {
     const b = e.target.closest('button[data-kind]');

@@ -359,7 +359,10 @@ def summarize():
 
 def _realms_stale():
     row = db.get_meta('realms')
-    return not row or row[1] < datetime.now(timezone.utc) - timedelta(hours=REALM_INDEX_HOURS)
+    if not row or row[1] < datetime.now(timezone.utc) - timedelta(hours=REALM_INDEX_HOURS):
+        return True
+    # a group stored before we kept slugs (the collection page's realm list needs them): fetch again now, not tomorrow
+    return bool(db.fetch_one('SELECT 1 AS missing FROM ah_realm_groups WHERE slugs IS NULL LIMIT 1'))
 
 
 async def refresh_realms(bz):
