@@ -140,7 +140,7 @@ def auras(table, fight_start, duration, kind, keep=()):
 
 
 ON_OTHERS_SPECS = {'Augmentation'}  # besides healers: specs whose key buffs go on others (Ebon Might, Prescience)
-MIN_ON_OTHERS = 0.1                 # a buff on others averaging fewer active than this isn't kept
+MIN_ON_OTHERS = 0.1                 # a buff on others covering less of the raid than this on average isn't kept
 
 
 def wants_on_others(player):
@@ -151,8 +151,9 @@ def wants_on_others(player):
 def on_others(table, duration, cast):
     """
     The buffs a player kept on anyone (their own spells only: cast = their Casts table's names) ->
-    [{'id', 'name', 'uptime'}]: uptime summed over every target, so uptime / duration = how many were
-    active on average (WowAnalyzer's "average Renewing Mists").
+    [{'id', 'name', 'uptime'}]: WCL's uptime averaged over every player in the fight, so uptime / duration is the
+    share of the raid that had it - times the raid's size, how many were out on average (WowAnalyzer's "average
+    Renewing Mists": 13.6 out on 20 players shows here as 0.68 - checked against a raw combat log).
     """
     best = {}
     own = own_auras(cast)  # their own spells - and what they apply under another name (APPLIES)
@@ -659,29 +660,32 @@ ON_OTHERS_GOOD, ON_OTHERS_OK = 0.9, 0.75   # how many you keep out on average, a
 
 def on_others_rows(numbered, name, top, talents=None):
     """
-    HoTs and buffs kept on others, as the average number active over the fight, next to the top players
+    HoTs and buffs kept on others, as the average number out over the fight, next to the top players
     (median of those who use it): [{'id', 'name', 'ours', 'top', 'top_users', 'verdict', 'not_taken'}] -
     not_taken: never out, and a talent you didn't take (see uptime()) - no verdict, listed last.
+    The stored uptimes are shares of the raid (on_others()): times each fight's number of players, a count.
+    Top players fetched before their raid's size was kept don't count until they're fetched again.
     """
     mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None]
-    top = [p for p in top or [] if p.get('on_others') is not None and p.get('duration')]
+    top = [p for p in top or [] if p.get('on_others') is not None and p.get('duration') and p.get('raid_size')]
     if not mine:
         return []
     need = min(3, len(top))
     total = sum(ex.get('duration') or 0 for _, _, _, ex in mine)
     ours, ids = {}, {}
-    for _, _, me, _ in mine:
+    for _, _, me, ex in mine:
+        players = len(ex.get('players') or {}) or 1  # the pull's whole roster (build_extras)
         for a in me['on_others']:
             if a['name'] in RAID_WIDE_AURAS:
                 continue
-            ours[a['name']] = ours.get(a['name'], 0) + a['uptime']
+            ours[a['name']] = ours.get(a['name'], 0) + a['uptime'] * players
             ids.setdefault(a['name'], a['id'])
     tops = {}
     for p in top:
         for a in p['on_others']:
             if a['name'] in RAID_WIDE_AURAS:
                 continue
-            tops.setdefault(a['name'], []).append(a['uptime'] / p['duration'])
+            tops.setdefault(a['name'], []).append(a['uptime'] / p['duration'] * p['raid_size'])
             ids.setdefault(a['name'], a['id'])
     our_casts = _cast_names(mine)
     rows = []

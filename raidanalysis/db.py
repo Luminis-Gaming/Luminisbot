@@ -1362,9 +1362,12 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                   OR (b.status NOT IN ('error', 'empty') AND b.fetched_at > NOW() - make_interval(days => %s)
                       -- fetched before every top parse's spec was checked, or before their auras and
                       -- casts were kept (uptime / casts per minute), or the lust on them (the cooldowns
-                      -- timeline): fetch again
+                      -- timeline), or - healers' HoTs on others - before their raid's size was (to count the HoTs
+                      -- out): fetch again
                       AND (jsonb_array_length(b.players) = 0
-                           OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras' AND b.players -> 0 ? 'lust'))))
+                           OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras' AND b.players -> 0 ? 'lust'
+                               AND (jsonb_typeof(b.players -> 0 -> 'on_others') IS DISTINCT FROM 'array'
+                                    OR b.players -> 0 ? 'raid_size')))))
         )
         ORDER BY c.last_played DESC
         LIMIT %s

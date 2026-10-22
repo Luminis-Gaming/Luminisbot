@@ -1525,7 +1525,8 @@ class TestTalents(unittest.TestCase):
         numbered = [(1, {'fight_id': 1, 'start_ms': 0, 'end_ms': 300000,
                          'analysis': {'extras': {'duration': 300000, 'players': {'Boops': me}}}})]
         top = [{'duration': 300000, 'auras': [{'id': 1, 'name': 'Healing Elixir', 'kind': 'buff', 'uptime': 200000}],
-                'cast_names': {'Healing Elixir': 5}, 'on_others': [{'id': 2, 'name': 'Spiritfont', 'uptime': 600000}]}
+                'cast_names': {'Healing Elixir': 5}, 'on_others': [{'id': 2, 'name': 'Spiritfont', 'uptime': 30000}],
+                'raid_size': 20}
                for _ in range(5)]
         # Talents unknown: never up and never cast - most likely not talented, no verdict
         up = throughput.uptime(numbered, 'Boops', top)
@@ -1860,12 +1861,16 @@ class TestHotsOnOthers(unittest.TestCase):
     """Renewing Mist is judged on how many are out on the raid, not on its uptime on the healer."""
 
     def test_average_active_and_not_self_uptime(self):
+        """
+        WCL's uptime of a buff on others is averaged over the raid's players: 13.6 Renewing Mists out on 20 players is
+        0.68 (a raw combat log said 13.6) - shown as the count, for us and for the top players alike.
+        """
         from raidanalysis import throughput
-        roster = [{'name': 'Boops', 'role': 'healer'}]
+        roster = [{'name': 'Boops', 'role': 'healer'}] + [{'name': f'P{i}', 'role': 'dps'} for i in range(19)]
         tables = {'damageDone': {'entries': []}, 'healing': {'entries': [{'name': 'Boops', 'total': 1, 'activeTime': 1}]}}
         per_player = {1: {'buffs': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 180000}]},
                           'debuffs': [], 'casts': {'entries': [{'name': 'Renewing Mist', 'total': 50}]},
-                          'on_others': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 1_800_000},
+                          'on_others': {'auras': [{'guid': 119611, 'name': 'Renewing Mist', 'totalUptime': 0.3 * 300000},
                                                   {'guid': 2, 'name': 'Power Infusion', 'totalUptime': 60000}]}}}
         fight = {'id': 1, 'startTime': 0, 'endTime': 300000, 'kill': True}
         extras = throughput.build_extras(fight, roster, {1: 'Boops'}, tables, per_player, {})
@@ -1873,12 +1878,21 @@ class TestHotsOnOthers(unittest.TestCase):
         self.assertEqual([a['name'] for a in extras['players']['Boops']['on_others']], ['Renewing Mist'])  # own spells
         numbered = [(1, {'fight_id': 1, 'kill': True, 'start_ms': 0, 'end_ms': 300000,
                          'analysis': {'players': roster, 'extras': extras}})]
-        top = [{'duration': 300000, 'on_others': [{'id': 119611, 'name': 'Renewing Mist', 'uptime': 2_400_000}],
+        top = [{'duration': 300000, 'on_others': [{'id': 119611, 'name': 'Renewing Mist', 'uptime': 0.4 * 300000}],
                 'auras': [{'id': 119611, 'name': 'Renewing Mist', 'kind': 'buff', 'uptime': 150000}],
-                'cast_names': {'Renewing Mist': 55}}] * 5
+                'cast_names': {'Renewing Mist': 55}, 'raid_size': 20}] * 5
         row = throughput.on_others_rows(numbered, 'Boops', top)[0]
-        self.assertEqual((row['name'], row['ours'], row['top'], row['verdict']), ('Renewing Mist', 6.0, 8.0, 'ok'))
+        self.assertEqual((row['name'], round(row['ours'], 6), round(row['top'], 6), row['verdict']),
+                         ('Renewing Mist', 6.0, 8.0, 'ok'))
         self.assertEqual(throughput.uptime(numbered, 'Boops', top), [])  # no "uptime on you" tile for it
+        # Top players fetched before their raid's size was kept: no count to compare with until fetched again
+        old = [{k: v for k, v in p.items() if k != 'raid_size'} for p in top]
+        self.assertIsNone(throughput.on_others_rows(numbered, 'Boops', old)[0]['top'])
+        details = {'data': {'playerDetails': {'tanks': [{'name': 'T'}], 'healers': [{'name': 'H'}],
+                                              'dps': [{'name': 'D1'}, {'name': 'D2'}]}}}
+        from raidanalysis import wcl
+        self.assertEqual(wcl.players_in_details(details), 4)
+        self.assertIsNone(wcl.players_in_details({}))
 
     def test_raid_buff_missing(self):
         """Nobody of the class kept the raid buff up: every one of them hears it. Two priests sharing it is fine."""
@@ -3371,8 +3385,8 @@ class TestUpgradedHots(unittest.TestCase):
     def test_graded_separately(self):
         from raidanalysis import throughput
         top = [{'duration': self.DUR, 'on_others': [{'id': 366155, 'name': 'Reversion', 'uptime': 0.8 * self.DUR},
-                                                    {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.7 * self.DUR}]}
-               for _ in range(3)]
+                                                    {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.7 * self.DUR}],
+                'raid_size': 1} for _ in range(3)]
         mine = [{'id': 367364, 'name': 'Reversion', 'uptime': 0.75 * self.DUR},
                 {'id': 1256579, 'name': "Merithra's Blessing", 'uptime': 0.72 * self.DUR}]
         pull = (1, {'analysis': {'extras': {'detail': True, 'duration': self.DUR, 'players': {

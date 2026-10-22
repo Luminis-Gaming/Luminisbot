@@ -383,11 +383,11 @@ def _on_others_tiles(rows, lookup):
     for r in rows:
         share = r['ours'] / r['top'] if r['top'] else None
         band = {'good': 'good', 'ok': 'ok', None: 'neutral'}.get(r['verdict'], 'bad')
-        top = f'Top {r["top_users"]}: {r["top"]:.1f} active' if r['top'] else 'Top players: no data'
+        top = f'Top {r["top_users"]}: {r["top"]:.1f} out on average' if r['top'] else 'Top players: no data'
         tiles.append(f"""
             <div class="rot-tile">
                 <div class="rot-head">{_spell(r['name'], r['id'], info=lookup.get(r['id']))}{_pill(r['verdict'])}</div>
-                <div class="rot-value"><b>{r['ours']:.1f}</b><span>active on average</span></div>
+                <div class="rot-value"><b>{r['ours']:.1f}</b><span>out on the raid on average</span></div>
                 <div class="subscore-track"><div class="subscore-fill {band}" style="width:{min(100, 100 * (share or 0)):.0f}%"></div></div>
                 <div class="muted small">{top}</div>
             </div>""")

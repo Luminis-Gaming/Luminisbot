@@ -255,6 +255,7 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
                         'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
+                        'raid_size': fight.get('raid_size'),
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
                         'lust': cooldowns.lust_bands(fight.get('lust'), fight['start'], fight['end'], fight.get('actor_id')),
                         'resources': resources, 'procs': procs, 'on_others': on_others, 'targets': targets})

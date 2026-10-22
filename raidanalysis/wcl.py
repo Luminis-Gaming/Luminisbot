@@ -515,7 +515,7 @@ async def get_player_fight(session, code, fight_id, name):
     """
     One player's casts in someone else's logged kill, plus that fight's timing and the spec they
     played in it: {'start', 'end', 'phases': [{'id', 'start'}] (ms into the fight), 'casts': [events],
-    'spec': 'Devourer' or None, 'lust': [their lust buff events]}.
+    'spec': 'Devourer' or None, 'lust': [their lust buff events], 'raid_size': players in the fight}.
     """
     data = await query(session, """
         query($code: String!, $fights: [Int]!, $filter: String!, $lust: String!) {
@@ -541,6 +541,7 @@ async def get_player_fight(session, code, fight_id, name):
             'casts': ((report.get('events') or {}).get('data')) or [],
             'lust': ((report.get('lust') or {}).get('data')) or [],
             'spec': _spec_in_details(report.get('playerDetails'), name),
+            'raid_size': players_in_details(report.get('playerDetails')),
             'actor_id': entry.get('id'), 'boss_ids': boss_ids(_unwrap(report.get('enemyDamage')))}
 
 
@@ -559,6 +560,13 @@ def _details_entry(player_details, name):
             if entry.get('name') == name:
                 return entry
     return None
+
+
+def players_in_details(player_details):
+    """How many players a fight's playerDetails lists (tanks, healers and dps - no pets) - None when it lists none."""
+    details = (player_details or {}).get('data', player_details) or {}
+    details = details.get('playerDetails', details) or {}
+    return len({e.get('name') for role in ('tanks', 'healers', 'dps') for e in details.get(role) or []}) or None
 
 
 def _spec_in_details(player_details, name):

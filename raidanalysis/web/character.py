@@ -401,7 +401,7 @@ def logs(prof):
         rows.append(f"""
             <tr data-href="{esc(point['href'])}"{' class="ch-extra"' if i >= LOGS_SHOWN else ''}>
                 <td class="nowrap">{_date(night['date'], '%d %b %Y')}</td>
-                <td><a href="/admin/raids/report/{quote(night['code'])}"><strong>{esc(night['title'])}</strong></a>
+                <td><a href="{esc(point['href'])}"><strong>{esc(night['title'])}</strong></a>
                     <br><span class="muted small">{esc(zone)}</span> {diffs}</td>
                 <td><div class="ch-bchips">{chips}</div></td>
                 <td class="num">{point['pulls']}</td>
