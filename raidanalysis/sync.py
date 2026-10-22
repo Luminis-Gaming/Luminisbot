@@ -323,7 +323,7 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
             hots = throughput.hot_candidates(per_player, fight['endTime'] - fight['startTime'])
             if hots:
                 hot_events = await wcl.get_events(session, code, fight['id'], 'Buffs', throughput.hots_filter(
-                    hots, {a['id'] for found in hots.values() for a in found}))
+                    [names_by_id[aid] for aid in hots], {a['id'] for found in hots.values() for a in found}))
             resource_events = await wcl.get_events(session, code, fight['id'], 'Resources', "type = 'resourcechange'")
             procs = throughput.proc_candidates(per_player, tracked)
         if procs:  # only the self-buffs worth checking: the whole raid's are ~30k events a pull
@@ -657,7 +657,8 @@ async def _backfill_hot_counts(session):
                     for found in [throughput.on_others((tables.get(ids[n]) or {}).get('on_others'), duration,
                                                        players[n].get('casts') or {})] if found}
             events = await wcl.get_events(session, code, fight_id, 'Buffs', throughput.hots_filter(
-                hots, {a['id'] for found in hots.values() for a in found})) if hots else []
+                [n for n in who if ids.get(n) in hots], {a['id'] for found in hots.values() for a in found})) \
+                if hots else []
         except wcl.WCLRateLimited:
             raise
         except wcl.WCLError as e:
@@ -667,7 +668,7 @@ async def _backfill_hot_counts(session):
             if n in ids and (tables.get(ids[n]) or {}).get('on_others') is not None:
                 players[n]['on_others'] = throughput.hots_out(events, ids[n], hots.get(ids[n], []), set(ids.values()),
                                                               pull['start_ms'], pull['end_ms'])
-        extras.update(hots_counted=True, applied_hots=True)
+        extras.update(hots_counted=throughput.HOTS_COUNTED, applied_hots=True)
         db.set_pull_extras(code, fight_id, extras)
 
 

@@ -145,6 +145,18 @@ MIN_ON_OTHERS = 0.1                 # WCL's table: a buff up less than this (a s
 # (Mana Tea, Thunder Focus Tea - the table mixes them in), and one with fewer out than this on average isn't kept out
 MIN_OTHER_TARGETS = 2
 MIN_OUT_ON_OTHERS = 0.3
+# Buffs that go on others and whose uptime on yourself matters too, so they're judged in both places. A HoT on
+# yourself (Rejuvenation, Renewing Mist) is incidental - only how many are out counts.
+SELF_AND_OTHERS = {'Ebon Might', 'Earth Shield'}
+# extras['hots_counted'] / a top player's: how their buffs on others were counted - bump it when that changes, and
+# they're counted again (the backfill, the benchmarks). 1: filtered by actor id, which WCL's filters don't know (it
+# means the game's id there) - nothing was counted.
+HOTS_COUNTED = 2
+
+
+def hots_counted(row):
+    """Whether a pull's extras (or a top player) has its buffs on others counted the current way."""
+    return (row or {}).get('hots_counted') == HOTS_COUNTED
 
 
 def wants_on_others(player):
@@ -171,10 +183,13 @@ def on_others(table, duration, cast):
     return sorted(best.values(), key=lambda a: -a['uptime'])
 
 
-def hots_filter(caster_ids, candidates):
-    """The Buffs events filter for hots_out(): these players' applications and removals of their candidate buffs."""
-    return (f"source.id in ({','.join(str(int(i)) for i in sorted(caster_ids))}) "
-            f"and ability.id in ({','.join(str(int(i)) for i in sorted(candidates))}) "
+def hots_filter(caster_names, candidates):
+    """
+    The Buffs events filter for hots_out(): these players' applications and removals of their candidate buffs. By
+    name - in WCL's filter expressions source.id is the game's id, not the report's actor id: it matches nothing.
+    """
+    names = ', '.join('"' + n.replace('"', '') + '"' for n in sorted(caster_names))
+    return (f"source.name in ({names}) and ability.id in ({','.join(str(int(i)) for i in sorted(candidates))}) "
             f'and type in ("applybuff", "removebuff")')
 
 
@@ -422,7 +437,7 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
     # prepull_buffs: self-buffs cast before the pull are in (older pulls: backfilled - Moonkin Form showed 0%)
     # hots_counted: buffs on others are counted from the events, on others only (older pulls: WCL's uptime - backfilled)
     return {'v': EXTRAS_VERSION, 'detail': detail, 'raid_buffs': True, 'healer_parses': True, 'applied_hots': True,
-            'prepull_buffs': True, 'hots_counted': True, 'duration': duration,
+            'prepull_buffs': True, 'hots_counted': HOTS_COUNTED, 'duration': duration,
             'players': players,
             'targets': sorted(raid.values(), key=lambda t: -t['total'])}
 
@@ -611,10 +626,11 @@ def uptime(numbered, name, top, tracked=frozenset(), talents=None):
     spells = set(KEY_AURAS)
     for p in top:
         spells.update((p.get('cast_names') or {}).keys())
-    # A HoT like Renewing Mist is about how many are out on the raid (on_others_rows), not the one on you.
-    # Counted ones only: WCL's table had the monk's own Mana Tea in it too (hots_out)
-    on_raid = {a['name'] for p in top if p.get('hots_counted') for a in p.get('on_others') or []}
-    on_raid |= {a['name'] for _, _, me, ex in mine if ex.get('hots_counted') for a in me.get('on_others') or []}
+    # A HoT like Renewing Mist is about how many are out on the raid (on_others_rows), not the one on you - unless
+    # it's both (SELF_AND_OTHERS: Ebon Might).
+    on_raid = (_on_raid([p.get('on_others') for p in top if hots_counted(p)], [p.get('on_others') for p in top])
+               | _on_raid([me.get('on_others') for _, _, me, ex in mine if hots_counted(ex)],
+                          [me.get('on_others') for _, _, me, _ in mine])) - SELF_AND_OTHERS
     seen = {}
     for i, p in enumerate(top):
         if not p.get('duration'):
@@ -650,6 +666,14 @@ def uptime(numbered, name, top, tracked=frozenset(), talents=None):
                      'bands': (strip or {}).get('bands') or [], 'band_duration': longest[3].get('duration'),
                      'band_pull': longest[0], 'not_taken': not_taken})
     return sorted(rows, key=lambda r: (r['not_taken'], r['verdict'] == 'good', -r['top']))
+
+
+def _on_raid(counted, any_kept):
+    """
+    The names of the buffs these lists say go out on others: the counted ones (hots_out) when there are any - WCL's
+    table, from before the counting, until then (it has a monk's own Mana Tea in it too, so it's only the fallback).
+    """
+    return {a['name'] for kept in (counted or any_kept) for a in kept or []}
 
 
 def _cast_names(mine):
@@ -725,8 +749,8 @@ def on_others_rows(numbered, name, top, talents=None):
     Counted from the buff events (hots_out): pulls and top players from before that (WCL's uptime: neither a count
     nor on others only) don't count until they're fetched again.
     """
-    mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None and m[3].get('hots_counted')]
-    top = [p for p in top or [] if p.get('on_others') is not None and p.get('hots_counted')]
+    mine = [m for m in detail_pulls(numbered, name) if m[2].get('on_others') is not None and hots_counted(m[3])]
+    top = [p for p in top or [] if p.get('on_others') is not None and hots_counted(p)]
     if not mine:
         return []
     need = min(3, len(top))

@@ -212,7 +212,7 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
     made it ('WCL listed no parses', '40 failed to load: ...'), so an empty benchmark can tell "nobody's ranked"
     from "we dropped them all".
     """
-    from . import gamedata, wcl
+    from . import gamedata, throughput, wcl
     catalog = gamedata._talent_catalog() if hero else None
     players, wrong_spec, listed = [], 0, []
     dropped, first_error = Counter(), None
@@ -262,7 +262,7 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
                         'code': r['code'], 'fight_id': r['fight_id'], 'duration': duration,
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
                         'lust': cooldowns.lust_bands(fight.get('lust'), fight['start'], fight['end'], fight.get('actor_id')),
-                        'resources': resources, 'procs': procs, 'on_others': on_others, 'hots_counted': True,
+                        'resources': resources, 'procs': procs, 'on_others': on_others, 'hots_counted': throughput.HOTS_COUNTED,
                         'targets': targets})
     who = f"{hero + ' ' if hero else ''}{spec} {class_name}"
     if wrong_spec:
@@ -297,7 +297,7 @@ async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
         auras, cast_names, on_others = throughput.top_auras(tables, fight['start'], duration)
         if on_others:  # the candidates: counted from their events, on players only (not pets)
             hot_events = await wcl.get_events(session, code, fight_id, 'Buffs',
-                                              throughput.hots_filter([aid], {a['id'] for a in on_others}))
+                                              throughput.hots_filter([ranking['name']], {a['id'] for a in on_others}))
             player_ids = set((await wcl.get_actor_ids(session, code)).values())
             on_others = throughput.hots_out(hot_events, aid, on_others, player_ids, fight['start'], fight['end'])
         events = await wcl.get_events(session, code, fight_id, 'Resources',
@@ -786,9 +786,10 @@ def _main_spec_player(numbered, name):
 
 def _benchmark_for(numbered, name):
     """
-    (player entry, hero tree, benchmark row, our pulls) for one character, or None when their spec isn't known.
-    The benchmark is their hero tree's top players; until those are fetched, the whole spec's (from before hero
-    trees) - its 'hero' says which it is.
+    (player entry, hero tree, benchmark row, our pulls, hero status) for one character, or None when their spec
+    isn't known. The benchmark is their hero tree's top players; when there are none (not fetched yet, WCL had no
+    parses of it, or fetching failed - hero status: None / 'empty' / 'error'), the whole spec's (from before hero
+    trees) if it has any - its 'hero' says which it is.
     """
     from . import db
     from .gamedata import main_hero
@@ -799,9 +800,12 @@ def _benchmark_for(numbered, name):
     key = (first['encounter_id'], first['difficulty'], player['class'], player['spec'])
     hero = main_hero(numbered, name, player['spec'])
     benchmark = db.get_benchmark(*key, hero or '')
-    if hero and benchmark is None:
-        benchmark = db.get_benchmark(*key, '')
-    return player, hero, benchmark, our_pulls(numbered, name, spec=player['spec'], hero=hero)
+    hero_status = (benchmark or {}).get('status')
+    if hero and not (benchmark or {}).get('players'):
+        whole = db.get_benchmark(*key, '')
+        if (whole or {}).get('players') or benchmark is None:
+            benchmark = whole
+    return player, hero, benchmark, our_pulls(numbered, name, spec=player['spec'], hero=hero), hero_status
 
 
 async def ensure_spells_for(numbered, name):
@@ -809,7 +813,7 @@ async def ensure_spells_for(numbered, name):
     found = _benchmark_for(numbered, name)
     if not found:
         return 0
-    _, _, bench, pulls = found
+    _, _, bench, pulls, _ = found
     ours = {sid for p in pulls for _, sid in p['casts']}
     # Wasted procs: the buffs' events only carry ids, so their names and icons come from Wowhead too
     from .throughput import detail_pulls
@@ -892,7 +896,7 @@ def for_player(numbered, name):
     found = _benchmark_for(numbered, name)
     if not found:
         return None
-    player, hero, benchmark, pulls = found
+    player, hero, benchmark, pulls, hero_status = found
     top = (benchmark or {}).get('players') or []
     ids = {sid for p in top for _, sid in p['casts']} | {sid for p in pulls for _, sid in p['casts']}
     spells = db.get_spells(ids) if ids else {}
@@ -901,5 +905,6 @@ def for_player(numbered, name):
     talents = not_taken(numbered, name)
     # Named after the top players it really is: their hero tree's, or the whole spec's until those are fetched
     label = spec_label(player, benchmark.get('hero') if benchmark else hero)
-    return {'player': player, 'hero': hero, 'benchmark': benchmark, 'top': top, 'pulls': pulls, 'talents': talents,
+    return {'player': player, 'hero': hero, 'hero_status': hero_status, 'benchmark': benchmark, 'top': top,
+            'pulls': pulls, 'talents': talents,
             'rows': compare(pulls, top, spells, overrides, talents), 'spells': spells, 'label': label}

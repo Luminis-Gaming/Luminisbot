@@ -20,12 +20,16 @@ NOT_TAKEN_TIP = ("You never pressed it on any of these pulls - most likely a tal
 
 
 def hero_hint(data):
-    """Their hero tree's top players aren't fetched yet: these are the whole spec's, whichever tree they play."""
+    """No top players of their hero tree (yet): these are the whole spec's, whichever tree they play - and why."""
     if not (data or {}).get('hero') or not data.get('benchmark') or data['benchmark'].get('hero'):
         return ''
-    return (f'<p class="small warn-text">⚠️ The top {esc(benchmarks.spec_label(data["player"], data["hero"]))} on this '
-            f'boss haven\'t been fetched yet, so these are the top of the whole spec, on either hero tree - abilities '
-            f'only the other tree has can show up. The sync fetches them within a day or so.</p>')
+    who = esc(benchmarks.spec_label(data['player'], data['hero']))
+    why = {'empty': f"Warcraft Logs has no public top parses of {who} on this boss yet (tried again daily)",
+           'error': f"Fetching the top {who} on this boss failed (tried again tomorrow)"}.get(
+        data.get('hero_status'), f"The top {who} on this boss haven't been fetched yet (the sync gets them within a "
+                                 f"day or so)")
+    return (f'<p class="small warn-text">⚠️ {why}, so these are the top of the whole spec, on either hero tree - '
+            f'abilities only the other tree has can show up.</p>')
 
 
 def _spec_icon_class(spell_id):

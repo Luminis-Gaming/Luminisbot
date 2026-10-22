@@ -553,7 +553,7 @@ def save_healer_parses(code, fight_id, parses):
 
 _BEFORE_HOT_COUNTS = """
     p.analysis ? 'extras' AND NOT p.analysis ? 'archived'
-    AND NOT COALESCE((p.analysis->'extras'->>'hots_counted')::boolean, false)
+    AND COALESCE(p.analysis->'extras'->>'hots_counted', '') <> %(counted)s
 """
 
 
@@ -563,18 +563,20 @@ def pulls_missing_hot_counts(limit):
     someone has them (a healer's buffs-on-others): {'report_code', 'fight_id', 'start_ms', 'end_ms', 'extras'},
     newest first. The ones where nobody does are just marked done, so they aren't looked through again.
     """
+    from .throughput import HOTS_COUNTED
+    counted = {'counted': str(HOTS_COUNTED), 'limit': limit}
     _run(f"""
-        UPDATE raid_pulls p SET analysis = jsonb_set(p.analysis, '{{extras,hots_counted}}', 'true'::jsonb)
+        UPDATE raid_pulls p SET analysis = jsonb_set(p.analysis, '{{extras,hots_counted}}', to_jsonb(%(counted)s::int))
         WHERE {_BEFORE_HOT_COUNTS} AND NOT EXISTS (
             SELECT 1 FROM jsonb_each(COALESCE(p.analysis->'extras'->'players', '{{}}'::jsonb)) x
             WHERE jsonb_typeof(x.value->'on_others') = 'array')
-    """)
+    """, counted)
     return _run(f"""
         SELECT p.report_code, p.fight_id, p.start_ms, p.end_ms, p.analysis->'extras' AS extras
         FROM raid_pulls p JOIN raid_reports r ON r.code = p.report_code
         WHERE {_BEFORE_HOT_COUNTS}
-        ORDER BY r.start_time DESC, p.fight_id LIMIT %s
-    """, (limit,), fetch='all') or []
+        ORDER BY r.start_time DESC, p.fight_id LIMIT %(limit)s
+    """, counted, fetch='all') or []
 
 
 _BEFORE_PREPULL_BUFFS = """
@@ -1330,6 +1332,7 @@ def benchmarks_needed(limit, refresh_days, difficulties):
     KEEP_LATEST_LOGS guild / raid-event logs, plus imports from the last KEEP_IMPORTED_DAYS) that have no
     benchmark yet, a stale one, or a failed one from over a day ago - most recently played first.
     """
+    from .throughput import HOTS_COUNTED
     return _run("""
         WITH latest AS (
             SELECT r.code FROM raid_reports r
@@ -1368,11 +1371,12 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                       AND (jsonb_array_length(b.players) = 0
                            OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras' AND b.players -> 0 ? 'lust'
                                AND (jsonb_typeof(b.players -> 0 -> 'on_others') IS DISTINCT FROM 'array'
-                                    OR b.players -> 0 ? 'hots_counted')))))
+                                    OR b.players -> 0 ->> 'hots_counted' = %s)))))
         )
         ORDER BY c.last_played DESC
         LIMIT %s
-    """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, list(difficulties), refresh_days, limit), fetch='all')
+    """, (KEEP_LATEST_LOGS, KEEP_IMPORTED_DAYS, list(difficulties), refresh_days, str(HOTS_COUNTED), limit),
+                fetch='all')
 
 
 def boss_benchmarks(encounter_id, difficulty):

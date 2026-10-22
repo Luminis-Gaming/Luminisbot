@@ -1368,6 +1368,31 @@ class TestSpecSwap(unittest.TestCase):
         self.assertEqual(benchmarks.spec_label({'class': 'DemonHunter', 'spec': 'Devourer'}, 'Annihilator'),
                          'Annihilator Devourer Demon Hunters')
 
+    def test_whole_spec_while_the_hero_tree_has_no_top_players(self):
+        """Their hero tree's benchmark failed or is empty (WCL down): the whole spec's, saying why - not nothing."""
+        from unittest import mock
+        from raidanalysis import benchmarks, db, gamedata
+        from raidanalysis.web import compare
+        players = [{'name': 'Boopsboops', 'class': 'Monk', 'spec': 'Mistweaver', 'role': 'healer'}]
+        numbered = [(1, {'fight_id': 1, 'encounter_id': 3492, 'difficulty': 4, 'start_ms': 0, 'end_ms': 300000,
+                         'phases': [], 'analysis': {'players': players, 'casts': {'Boopsboops': []}}})]
+        whole = {'hero': '', 'status': 'ok', 'players': [{'name': 'Top', 'casts': [], 'duration': 300000}]}
+        rows = {}
+        with mock.patch.object(gamedata, 'main_hero', lambda *a, **k: 'Conduit of the Celestials'), \
+                mock.patch.object(db, 'get_benchmark', lambda *key: rows.get(key[-1])):
+            for status, says in ((None, "haven't been fetched yet"), ('error', 'failed'), ('empty', 'no public top')):
+                rows.clear()
+                rows[''] = whole
+                if status:
+                    rows['Conduit of the Celestials'] = {'hero': 'Conduit of the Celestials', 'status': status,
+                                                         'players': []}
+                _, hero, bench, _, hero_status = benchmarks._benchmark_for(numbered, 'Boopsboops')
+                self.assertIs(bench, whole)
+                data = {'player': players[0], 'hero': hero, 'hero_status': hero_status, 'benchmark': bench}
+                self.assertIn(says, compare.hero_hint(data))
+            rows.pop('')  # nothing to fall back on: their hero tree's row says why there's nobody
+            self.assertEqual(benchmarks._benchmark_for(numbered, 'Boopsboops')[2]['status'], 'empty')
+
     def test_hero_rows_from_db2(self):
         from raidanalysis import gamedata
         entries = ('ID,TraitDefinitionID,MaxRanks,NodeEntryType,TraitSubTreeID\n'
@@ -1548,10 +1573,10 @@ class TestTalents(unittest.TestCase):
         from raidanalysis.gamedata import Talents
         me = {'auras': [], 'casts': {'Vivify': 50}, 'on_others': []}
         numbered = [(1, {'fight_id': 1, 'start_ms': 0, 'end_ms': 300000,
-                         'analysis': {'extras': {'duration': 300000, 'hots_counted': True, 'players': {'Boops': me}}}})]
+                         'analysis': {'extras': {'duration': 300000, 'hots_counted': 2, 'players': {'Boops': me}}}})]
         top = [{'duration': 300000, 'auras': [{'id': 1, 'name': 'Healing Elixir', 'kind': 'buff', 'uptime': 200000}],
                 'cast_names': {'Healing Elixir': 5}, 'on_others': [{'id': 2, 'name': 'Spiritfont', 'out': 2.0}],
-                'hots_counted': True}
+                'hots_counted': 2}
                for _ in range(5)]
         # Talents unknown: never up and never cast - most likely not talented, no verdict
         up = throughput.uptime(numbered, 'Boops', top)
@@ -1922,7 +1947,7 @@ class TestHotsOnOthers(unittest.TestCase):
                          'analysis': {'players': roster, 'extras': extras}})]
         top = [{'duration': 300000, 'on_others': [{'id': 119611, 'name': 'Renewing Mist', 'out': 8.0, 'others': 19}],
                 'auras': [{'id': 119611, 'name': 'Renewing Mist', 'kind': 'buff', 'uptime': 150000}],
-                'cast_names': {'Renewing Mist': 55}, 'hots_counted': True}] * 5
+                'cast_names': {'Renewing Mist': 55}, 'hots_counted': 2}] * 5
         row = throughput.on_others_rows(numbered, 'Boops', top)[0]
         self.assertEqual((row['name'], round(row['ours'], 2), row['top'], row['verdict']),
                          ('Renewing Mist', 6.53, 8.0, 'ok'))
@@ -1930,8 +1955,49 @@ class TestHotsOnOthers(unittest.TestCase):
         # Top players and pulls from before the counting: WCL's uptime, nothing to compare until fetched again
         old = [{k: v for k, v in p.items() if k != 'hots_counted'} for p in top]
         self.assertIsNone(throughput.on_others_rows(numbered, 'Boops', old)[0]['top'])
+        # ...and the first counting (True: filtered by actor id, which WCL's filters don't know - nothing counted)
+        broken = [dict(p, hots_counted=True, on_others=[]) for p in top]
+        self.assertIsNone(throughput.on_others_rows(numbered, 'Boops', broken)[0]['top'])
+        self.assertEqual(throughput.hots_filter(['Boops', 'Say "hi"'], {119611, 124682}),
+                         'source.name in ("Boops", "Say hi") and ability.id in (119611,124682) '
+                         'and type in ("applybuff", "removebuff")')
         del extras['hots_counted']
         self.assertEqual(throughput.on_others_rows(numbered, 'Boops', top), [])
+
+    def test_which_section_a_buff_is_in(self):
+        """
+        Rejuvenation is a HoT on others - never "uptime on you", counted yet or not; Mana Tea (in WCL's table too) is
+        the monk's own once counted; Ebon Might is both: kept out on allies, and up on the Evoker.
+        """
+        from raidanalysis import throughput
+
+        def setup(cast, self_buffs, kept, counted):
+            extras = {'detail': True, 'duration': 300000, 'players': {'Boops': {
+                'casts': {n: 20 for n in cast}, 'on_others': kept,
+                'auras': [{'id': i, 'name': n, 'kind': 'buff', 'uptime': 0.6 * 300000, 'bands': []}
+                          for i, n in enumerate(self_buffs)]}}}
+            if counted:
+                extras['hots_counted'] = 2
+            top = [{'duration': 300000, 'cast_names': {n: 20 for n in cast}, 'on_others': kept,
+                    'auras': [{'id': i, 'name': n, 'kind': 'buff', 'uptime': 0.8 * 300000}
+                              for i, n in enumerate(self_buffs)], **({'hots_counted': 2} if counted else {})}] * 5
+            return [(1, {'fight_id': 1, 'analysis': {'extras': extras}})], top
+
+        def sections(numbered, top):
+            return ({r['name'] for r in throughput.uptime(numbered, 'Boops', top)},
+                    {r['name'] for r in throughput.on_others_rows(numbered, 'Boops', top)})
+        rejuv = [{'id': 774, 'name': 'Rejuvenation', 'uptime': 90000}, {'id': 8936, 'name': 'Regrowth', 'uptime': 60000}]
+        numbered, top = setup(['Rejuvenation', 'Regrowth'], ['Rejuvenation', 'Regrowth'], rejuv, counted=False)
+        self.assertEqual(sections(numbered, top)[0], set())  # not counted yet: WCL's table still says "on others"
+        counted = [{'id': 774, 'name': 'Rejuvenation', 'out': 8.5}, {'id': 8936, 'name': 'Regrowth', 'out': 2.1}]
+        numbered, top = setup(['Rejuvenation', 'Regrowth'], ['Rejuvenation', 'Regrowth'], counted, counted=True)
+        self.assertEqual(sections(numbered, top), (set(), {'Rejuvenation', 'Regrowth'}))
+        # Mana Tea: WCL's table had it - the counting says it's the monk's alone
+        numbered, top = setup(['Mana Tea', 'Renewing Mist'], ['Mana Tea', 'Renewing Mist'],
+                              [{'id': 1, 'name': 'Renewing Mist', 'out': 13.6}], counted=True)
+        self.assertEqual(sections(numbered, top), ({'Mana Tea'}, {'Renewing Mist'}))
+        numbered, top = setup(['Ebon Might'], ['Ebon Might'], [{'id': 0, 'name': 'Ebon Might', 'out': 3.8}], counted=True)
+        self.assertEqual(sections(numbered, top), ({'Ebon Might'}, {'Ebon Might'}))
 
     def test_raid_buff_missing(self):
         """Nobody of the class kept the raid buff up: every one of them hears it. Two priests sharing it is fine."""
@@ -2022,11 +2088,11 @@ class TestHotsOnOthers(unittest.TestCase):
         rows = throughput.uptime(numbered, 'Boops', top)
         self.assertEqual([r['name'] for r in rows], ['Voidform'])                   # your own buffs still count
         # ...and the same in "HoTs & buffs on others": the priest who didn't cast it isn't "Low"
-        extras['hots_counted'] = True
+        extras['hots_counted'] = 2
         extras['players']['Boops']['on_others'] = [{'id': 21562, 'name': 'Power Word: Fortitude', 'out': 0},
                                                    {'id': 17, 'name': 'Power Word: Shield', 'out': 1.0}]
         for p in top:
-            p.update(on_others=[{'id': 21562, 'name': 'Power Word: Fortitude', 'out': 20.0}], hots_counted=True)
+            p.update(on_others=[{'id': 21562, 'name': 'Power Word: Fortitude', 'out': 20.0}], hots_counted=2)
         self.assertEqual([r['name'] for r in throughput.on_others_rows(numbered, 'Boops', top)], ['Power Word: Shield'])
         self.assertNotIn("Hunter's Mark", throughput.RAID_WIDE_AURAS)               # one per hunter: still theirs
 
@@ -3426,10 +3492,10 @@ class TestUpgradedHots(unittest.TestCase):
         from raidanalysis import throughput
         top = [{'duration': self.DUR, 'on_others': [{'id': 366155, 'name': 'Reversion', 'out': 0.8},
                                                     {'id': 1256579, 'name': "Merithra's Blessing", 'out': 0.7}],
-                'hots_counted': True} for _ in range(3)]
+                'hots_counted': 2} for _ in range(3)]
         mine = [{'id': 367364, 'name': 'Reversion', 'out': 0.75},
                 {'id': 1256579, 'name': "Merithra's Blessing", 'out': 0.72}]
-        pull = (1, {'analysis': {'extras': {'detail': True, 'duration': self.DUR, 'hots_counted': True, 'players': {
+        pull = (1, {'analysis': {'extras': {'detail': True, 'duration': self.DUR, 'hots_counted': 2, 'players': {
             'Boopsproops': {'on_others': mine, 'casts': {"Merithra's Blessing": 30}}}}}})
         rows = {r['name']: r for r in throughput.on_others_rows([pull], 'Boopsproops', top)}
         self.assertEqual(set(rows), {'Reversion', "Merithra's Blessing"})
@@ -3471,7 +3537,7 @@ class TestUpgradedHots(unittest.TestCase):
                 mock.patch.object(sync, '_budget_ok', ok), mock.patch.object(wcl, 'get_actor_ids', actor_ids), \
                 mock.patch.object(wcl, 'get_player_tables', player_tables), mock.patch.object(wcl, 'get_events', events):
             asyncio.run(sync._backfill_hot_counts(None))
-        self.assertEqual(filters, ['source.id in (7) and ability.id in (367364,1256579) '
+        self.assertEqual(filters, ['source.name in ("Boopsproops") and ability.id in (367364,1256579) '
                                    'and type in ("applybuff", "removebuff")'])
         counted = {a['name']: (a['out'], a['others']) for a in saved[0]['players']['Boopsproops']['on_others']}
         self.assertEqual(counted, {'Reversion': (3.0, 3), "Merithra's Blessing": (3.0, 3)})
