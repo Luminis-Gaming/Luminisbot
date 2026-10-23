@@ -464,8 +464,6 @@ class TestTopPlayerComparison(unittest.TestCase):
         kinds = {sid: benchmarks.category(sid, info) for sid, info in self.SPELLS.items()}
         self.assertEqual(kinds, {1: 'throughput', 2: 'throughput', 3: 'personal', 4: None, 5: 'potion',
                                  6: 'potion', 7: 'trinket'})
-        # A Devourer's Void Metamorphosis has no cooldown (Soul Fragments open it): a major one all the same
-        self.assertEqual(benchmarks.category(8, {'name': 'Void Metamorphosis', 'meta': 'Instant'}), 'throughput')
 
     def test_lining_up_phase_by_phase(self):
         from raidanalysis import benchmarks
@@ -3849,3 +3847,79 @@ class TestBloodAndAcid(unittest.TestCase):
         self.assertEqual(mine.count('class="mk-track"'), 2)          # a row per pull
         self.assertIsNone(marks.player_card([(1, pull)], 'Nobody', lambda n, p: ''))
         self.assertIsNone(marks.card([(1, dict(pull, analysis={}))], 0, str, str))
+
+
+class TestDevourerForm(unittest.TestCase):
+    """
+    A Devourer's Void Metamorphosis: no cast in the log, only its buff - drawn from its windows on the cooldown and focus
+    timelines, the Collapsing Stars in each counted. And Midnight's inv_12_* class icons aren't items.
+    """
+
+    def test_midnight_class_icons_are_not_items(self):
+        from raidanalysis import throughput
+        table = {'entries': [{'name': 'Devour', 'total': 65, 'abilityIcon': 'inv_12_dh_void_ability_feast.jpg'},
+                             {'name': 'Void Nova', 'total': 1, 'abilityIcon': 'inv_12_voiddh_ability_voidnova.jpg'},
+                             {'name': 'Potion of Recklessness', 'total': 1,
+                              'abilityIcon': 'inv_12_profession_alchemy_voidpotion_red.jpg'},
+                             {'name': 'Ice Block', 'total': 1, 'abilityIcon': 'inv_ability_mage_iceblock.jpg'},
+                             {'name': 'Some Trinket', 'total': 2, 'abilityIcon': 'inv_misc_trinket_01.jpg'}]}
+        self.assertEqual(throughput.cast_counts(table), {'Devour': 65, 'Void Nova': 1, 'Ice Block': 1})
+
+    def test_windows_from_events_and_tables(self):
+        from raidanalysis import forms
+        roster = [{'name': 'Boops', 'class': 'DemonHunter', 'spec': 'Devourer'},
+                  {'name': 'Hav', 'class': 'DemonHunter', 'spec': 'Havoc'}]
+        names = {1: 'Boops', 2: 'Hav'}
+        buffs = [{'type': t, 'timestamp': 1000 + ms, 'abilityGameID': aid, 'targetID': 1} for t, ms, aid in [
+            ('applybuff', 2000, 1225789), ('removebuff', 15000, 1225789),    # "ready to enter": not the form
+            ('applybuff', 15000, 1217607), ('removebuff', 59000, 1217607),
+            ('applybuff', 250000, 1217607)]]                                  # still in it when the pull ended
+        casts = [{'type': 'cast', 'timestamp': 1000 + ms, 'sourceID': 1} for ms in (20000, 30000, 59300, 100000)]
+        found = forms.from_events(roster, names, buffs, casts, 1000, 301000)
+        self.assertEqual(list(found), ['Boops'])                              # Havoc has no such form
+        entry = found['Boops']['Void Metamorphosis']
+        self.assertEqual(entry['bands'], [[15000, 59000], [250000, 300000]])
+        self.assertEqual([len(w['spends']) for w in forms.windows(entry)], [3, 0])  # 59.3 s: just as it dropped
+        stats = forms.stats([(entry, 300000), (None, 300000)])                # a pull without it: not counted
+        self.assertEqual((stats['fights'], round(stats['per_5min'], 1), stats['avg_ms'], round(stats['uptime'], 3),
+                          stats['per_window']), (1, 2.0, 47000, 0.313, 1.5))
+        table = {'auras': [{'guid': 1217607, 'bands': [{'startTime': 6000, 'endTime': 50000}]},
+                           {'guid': 1225789, 'bands': [{'startTime': 1000, 'endTime': 6000}]}]}
+        casts_table = {'entries': [{'guid': 1221150, 'name': 'Collapsing Star'}, {'guid': 473662, 'name': 'Consume'}]}
+        events = [{'type': 'cast', 'timestamp': 1000 + ms, 'abilityGameID': aid}
+                  for ms, aid in [(10000, 1221150), (11000, 473662), (40000, 1221150)]]
+        top = forms.from_tables('DemonHunter', 'Devourer', table, casts_table, events, 1000, 241000)
+        self.assertEqual(top, {'Void Metamorphosis': {'bands': [[5000, 49000]], 'spends': [10000, 40000]}})
+        self.assertEqual(forms.from_tables('Mage', 'Fire', table, casts_table, events, 1000, 241000), {})
+
+    def test_cooldowns_tab_and_focus_lanes(self):
+        from raidanalysis import benchmarks
+        from raidanalysis.web import compare, focusview
+        meta = {'bands': [[15000, 59000]], 'spends': [20000, 30000, 40000]}
+        player = {'name': 'Boops', 'class': 'DemonHunter', 'spec': 'Devourer'}
+        top = [{'rank': 1, 'name': 'Fast', 'amount': 1, 'duration': 240000, 'phases': [], 'casts': [],
+                'forms': {'Void Metamorphosis': {'bands': [[5000, 49000], [100000, 150000]],
+                                                 'spends': [10000, 20000, 30000, 40000, 110000, 120000]}}}]
+        pull = {'number': 4, 'fight_id': 35, 'kill': False, 'duration': 300000, 'phases': [], 'casts': [], 'form': meta}
+        found = benchmarks.form_comparison(player, [pull], top)
+        self.assertEqual((found['ours']['per_window'], found['top']['per_window'], found['top']['avg_ms']),
+                         (3, 3, 47000))
+        data = {'top': top, 'rows': [], 'spells': {}, 'form': found, 'label': 'Devourer Demon Hunters'}
+        html = compare.timeline(data, pull)
+        self.assertIn('data-g="form" data-name="form:Void Metamorphosis" aria-pressed="true"', html)
+        self.assertIn('this pull 1× · 3.0 ★ each', html)
+        self.assertIn('Void Metamorphosis 0:15–0:59 (44 s) · 3 Collapsing Stars', html)
+        self.assertEqual(html.count('class="m fwin"'), 3)                   # yours, and the top player's two
+        self.assertEqual(html.count('class="m tick fspend"'), 9)
+        summary = compare.form_summary(data)
+        self.assertIn('Collapsing Star per window', summary)
+        self.assertIn('<td class="num">44 s</td><td class="num">47 s</td>', summary)
+        not_yet = compare.form_summary(dict(data, form=dict(found, ours=None, top=None)))
+        self.assertIn('Fetched with the next syncs', not_yet)
+        self.assertIsNone(benchmarks.form_comparison({'class': 'Mage', 'spec': 'Fire'}, [pull], top))
+        analysis = {'players': [player], 'extras': {'players': {'Boops': {'forms': {'Void Metamorphosis': meta}}}}}
+        lane, pick = focusview._form_lane({'analysis': analysis}, 'Boops', 300000)
+        self.assertIn('Void Metamorphosis · 0:15.0–0:59.0 (44 s) · 3 Collapsing Stars', lane[2])
+        self.assertEqual(pick[0], 'cdsform')
+        self.assertIsNone(focusview._form_lane({'analysis': {'players': [player], 'extras': {'players': {}}}},
+                                               'Boops', 300000))           # not fetched yet: no lane

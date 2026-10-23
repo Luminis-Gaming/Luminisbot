@@ -10,7 +10,7 @@ compact card each.
 
 Built on the shared .tl timeline (PAGE_JS: drag to pan, zoom, rich tooltips from data-tip / data-spell).
 """
-from .. import focus, spells
+from .. import focus, forms, spells
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, npc_portrait, npc_zoom, safe_icon
 
 # Categorical slots for targets, in fixed order. No green, amber, orange or red: those mean good / partly /
@@ -173,6 +173,34 @@ def _cooldown_lanes(cooldowns, auras, duration):
         picks.append((f'cds{i}', name, cd['icon'], len(cd['casts']) or len((aura or {}).get('bands') or []),
                       cd['sid'], f'{name} · {presses}'))
     return lanes, picks
+
+
+def _form_lane(pull, me_name, duration):
+    """
+    Your burst form (forms.py - a Devourer's Void Metamorphosis, which has no cast to mark): a bar per stretch in it
+    with the spender casts inside counted, a tick per cast. (lane, pick) like _cooldown_lanes' - None without one.
+    """
+    analysis = pull.get('analysis') or {}
+    me = next((p for p in analysis.get('players') or [] if p.get('name') == me_name), {})
+    form = forms.of_spec(me.get('class'), me.get('spec'))
+    stored = (((analysis.get('extras') or {}).get('players') or {}).get(me_name) or {}).get('forms')
+    if not form or stored is None:
+        return None
+    wins = forms.windows(stored.get(form['name']))
+    sid, name, spender = form['buff_ids'][0], form['name'], form['spender']
+    bars = ''.join(
+        f'<i class="fbuff form" style="{_span(w["start"], w["end"], duration)}" data-spell="{sid}" '
+        f'data-tip="{esc(name)} · {_clock(w["start"])}–{_clock(w["end"])} ({(w["end"] - w["start"]) / 1000:.0f} s) · '
+        f'{len(w["spends"])} {esc(spender)}{"s" if len(w["spends"]) != 1 else ""}"><span>{len(w["spends"])}★</span></i>'
+        + ''.join(f'<i class="m tick fspend" style="left:{_at(t, duration)}" '
+                  f'data-tip="{esc(spender)} · {_clock(t)}"></i>' for t in w['spends'])
+        for w in wins)
+    spends = sum(len(w['spends']) for w in wins)
+    tip = (f'{name} · {len(wins)}× this pull, {spends / len(wins):.1f} {spender} each' if wins
+           else f'{name} · never this pull')
+    lane = (f'<div class="tl-lab f-cd" data-spell="{sid}" data-tip="{esc(tip)}">{_icon(form["icon"])}'
+            f'<span>{esc(name)}</span></div>', 'f-cd', bars, 'cdsform')
+    return lane, ('cdsform', name, form['icon'], len(wins), sid, tip)
 
 
 def _external_lanes(auras, duration):
@@ -346,6 +374,9 @@ def timeline(data, pull, me_name, color_of, order, cooldowns, potions, phases, p
     auras = _named(data.get('auras') or [])
     (cd_lanes, cd_picks), (ext_lanes, ext_picks) = _cooldown_lanes(cooldowns, auras, duration), \
         _external_lanes(auras, duration)
+    form_lane = _form_lane(pull, me_name, duration)
+    if form_lane:  # first: it's the spec's main burst
+        cd_lanes, cd_picks = [form_lane[0]] + cd_lanes, [form_lane[1]] + cd_picks
     if cd_lanes:
         lanes += [_group('⏳ Your cooldowns', 'a marker per press · bar: its buff on you', 'cds')] + cd_lanes
     if ext_lanes:

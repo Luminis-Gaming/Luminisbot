@@ -304,7 +304,7 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
     resources and wasted procs (a handful more; see detail_fight_ids) - for throughput.build_extras.
     A failure here never fails the pull: it's retried on a later sync.
     """
-    from . import gamedata, throughput
+    from . import forms, gamedata, throughput
     roster = analysis.get('players') or []
     names_by_id = {a['id']: a['name'] for a in actors}
     try:
@@ -330,6 +330,15 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
             proc_events = await wcl.get_events(session, code, fight['id'], 'Buffs',
                                                f"source.id = target.id and ability.id in ({','.join(map(str, procs))})",
                                                max_events=PROC_EVENTS_MAX)
+        # Burst forms (a Devourer's Void Metamorphosis - forms.py): when they were up and the spends in them, every
+        # pull - two small requests, only with someone of such a spec in it
+        in_form = [p['name'] for p in roster if forms.of_spec(p.get('class'), p.get('spec'))]
+        found_forms = {}
+        if in_form:
+            form_buffs = await wcl.get_events(session, code, fight['id'], 'Buffs', forms.buff_filter(in_form))
+            form_casts = await wcl.get_events(session, code, fight['id'], 'Casts', forms.spend_filter(in_form))
+            found_forms = forms.from_events(roster, names_by_id, form_buffs, form_casts, fight['startTime'],
+                                            fight['endTime'])
         parses = throughput.parses_for_roles(roster, extras.get('rankings'), extras.get('healer_rankings'))
         if not parses and fight.get('kill') and extras.get('rankings') is None and not wcl.v2_blocked():
             try:  # the rest came from v1, which has no parses: one small v2 request
@@ -343,7 +352,8 @@ async def _fight_extras(session, code, fight, actors, analysis, detail=True):
             except Exception as e:  # the website is best effort
                 logger.info(f"[RAIDS] Wipe parses for {code}#{fight['id']} not scraped: {e}")
         return throughput.build_extras(fight, roster, names_by_id, extras, per_player, parses,
-                                       resource_events, proc_events, tracked, detail=detail, hot_events=hot_events)
+                                       resource_events, proc_events, tracked, detail=detail, hot_events=hot_events,
+                                       forms=found_forms)
     except wcl.WCLRateLimited:
         raise
     except wcl.WCLError as e:

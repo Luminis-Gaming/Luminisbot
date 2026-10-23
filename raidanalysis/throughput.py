@@ -14,7 +14,9 @@ procs (a proc landing while the last one is still unused) are judged on the Cool
 
 Pure functions only (no I/O).
 """
-EXTRAS_VERSION = 1
+# Older extras are fetched again (sync.py). 2: casts of spells with Midnight's inv_12_* icons were taken for items
+# (is_item) and left out, and burst forms (forms.py) came in.
+EXTRAS_VERSION = 2
 
 MAX_BANDS = 60            # stored up/down stretches per aura (for the uptime strip)
 MIN_STORED_UPTIME = 0.1   # auras up less than this share of the pull aren't stored
@@ -388,13 +390,14 @@ def hot_candidates(per_player, duration):
 
 
 def build_extras(fight, roster, names_by_id, extras, per_player, parses, resource_events=(), proc_events=(),
-                 tracked=frozenset(), detail=True, hot_events=()):
+                 tracked=frozenset(), detail=True, hot_events=(), forms=None):
     """
     analysis['extras'] for one pull. roster: analysis['players']; extras: wcl.get_fight_extras();
     per_player: wcl.get_player_tables() by actor id; parses: {name: {'rank', 'bracket', 'amount'}};
     resource_events: the pull's resourcechange events; proc_events: self-buff events of proc_candidates();
     tracked: the Cooldown Manager's buff ids (gamedata.py) - procs, enchants and others' buffs aren't kept;
-    hot_events: the Buffs events of hot_candidates() (hots_filter) - the HoTs on others are counted from them.
+    hot_events: the Buffs events of hot_candidates() (hots_filter) - the HoTs on others are counted from them;
+    forms: forms.from_events() - kept on the players who have one.
     """
     start = fight['startTime']
     duration = fight['endTime'] - start
@@ -426,6 +429,8 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
                                    set(names_by_id), start, fight['endTime'])
                           if tables.get('on_others') is not None else None),
         }
+        if (forms or {}).get(name):
+            players[name]['forms'] = forms[name]
     raid = {}
     for p in players.values():
         for name, damage, kind in p['targets']:
@@ -443,9 +448,12 @@ def build_extras(fight, roster, names_by_id, extras, per_player, parses, resourc
 
 
 def is_item(entry):
-    """A trinket / potion / other item use in a Casts table: item icons are inv_* (class spells: inv_ability_*)."""
+    """
+    A trinket / potion / other item use in a Casts table: item icons are inv_* - class spells' are too lately, but
+    say ability somewhere in them (inv_ability_*, Midnight's inv_12_dh_void_ability_reap: a Devourer's whole kit).
+    """
     icon = (entry.get('abilityIcon') or '').lower()
-    return icon.startswith('inv_') and not icon.startswith('inv_ability')
+    return icon.startswith('inv_') and 'ability' not in icon.split('.')[0].split('_')
 
 
 def cast_counts(casts_table):

@@ -1384,9 +1384,11 @@ def benchmarks_needed(limit, refresh_days, difficulties):
                       -- fetched before every top parse's spec was checked, or before their auras and
                       -- casts were kept (uptime / casts per minute), or the lust on them (the cooldowns
                       -- timeline), or - healers' HoTs on others - before they were counted from the buff events
-                      -- (throughput.hots_out): fetch again
+                      -- (throughput.hots_out), or before burst forms (forms.py) and Midnight's inv_12_* spell icons
+                      -- (throughput.is_item: their casts were left out): fetch again
                       AND (jsonb_array_length(b.players) = 0
                            OR (b.players -> 0 ? 'spec' AND b.players -> 0 ? 'auras' AND b.players -> 0 ? 'lust'
+                               AND b.players -> 0 ? 'forms'
                                AND (jsonb_typeof(b.players -> 0 -> 'on_others') IS DISTINCT FROM 'array'
                                     OR b.players -> 0 ->> 'hots_counted' = %s)))))
         )

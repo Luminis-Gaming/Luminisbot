@@ -263,6 +263,12 @@ tr.muted-row td { opacity: 0.7; }
     background: color-mix(in srgb, var(--lust) 22%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lust) 60%, transparent); }
 .cmp-tl:not(.lust-on) .m.lust { display: none; }
+/* A burst form's stretches (forms.py: Void Metamorphosis) - its spender count in the bar, a tick per spender cast */
+.cmp-tl .m.fwin { top: 3px; bottom: 3px; transform: none; border-radius: 3px; cursor: help; overflow: hidden;
+    background: rgba(163,53,238,0.30); box-shadow: inset 0 0 0 1px rgba(190,110,255,0.75);
+    display: flex; align-items: center; justify-content: center; }
+.cmp-tl .m.fwin span { font-size: 10px; font-weight: 700; font-style: normal; color: #e9d5ff; white-space: nowrap; }
+.cmp-tl .m.fspend { z-index: 1; top: auto; bottom: 3px; height: 5px; transform: translateX(-50%); background: #f3e8ff; }
 .tl-chip .chip-icon { width: 16px; height: 16px; border-radius: 3px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-right: auto; }
 .seg button { border: 0; border-radius: 0; padding: 4px 10px; background: transparent; color: var(--muted);
@@ -552,6 +558,10 @@ tr.muted-row td { opacity: 0.7; }
 .fbuff.mine { background: color-mix(in srgb, var(--accent) 38%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .fbuff.ext { background: rgba(201,133,0,0.38); box-shadow: inset 0 0 0 1px #e0a020; }
 .fbuff:hover { filter: brightness(1.3); }
+.fbuff.form { background: rgba(163,53,238,0.30); box-shadow: inset 0 0 0 1px rgba(190,110,255,0.75); overflow: hidden;
+    display: flex; align-items: center; justify-content: center; }
+.fbuff.form span { font-size: 10px; font-weight: 700; color: #e9d5ff; white-space: nowrap; pointer-events: none; }
+.focus-tl .m.fspend { top: auto; bottom: 6px; height: 6px; width: 2px; transform: translateX(-50%); background: #f3e8ff; }
 .focus-tl .tl-lab.f-cds, .focus-tl .tl-row.f-cds { height: 48px; }
 .focus-tl .tl-row.f-cds .fpot { top: auto; bottom: 6px; height: 18px; }
 .focus-tl .tl-row.f-cds .m.cd { top: auto; bottom: 7px; }

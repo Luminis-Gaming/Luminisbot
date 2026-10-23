@@ -32,7 +32,7 @@ import logging
 import re
 from collections import Counter
 
-from . import analyzer, cooldowns
+from . import analyzer, cooldowns, forms
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +79,6 @@ MIN_CASTS_TO_SORT = 6        # fewer top-player casts than this: too little to t
 # Rotational whatever the numbers say, for every spec (officers can still override per spec) - Mana Tea too, which
 # has no cooldown to find it by (it's drunk on stacks) but is kept rolling all the same.
 ROTATIONAL_NAMES = {'Immolation Aura', 'Consuming Fire', 'Death and Decay', 'Mana Tea'}
-# Burst with no cooldown to find it by - a Devourer's Void Metamorphosis opens on Soul Fragments, not a timer -
-# but timed all the same: major cooldowns whatever Wowhead says (the rule still sorts them, officers can override).
-NO_COOLDOWN_MAJORS = {'Void Metamorphosis'}
 # Rotational verdicts: your casts per minute as a share of the top players'.
 ROTATIONAL_GOOD, ROTATIONAL_OK = 0.85, 0.65
 
@@ -169,8 +166,6 @@ def category(spell_id, info):
         return None
     if name in ROTATIONAL_NAMES:
         return THROUGHPUT  # whatever its cooldown (Mana Tea has none): ability_kind() makes it rotational
-    if name in NO_COOLDOWN_MAJORS:
-        return THROUGHPUT
     meta = (info or {}).get('meta') or ''
     cd = cooldown_ms(meta)
     if not cd or cd < MAJOR_COOLDOWN_MS:
@@ -259,8 +254,8 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
             dropped['no casts'] += 1
             continue
         duration = fight['end'] - fight['start']
-        auras, cast_names, resources, procs, on_others, targets = await _top_auras(session, r, fight, duration, role,
-                                                                                   spec)
+        auras, cast_names, resources, procs, on_others, targets, found_forms = await _top_auras(
+            session, r, fight, duration, role, spec, class_name)
         players.append({'rank': len(players) + 1, 'name': r['name'], 'spec': spec, 'hero': hero or None,
                         'amount': round(r['amount']),
                         'server': r['server'], 'region': r['region'], 'guild': r['guild'],
@@ -268,7 +263,7 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
                         'phases': fight['phases'], 'casts': casts, 'auras': auras, 'cast_names': cast_names,
                         'lust': cooldowns.lust_bands(fight.get('lust'), fight['start'], fight['end'], fight.get('actor_id')),
                         'resources': resources, 'procs': procs, 'on_others': on_others, 'hots_counted': throughput.HOTS_COUNTED,
-                        'targets': targets})
+                        'targets': targets, 'forms': found_forms})
     who = f"{hero + ' ' if hero else ''}{spec} {class_name}"
     if wrong_spec:
         logger.warning(f"[RAIDS] Top {who} on {encounter_id}/{difficulty}: skipped {wrong_spec} "
@@ -283,17 +278,17 @@ async def fetch_top_players(session, encounter_id, difficulty, class_name, spec,
     return players, why
 
 
-async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
+async def _top_auras(session, ranking, fight, duration, role=None, spec=None, class_name=None):
     """
     A top player's self-buffs, debuffs on the bosses, casts per ability, resources and wasted procs
     and for healers / Augmentation the buffs they keep on others, counted from their buff events
-    (throughput.hots_out): (auras, cast names, resources, procs, on_others, damage by target) - empty ones
-    when WCL won't say.
+    (throughput.hots_out), and their spec's burst form (forms.py): (auras, cast names, resources, procs, on_others,
+    damage by target, forms) - empty ones when WCL won't say.
     """
-    from . import gamedata, throughput, wcl
+    from . import forms, gamedata, throughput, wcl
     aid = fight.get('actor_id')
     if not aid:
-        return [], {}, None, None, None, None
+        return [], {}, None, None, None, None, {}
     code, fight_id, name = ranking['code'], ranking['fight_id'], ranking['name'].replace('"', '')
     try:
         others = [aid] if throughput.wants_on_others({'role': role, 'spec': spec}) else []
@@ -315,12 +310,14 @@ async def _top_auras(session, ranking, fight, duration, role=None, spec=None):
             f"source.id = target.id and ability.id in ({','.join(map(str, procs))})") if procs else []
         return (auras, cast_names, resources or {'gains': {}, 'mana_end': None},
                 throughput.proc_waste(proc_events, {int(aid): ranking['name']}).get(ranking['name']) or {}, on_others,
-                {t[0]: t[1] for t in throughput.targets({'targets': (tables.get('targets') or {}).get('entries')})})
+                {t[0]: t[1] for t in throughput.targets({'targets': (tables.get('targets') or {}).get('entries')})},
+                forms.from_tables(class_name, spec, tables.get('buffs'), tables.get('casts'), fight['casts'],
+                                  fight['start'], fight['end']))
     except wcl.WCLRateLimited:
         raise
     except wcl.WCLError as e:
         logger.info(f"[RAIDS] No auras for top parse {code}#{fight_id}: {e}")
-        return [], {}, None, None, None, None
+        return [], {}, None, None, None, None, {}
 
 
 def _slug(name):
@@ -794,11 +791,15 @@ def our_pulls(pulls, name, spec=None, hero=None, catalog=None):
         cast_ids, seen = analysis.get('cast_ids'), analysis.get('casts_seen')
         lust = [[u['t'], u['end'], u['ability_id'], u['ability'], u['name']]
                 for u in cooldowns.lust_uses(analysis.get('cooldowns'), pull['end_ms'] - pull['start_ms'])]
+        # Their burst form (forms.py) - None until the pull's extras were fetched with it
+        form = forms.of_spec(me.get('class'), me.get('spec'))
+        stored = (((analysis.get('extras') or {}).get('players') or {}).get(name) or {}).get('forms')
         out.append({'number': number, 'fight_id': pull['fight_id'], 'kill': pull.get('kill'), 'lust': lust,
                     'duration': pull['end_ms'] - pull['start_ms'], 'phases': pull.get('phases') or [],
                     'casts': sorted(casts), 'cast_ids': set(cast_ids) if cast_ids is not None else None,
                     'casts_seen': set(seen) if seen is not None else None,
-                    'tracked': 'cooldowns' in analysis})
+                    'tracked': 'cooldowns' in analysis,
+                    'form': (stored or {}).get(form['name']) if form and stored is not None else None})
     return out
 
 
@@ -946,4 +947,19 @@ def for_player(numbered, name):
     label = spec_label(player, benchmark.get('hero') if benchmark else hero)
     return {'player': player, 'hero': hero, 'hero_status': hero_status, 'benchmark': benchmark, 'top': top,
             'pulls': pulls, 'talents': talents,
-            'rows': compare(pulls, top, spells, overrides, talents, choices()), 'spells': spells, 'label': label}
+            'rows': compare(pulls, top, spells, overrides, talents, choices()), 'spells': spells, 'label': label,
+            'form': form_comparison(player, pulls, top)}
+
+
+def form_comparison(player, pulls, top):
+    """
+    Their spec's burst form (forms.py) over tonight's pulls of 1 min+ next to the top players': {'form', 'ours',
+    'top'} (forms.stats(); either None while it isn't fetched yet) - or None for a spec without one.
+    """
+    form = forms.of_spec(player.get('class'), player.get('spec'))
+    if not form:
+        return None
+    ours = forms.stats([(p['form'], p['duration']) for p in pulls if p['duration'] >= MIN_PULL_MS])
+    theirs = forms.median_stats([forms.stats([((p.get('forms') or {}).get(form['name']), p.get('duration'))])
+                                 for p in top if 'forms' in p])
+    return {'form': form, 'ours': ours, 'top': theirs}

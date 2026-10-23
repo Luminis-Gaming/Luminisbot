@@ -7,7 +7,7 @@ The timeline has two time modes: "Align phases" (default) shifts everyone's cast
 timeline phase by phase - phases are health-based, so they start at different times for everyone -
 and shades the moments most top players agree on; "Real time" shows each fight as it happened.
 """
-from .. import benchmarks, cooldowns
+from .. import benchmarks, cooldowns, forms
 from ..spells import icon_url
 from .consumables import LUST as LUST_COLOR
 from .render import ICON_BASE, esc, fmt_amount, fmt_duration, json_for_script, safe_icon
@@ -204,14 +204,16 @@ def timeline(data, pull, boss=None, spell_lookup=None):
     boss = boss or {}
     boss_meta = {a['id']: a for a in boss.get('abilities') or []}
     boss_casts = [(t, sid) for t, sid in boss.get('casts') or [] if sid in boss_meta]
+    form = (data.get('form') or {}).get('form')
     lanes = [{'label': f'You · pull #{pull["number"]}', 'you': True, 'duration': pull['duration'],
-              'phases': pull['phases'], 'casts': pull['casts'], 'kill': pull.get('kill'),
+              'phases': pull['phases'], 'casts': pull['casts'], 'kill': pull.get('kill'), 'form': pull.get('form'),
               'lust': [(s, e, sid, f'{ability} by {who}') for s, e, sid, ability, who in pull.get('lust') or []],
               'who': f'You (pull #{pull["number"]}, {fmt_duration(pull["duration"])}'
                      f'{" kill" if pull.get("kill") else ""})'}]
     for p in top:
         lanes.append({'label': f'#{p["rank"]} {p["name"]}', 'you': False, 'duration': p['duration'],
                       'phases': p['phases'], 'casts': p['casts'], 'kill': True,
+                      'form': (p.get('forms') or {}).get(form['name']) if form else None,
                       'lust': [(s, e, sid, cooldowns.LUST_IDS.get(sid, 'Bloodlust')) for s, e, sid in p.get('lust') or []],
                       'who': f'#{p["rank"]} {p["name"]} ({fmt_amount(p["amount"])} · {fmt_duration(p["duration"])} kill)'})
     for lane in lanes:
@@ -272,6 +274,16 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                             f'data-spell="{sid}" data-tip="Your pull #{pull["number"]} · {fmt_duration(t)}"></i>'
                             for a, t, sid in sorted(casts))
             tracks.append(f'<div class="tl-row boss" data-g="boss">{ticks}</div>')
+    if form and any(lane['form'] for lane in lanes):
+        chips.append(f'<button type="button" class="tl-chip" data-g="form" data-name="form:{esc(form["name"])}" '
+                     f'aria-pressed="true"><img class="chip-icon" src="{ICON_BASE}{esc(form["icon"])}" alt="">'
+                     f'{esc(form["name"])}</button>')
+        labels.append(_form_label(form, pull))
+        tracks.append('<div class="tl-row grp" data-g="form"></div>')
+        for lane in lanes:
+            labels.append(_lane_label(lane, 'form', ''))
+            tracks.append(f'<div class="tl-row lane{" you" if lane["you"] else ""}" data-g="form">'
+                          f'{lane["under"]}{_form_marks(form, lane, placed, ref, longest)}{lane["fin"]}</div>')
     for g, r in enumerate(rows):
         ids = set(r['ids'])
         on = judged(r)  # anything else starts hidden - its chip shows it
@@ -310,10 +322,7 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                              f'style="left:{at(a)}" data-a="{at(a)}" data-r="{at(t)}" data-spell="{sid}" '
                              f'data-tip="{esc(lane["who"])} · {fmt_duration(t)}{where}"></i>')
             phase_ticks = ''.join(f'<i class="ph rl" style="left:{at(p["start"])}"></i>' for p in lane['phases'][1:])
-            labels.append(f'<div class="tl-lab{" you" if lane["you"] else ""}" data-g="{g}"{hidden}>'
-                          f'<span>{esc(lane["label"])}</span><small class="fin-t" data-tip="'
-                          f'{"Boss killed" if lane["kill"] else "Wiped"} at {fmt_duration(lane["duration"])}">'
-                          f'{fmt_duration(lane["duration"])}</small></div>')
+            labels.append(_lane_label(lane, g, hidden))
             tracks.append(f'<div class="tl-row lane{" you" if lane["you"] else ""}" data-g="{g}"{hidden}>'
                           f'{phase_ticks}{lane["under"]}{"".join(marks)}{lane["fin"]}</div>')
     phases = ''.join(f'<i class="tl-phase al" style="left:{at(start)}"></i>'
@@ -325,6 +334,10 @@ def timeline(data, pull, boss=None, spell_lookup=None):
                        for sid, url in icons.items() if safe_icon(url))
     spell_json = {sid: {'name': info.get('name') or '', 'icon': icon_url(info.get('icon')), 'meta': info.get('meta') or '',
                         'desc': info.get('description') or ''} for sid, info in spells.items()}
+    if form:
+        spell_json[form['buff_ids'][0]] = {'name': form['name'], 'icon': ICON_BASE + form['icon'], 'meta': '',
+                                           'desc': f"A burst form: no cooldown, no cast in the log - each bar is one "
+                                                   f"stretch in it, ★ the {form['spender']} casts inside"}
     known = spell_lookup(list(boss_spells)) if spell_lookup and boss_spells else {}
     for sid, (name, icon) in boss_spells.items():
         info = known.get(sid) or {}
@@ -354,6 +367,77 @@ def timeline(data, pull, boss=None, spell_lookup=None):
         </div>
         <script type="application/json" class="spell-data">{json_for_script(spell_json)}</script>
     </div>"""
+
+
+def _lane_label(lane, g, hidden):
+    return (f'<div class="tl-lab{" you" if lane["you"] else ""}" data-g="{g}"{hidden}>'
+            f'<span>{esc(lane["label"])}</span><small class="fin-t" data-tip="'
+            f'{"Boss killed" if lane["kill"] else "Wiped"} at {fmt_duration(lane["duration"])}">'
+            f'{fmt_duration(lane["duration"])}</small></div>')
+
+
+def _form_label(form, pull):
+    """The burst form's header on the timeline: its name, and this pull's windows and spends per window."""
+    wins = forms.windows(pull.get('form'))
+    spends = sum(len(w['spends']) for w in wins)
+    if wins:
+        this_pull = (f'<span class="pull-score" title="In the pull shown">this pull {len(wins)}× · '
+                     f'{spends / len(wins):.1f} ★ each</span>')
+    elif pull.get('form') is None:
+        this_pull = '<span class="pull-score">not fetched for this pull yet</span>'
+    else:
+        this_pull = '<span class="pull-score">never this pull</span>'
+    return (f'<div class="tl-lab grp" data-g="form"><span class="cmp-ab" data-spell="{form["buff_ids"][0]}">'
+            f'<img class="ability-icon" src="{ICON_BASE}{esc(form["icon"])}" alt="" loading="lazy">'
+            f'{esc(form["name"])}</span><span class="grp-right">{this_pull}</span></div>')
+
+
+def _form_marks(form, lane, placed, ref, longest):
+    """One lane's stretches in the form: a bar each with its spender count, and a tick per spender cast."""
+    out = []
+    spender = form['spender']
+    for w in forms.windows(lane['form']):
+        n = len(w['spends'])
+        start = benchmarks.align(w['start'], lane['phases'], ref)
+        width = 100 * (w['end'] - w['start']) / longest
+        out.append(placed('fwin', start, w['start'], f';width:{width:.3f}%')
+                   + f' data-tip="{esc(lane["who"])} · {esc(form["name"])} {fmt_duration(w["start"])}–'
+                     f'{fmt_duration(w["end"])} ({(w["end"] - w["start"]) / 1000:.0f} s) · {n} {esc(spender)}'
+                     f'{"s" if n != 1 else ""}"><span>{n}★</span></i>')
+        out += [placed('tick fspend', benchmarks.align(t, lane['phases'], ref), t)
+                + f' data-tip="{esc(spender)} · {fmt_duration(t)}"></i>' for t in w['spends']]
+    return ''.join(out)
+
+
+def form_summary(data):
+    """
+    The spec's burst form (forms.py - a Devourer's Void Metamorphosis) over tonight's pulls, next to the top players:
+    how often they go in, how long it lasts, how much of the fight it's up and the spends in each window.
+    """
+    found = data.get('form')
+    if not found:
+        return ''
+    form, ours, top = found['form'], found['ours'], found['top']
+    intro = (f'<p class="muted small"><img class="ability-icon" src="{ICON_BASE}{esc(form["icon"])}" alt=""> '
+             f'<strong>{esc(form["name"])}</strong> has no cooldown - you go in when you can, so there\'s no moment to '
+             f'line up with. It\'s compared on how it\'s used instead: how often you go in, how long you stay, and the '
+             f'{esc(form["spender"])} casts you fit in each window, next to the top {esc(data["label"])} '
+             f'(their median).</p>')
+    if not ours and not top:
+        return intro + '<p class="muted small">⏳ Fetched with the next syncs - for your pulls and the top players.</p>'
+
+    def cell(stats, key, fmt):
+        return f'<td class="num">{fmt(stats[key])}</td>' if stats else '<td class="num muted">…</td>'
+    rows = [('Windows / 5 min', 'per_5min', lambda v: f'{v:.1f}'),
+            ('Average length', 'avg_ms', lambda v: f'{v / 1000:.0f} s'),
+            ('Time in it', 'uptime', lambda v: f'{100 * v:.0f}%'),
+            (f'{form["spender"]} per window', 'per_window', lambda v: f'{v:.1f}')]
+    body = ''.join(f'<tr><td>{label}</td>{cell(ours, key, fmt)}{cell(top, key, fmt)}</tr>' for label, key, fmt in rows)
+    whose = 'Yours are' if not ours else "The top players' are"
+    pending = '' if ours and top else f'<p class="muted small">⏳ {whose} fetched with the next syncs.</p>'
+    return f"""{intro}
+        <div class="table-wrapper"><table class="compact"><tr><th></th><th class="num">You</th>
+            <th class="num">Top</th></tr>{body}</table></div>{pending}"""
 
 
 def top_players(data):
