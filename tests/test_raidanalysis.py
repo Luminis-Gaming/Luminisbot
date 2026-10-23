@@ -464,6 +464,8 @@ class TestTopPlayerComparison(unittest.TestCase):
         kinds = {sid: benchmarks.category(sid, info) for sid, info in self.SPELLS.items()}
         self.assertEqual(kinds, {1: 'throughput', 2: 'throughput', 3: 'personal', 4: None, 5: 'potion',
                                  6: 'potion', 7: 'trinket'})
+        # A Devourer's Void Metamorphosis has no cooldown (Soul Fragments open it): a major one all the same
+        self.assertEqual(benchmarks.category(8, {'name': 'Void Metamorphosis', 'meta': 'Instant'}), 'throughput')
 
     def test_lining_up_phase_by_phase(self):
         from raidanalysis import benchmarks

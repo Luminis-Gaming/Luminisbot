@@ -79,6 +79,9 @@ MIN_CASTS_TO_SORT = 6        # fewer top-player casts than this: too little to t
 # Rotational whatever the numbers say, for every spec (officers can still override per spec) - Mana Tea too, which
 # has no cooldown to find it by (it's drunk on stacks) but is kept rolling all the same.
 ROTATIONAL_NAMES = {'Immolation Aura', 'Consuming Fire', 'Death and Decay', 'Mana Tea'}
+# Burst with no cooldown to find it by - a Devourer's Void Metamorphosis opens on Soul Fragments, not a timer -
+# but timed all the same: major cooldowns whatever Wowhead says (the rule still sorts them, officers can override).
+NO_COOLDOWN_MAJORS = {'Void Metamorphosis'}
 # Rotational verdicts: your casts per minute as a share of the top players'.
 ROTATIONAL_GOOD, ROTATIONAL_OK = 0.85, 0.65
 
@@ -166,6 +169,8 @@ def category(spell_id, info):
         return None
     if name in ROTATIONAL_NAMES:
         return THROUGHPUT  # whatever its cooldown (Mana Tea has none): ability_kind() makes it rotational
+    if name in NO_COOLDOWN_MAJORS:
+        return THROUGHPUT
     meta = (info or {}).get('meta') or ''
     cd = cooldown_ms(meta)
     if not cd or cd < MAJOR_COOLDOWN_MS:
